@@ -1,0 +1,6 @@
+{
+  "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
+  "description": "Smart Living. Better Community. Comprehensive modern Bengali residential community apartment management platform for up to 50 flats with bilingual English/Bengali support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

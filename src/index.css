@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-forest: #536B4D;
+    --color-cream: #F7F4EC;
+    --color-terracotta: #C97958;
+    --color-card: #FFFFFF;
+    --color-beige: #E8E1D4;
+    --color-primary-text: #29352D;
+  }
+
+  body {
+    background-color: #F7F4EC;
+    color: #29352D;
+    font-family: 'Inter', 'Noto Sans Bengali', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-bengali {
+  font-family: 'Noto Sans Bengali', 'Inter', sans-serif;
+}
+
+@media print {
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+}
