@@ -10,8 +10,8 @@
 
 // 1. CONFIGURATION PARAMETERS (Replace with your actual Google IDs)
 const CONFIG = {
-  SPREADSHEET_ID: "[ADD_SPREADSHEET_ID]",
-  DRIVE_FOLDER_ID: "[ADD_DRIVE_FOLDER_ID]",
+  SPREADSHEET_ID: "1wuCaLBQkWdnNadxXoWzDooYessirgqyKk-DSBNx7vpM",
+  DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB",
   ALLOWED_ORIGINS: ["*"], // In production, restrict to your GitHub Pages domain (e.g. https://<username>.github.io)
 };
 
