@@ -1,159 +1,308 @@
+
 /**
  * ====================================================================
- * ABAS SATHI (আবাসসাথী) - GOOGLE APPS SCRIPT BACKEND (Code.gs)
- * Project: Apartment Management Website & App
- * Tagline: Smart Living. Better Community.
- *
- * Free-Tier Backend for Google Sheets & Google Drive
+ * ABAS SATHI (আবাসসাথী)
+ * GOOGLE APPS SCRIPT BACKEND
+ * Smart Living. Better Community.
  * ====================================================================
  */
 
-// 1. CONFIGURATION PARAMETERS (Replace with your actual Google IDs)
+// 1. CONFIGURATION
 const CONFIG = {
   SPREADSHEET_ID: "1wuCaLBQkWdnNadxXoWzDooYessirgqyKk-DSBNx7vpM",
-  DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB",
-  ALLOWED_ORIGINS: ["*"], // In production, restrict to your GitHub Pages domain (e.g. https://<username>.github.io)
+  DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB"
 };
 
-/**
- * Handle HTTP GET Requests from Frontend
- */
+// 2. SHEET NAMES
+const SHEETS = {
+  PROPERTIES: "Property Master",
+  INVOICES: "Invoice_Register",
+  RECEIPTS: "Fund Inflow Register",
+  EXPENSES: "Expense Register",
+  REQUESTS: "Activity Request Register",
+  NOTICES: "Notice Master",
+  AUDIT: "Audit Log"
+};
+
+// 3. GET REQUEST
 function doGet(e) {
   try {
-    const action = e && e.parameter ? e.parameter.action : "ping";
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const action = e?.parameter?.action || "ping";
 
     if (action === "ping") {
       return responseJSON({
         status: "success",
-        message: "ABAS SATHI Google Apps Script Web App is Online & Ready",
+        message: "ABAS SATHI Backend Online",
         timestamp: new Date().toISOString()
       });
     }
 
-    if (action === "getProperties") {
-      const sheet = ss.getSheetByName("Property Master");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
+    const actions = {
+      getProperties: SHEETS.PROPERTIES,
+      getInvoices: SHEETS.INVOICES,
+      getReceipts: SHEETS.RECEIPTS,
+      getExpenses: SHEETS.EXPENSES,
+      getRequests: SHEETS.REQUESTS,
+      getNotices: SHEETS.NOTICES
+    };
+
+    const sheetName = actions[action];
+
+    if (!sheetName) {
+      throw new Error("Unknown GET action: " + action);
     }
 
-    if (action === "getInvoices") {
-      const sheet = ss.getSheetByName("Invoice_Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
+    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = getRequiredSheet(ss, sheetName);
 
-    if (action === "getReceipts") {
-      const sheet = ss.getSheetByName("Fund Inflow Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
+    return responseJSON({
+      status: "success",
+      data: sheetToObjects(sheet)
+    });
 
-    if (action === "getExpenses") {
-      const sheet = ss.getSheetByName("Expense Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getRequests") {
-      const sheet = ss.getSheetByName("Activity Request Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getNotices") {
-      const sheet = ss.getSheetByName("Notice Master");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    return responseJSON({ status: "error", message: "Unknown action parameter" });
   } catch (err) {
-    return responseJSON({ status: "error", message: err.toString() });
+    return responseJSON({
+      status: "error",
+      message: err.message || String(err)
+    });
   }
 }
 
-/**
- * Handle HTTP POST Requests from Frontend (Transactions, Payments, Expenses)
- */
+// 4. POST REQUEST
 function doPost(e) {
+  const lock = LockService.getScriptLock();
+
   try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return responseJSON({ status: "error", message: "No payload received" });
+    if (!e?.postData?.contents) {
+      throw new Error("No payload received");
     }
 
     const payload = JSON.parse(e.postData.contents);
-    const action = payload.action;
+
+    if (!payload.action) {
+      throw new Error("Action is required");
+    }
+
     const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
 
-    // 1. Submit Resident Payment (Pending Verification)
-    if (action === "submitPayment") {
-      const sheet = ss.getSheetByName("Fund Inflow Register");
+    // PAYMENT SUBMISSION
+    if (payload.action === "submitPayment") {
+
+      validateRequired(payload, [
+        "transactionId",
+        "receiptNumber",
+        "propertyId",
+        "flatNo",
+        "ownerName",
+        "amount",
+        "mode"
+      ]);
+
+      const amount = Number(payload.amount);
+
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Invalid payment amount");
+      }
+
+      lock.waitLock(30000);
+
+      const sheet = getRequiredSheet(ss, SHEETS.RECEIPTS);
+      const values = sheet.getDataRange().getValues();
+
+      // Duplicate Transaction / Receipt Check
+      for (let i = 1; i < values.length; i++) {
+        if (
+          String(values[i][0]) === String(payload.transactionId) ||
+          String(values[i][1]) === String(payload.receiptNumber)
+        ) {
+          throw new Error("Duplicate Transaction ID or Receipt Number");
+        }
+      }
+
+      const now = new Date();
+
       sheet.appendRow([
         payload.transactionId,
         payload.receiptNumber,
-        new Date().toISOString().split("T")[0],
+        Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd"),
         payload.propertyId,
-        payload.ownershipId,
-        payload.ownerId,
+        payload.ownershipId || "",
+        payload.ownerId || "",
         payload.flatNo,
         payload.ownerName,
-        payload.amount,
+        amount,
         payload.mode,
-        payload.reference,
-        payload.bankAccount,
-        payload.amount, // Unallocated until confirmed
+        payload.reference || "",
+        payload.bankAccount || "",
+        amount,
         payload.remarks || "",
         payload.fileReference || "",
         payload.createdByName || "Resident",
-        new Date().toISOString(),
-        "Pending Verification" // Never marked as confirmed automatically
+        now.toISOString(),
+        "Pending Verification"
       ]);
 
-      logAudit(ss, "CREATE", "Fund Inflow Register", payload.receiptNumber, `Payment of ₹${payload.amount} submitted`, payload.createdByName);
-      return responseJSON({ status: "success", message: "Payment recorded as Pending Verification", receiptNumber: payload.receiptNumber });
+      logAudit(
+        ss,
+        "CREATE",
+        SHEETS.RECEIPTS,
+        payload.receiptNumber,
+        "Payment submitted: " + amount,
+        payload.createdByName
+      );
+
+      return responseJSON({
+        status: "success",
+        message: "Payment submitted for verification",
+        receiptNumber: payload.receiptNumber
+      });
     }
 
-    // 2. Confirm Payment & Allocate to Invoices (Admin / Accountant)
-    if (action === "confirmPayment") {
-      // Find row in Fund Inflow Register and update status
-      const receiptSheet = ss.getSheetByName("Fund Inflow Register");
-      const rValues = receiptSheet.getDataRange().getValues();
-      for (let i = 1; i < rValues.length; i++) {
-        if (rValues[i][1] === payload.receiptNumber) {
-          receiptSheet.getRange(i + 1, 18).setValue("Confirmed"); // Receipt_Status column
+    // PAYMENT CONFIRMATION
+    if (payload.action === "confirmPayment") {
+
+      validateRequired(payload, ["receiptNumber"]);
+
+      lock.waitLock(30000);
+
+      const sheet = getRequiredSheet(ss, SHEETS.RECEIPTS);
+      const values = sheet.getDataRange().getValues();
+
+      let foundRow = -1;
+
+      for (let i = 1; i < values.length; i++) {
+        if (
+          String(values[i][1]) === String(payload.receiptNumber)
+        ) {
+          foundRow = i + 1;
           break;
         }
       }
 
-      logAudit(ss, "APPROVE", "Fund Inflow Register", payload.receiptNumber, "Payment confirmed and verified", payload.createdByName);
-      return responseJSON({ status: "success", message: "Payment confirmed" });
-    }
+      if (foundRow === -1) {
+        throw new Error("Receipt Number not found");
+      }
 
-    // 3. Upload File Attachment to Google Drive
-    if (action === "uploadFile") {
-      const folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
-      const decodedData = Utilities.base64Decode(payload.base64Data);
-      const blob = Utilities.newBlob(decodedData, payload.mimeType, payload.fileName);
-      const file = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      const statusCell = sheet.getRange(foundRow, 18);
+      const currentStatus = statusCell.getValue();
+
+      if (currentStatus === "Confirmed") {
+        throw new Error("Payment is already confirmed");
+      }
+
+      statusCell.setValue("Confirmed");
+
+      logAudit(
+        ss,
+        "APPROVE",
+        SHEETS.RECEIPTS,
+        payload.receiptNumber,
+        "Payment confirmed",
+        payload.createdByName
+      );
 
       return responseJSON({
         status: "success",
-        fileUrl: file.getUrl(),
-        fileId: file.getId(),
-        fileName: file.getName()
+        message: "Payment confirmed",
+        receiptNumber: payload.receiptNumber
       });
     }
 
-    return responseJSON({ status: "error", message: "Unsupported action: " + action });
+    // FILE UPLOAD
+    if (payload.action === "uploadFile") {
+
+      validateRequired(payload, [
+        "base64Data",
+        "mimeType",
+        "fileName"
+      ]);
+
+      const decodedData = Utilities.base64Decode(
+        payload.base64Data
+      );
+
+      const blob = Utilities.newBlob(
+        decodedData,
+        payload.mimeType,
+        payload.fileName
+      );
+
+      const folder = DriveApp.getFolderById(
+        CONFIG.DRIVE_FOLDER_ID
+      );
+
+      const file = folder.createFile(blob);
+
+      // IMPORTANT:
+      // File remains PRIVATE by default.
+      // Do not enable Anyone With Link for personal documents.
+
+      return responseJSON({
+        status: "success",
+        message: "File uploaded successfully",
+        fileId: file.getId(),
+        fileName: file.getName(),
+        fileUrl: file.getUrl()
+      });
+    }
+
+    throw new Error(
+      "Unsupported POST action: " + payload.action
+    );
+
   } catch (err) {
-    return responseJSON({ status: "error", message: err.toString() });
+
+    return responseJSON({
+      status: "error",
+      message: err.message || String(err)
+    });
+
+  } finally {
+
+    if (lock.hasLock()) {
+      lock.releaseLock();
+    }
   }
 }
 
-/**
- * Append to Audit Log (Sheet R)
- */
-function logAudit(ss, actionType, moduleName, recordId, remarks, userName) {
+// 5. REQUIRED FIELD VALIDATION
+function validateRequired(payload, fields) {
+  fields.forEach(function(field) {
+    if (
+      payload[field] === undefined ||
+      payload[field] === null ||
+      String(payload[field]).trim() === ""
+    ) {
+      throw new Error("Required field missing: " + field);
+    }
+  });
+}
+
+// 6. GET REQUIRED SHEET
+function getRequiredSheet(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error("Sheet not found: " + sheetName);
+  }
+
+  return sheet;
+}
+
+// 7. AUDIT LOG
+function logAudit(
+  ss,
+  actionType,
+  moduleName,
+  recordId,
+  remarks,
+  userName
+) {
   try {
-    const auditSheet = ss.getSheetByName("Audit Log");
-    if (auditSheet) {
-      auditSheet.appendRow([
+    const sheet = ss.getSheetByName(SHEETS.AUDIT);
+
+    if (sheet) {
+      sheet.appendRow([
         "LOG-" + new Date().getTime(),
         userName || "System",
         actionType,
@@ -165,32 +314,39 @@ function logAudit(ss, actionType, moduleName, recordId, remarks, userName) {
         remarks
       ]);
     }
-  } catch (e) {
-    // Audit logging is non-blocking
+  } catch (err) {
+    console.error("Audit Log Error: " + err.message);
   }
 }
 
-/**
- * Helper to respond with JSON + CORS Headers
- */
-function responseJSON(data) {
-  return ContentService.createTextOutput(JSON.stringify(data))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-/**
- * Helper to transform sheet rows to array of JSON objects
- */
+// 8. SHEET DATA TO JSON OBJECTS
 function sheetToObjects(sheet) {
   if (!sheet) return [];
+
   const rows = sheet.getDataRange().getValues();
+
   if (rows.length < 2) return [];
+
   const headers = rows[0];
-  return rows.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = row[i];
+
+  return rows.slice(1)
+    .filter(row => row.some(value => value !== ""))
+    .map(row => {
+      const obj = {};
+
+      headers.forEach((header, index) => {
+        if (header !== "") {
+          obj[header] = row[index];
+        }
+      });
+
+      return obj;
     });
-    return obj;
-  });
+}
+
+// 9. JSON RESPONSE
+function responseJSON(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
 }
