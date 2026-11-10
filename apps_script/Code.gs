@@ -181,7 +181,7 @@ function json_(obj) {
  * Copy the returned salt/hash into Society User Access.
  */
 function createPasswordHash() {
-  const password = "12345";
+  const password = "CHANGE_THIS_TEMPORARY_PASSWORD";
   const salt = Utilities.getUuid().replace(/-/g, "");
   const hash = sha256_(salt + password);
   Logger.log(JSON.stringify({Password_Salt:salt, Password_Hash:hash}));
