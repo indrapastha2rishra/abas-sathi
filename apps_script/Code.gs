@@ -1,196 +1,188 @@
 /**
- * ====================================================================
- * ABAS SATHI (আবাসসাথী) - GOOGLE APPS SCRIPT BACKEND (Code.gs)
- * Project: Apartment Management Website & App
- * Tagline: Smart Living. Better Community.
+ * ABAS SATHI — Multi-society Google Apps Script backend
  *
- * Free-Tier Backend for Google Sheets & Google Drive
- * ====================================================================
+ * SETUP REQUIRED:
+ * 1) Set CENTRAL_MASTER_SPREADSHEET_ID below to the Google Sheet ID of
+ *    ABAS_SATHI_Central_Master_Database (converted to Google Sheets).
+ * 2) In "Society User Access", add columns Password_Salt and Password_Hash.
+ * 3) Store only SHA-256(salt + password) in Password_Hash. Never store plaintext.
+ * 4) Society Master must contain Society_Code, Society_Status, Database_ID.
+ * 5) Deploy as Web App. Use the same /exec URL in the frontend.
+ *
+ * IMPORTANT: Anyone-with-link deployment is still a public endpoint. This code
+ * authenticates API requests with short-lived tokens, but Google Drive file
+ * upload permissions and production hardening must be reviewed before real use.
  */
-
-// 1. CONFIGURATION PARAMETERS (Replace with your actual Google IDs)
 const CONFIG = {
-  SPREADSHEET_ID: "1wuCaLBQkWdnNadxXoWzDooYessirgqyKk-DSBNx7vpM",
-  DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB",
-  ALLOWED_ORIGINS: ["*"], // In production, restrict to your GitHub Pages domain (e.g. https://<username>.github.io)
+  CENTRAL_MASTER_SPREADSHEET_ID: "1zcvrYRj1BtgcCo8Skfyf14RVQOTuoGclldWxUWYy470",
+  DEFAULT_DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB",
+  SESSION_TTL_SECONDS: 21600, // 6 hours
+  SOCIETY_SHEETS: [
+    "Property Master", "Owner Master", "Ownership History", "Tenant Master",
+    "Rate Master", "Invoice_Register", "Fund Inflow Register", "Bill Wise Details",
+    "Expense Register", "Expense Category Master", "Bank Account Master",
+    "User Master & Role Management", "Activity Request Register", "Notice Master",
+    "Gallery Master", "Preventive Maintenance Master", "Rate Property Mapping",
+    "Property Utility Details", "Audit Log", "Financial Year Master",
+    "Account Head Master"
+  ]
 };
 
-/**
- * Handle HTTP GET Requests from Frontend
- */
 function doGet(e) {
   try {
-    const action = e && e.parameter ? e.parameter.action : "ping";
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-
+    const p = (e && e.parameter) || {};
+    const action = p.action || "ping";
     if (action === "ping") {
-      return responseJSON({
-        status: "success",
-        message: "ABAS SATHI Google Apps Script Web App is Online & Ready",
-        timestamp: new Date().toISOString()
+      return json_({status:"success", message:"ABAS SATHI backend online", timestamp:new Date().toISOString()});
+    }
+    const session = requireSession_(p.token);
+    if (action === "getSocietyData" || action === "getAllData") {
+      const ss = SpreadsheetApp.openById(session.databaseId);
+      const result = {};
+      CONFIG.SOCIETY_SHEETS.forEach(name => {
+        const sh = ss.getSheetByName(name);
+        result[name] = sheetObjects_(sh);
+      });
+      return json_({
+        status:"success",
+        society:{societyCode:session.societyCode, societyName:session.societyName},
+        data:result
       });
     }
-
     if (action === "getProperties") {
-      const sheet = ss.getSheetByName("Property Master");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
+      const ss = SpreadsheetApp.openById(session.databaseId);
+      return json_({status:"success", data:sheetObjects_(ss.getSheetByName("Property Master"))});
     }
-
-    if (action === "getInvoices") {
-      const sheet = ss.getSheetByName("Invoice_Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getReceipts") {
-      const sheet = ss.getSheetByName("Fund Inflow Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getExpenses") {
-      const sheet = ss.getSheetByName("Expense Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getRequests") {
-      const sheet = ss.getSheetByName("Activity Request Register");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    if (action === "getNotices") {
-      const sheet = ss.getSheetByName("Notice Master");
-      return responseJSON({ status: "success", data: sheetToObjects(sheet) });
-    }
-
-    return responseJSON({ status: "error", message: "Unknown action parameter" });
+    return json_({status:"error", message:"Unknown action"});
   } catch (err) {
-    return responseJSON({ status: "error", message: err.toString() });
+    return json_({status:"error", message:String(err.message || err)});
   }
 }
 
-/**
- * Handle HTTP POST Requests from Frontend (Transactions, Payments, Expenses)
- */
 function doPost(e) {
   try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return responseJSON({ status: "error", message: "No payload received" });
+    const body = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
+    const action = body.action;
+
+    if (action === "login") return login_(body);
+
+    const session = requireSession_(body.token);
+    if (action === "logout") {
+      CacheService.getScriptCache().remove("SESSION_" + body.token);
+      return json_({status:"success", message:"Signed out"});
     }
 
-    const payload = JSON.parse(e.postData.contents);
-    const action = payload.action;
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-
-    // 1. Submit Resident Payment (Pending Verification)
+    // Existing payment workflow kept, now protected by session validation.
+    const ss = SpreadsheetApp.openById(session.databaseId);
     if (action === "submitPayment") {
-      const sheet = ss.getSheetByName("Fund Inflow Register");
-      sheet.appendRow([
-        payload.transactionId,
-        payload.receiptNumber,
-        new Date().toISOString().split("T")[0],
-        payload.propertyId,
-        payload.ownershipId,
-        payload.ownerId,
-        payload.flatNo,
-        payload.ownerName,
-        payload.amount,
-        payload.mode,
-        payload.reference,
-        payload.bankAccount,
-        payload.amount, // Unallocated until confirmed
-        payload.remarks || "",
-        payload.fileReference || "",
-        payload.createdByName || "Resident",
-        new Date().toISOString(),
-        "Pending Verification" // Never marked as confirmed automatically
+      const sh = ss.getSheetByName("Fund Inflow Register");
+      if (!sh) throw new Error('Missing sheet: Fund Inflow Register');
+      sh.appendRow([
+        body.transactionId || Utilities.getUuid(), body.receiptNumber || nextReceipt_(sh),
+        new Date(), body.propertyId || "", body.ownershipId || "", body.ownerId || "",
+        body.flatNo || "", body.ownerName || "", Number(body.amount || 0),
+        body.mode || "", body.reference || "", body.bankAccount || "",
+        Number(body.amount || 0), body.remarks || "", body.fileReference || "",
+        session.fullName, new Date(), "Pending Verification"
       ]);
-
-      logAudit(ss, "CREATE", "Fund Inflow Register", payload.receiptNumber, `Payment of ₹${payload.amount} submitted`, payload.createdByName);
-      return responseJSON({ status: "success", message: "Payment recorded as Pending Verification", receiptNumber: payload.receiptNumber });
+      return json_({status:"success", message:"Payment submitted for verification"});
     }
-
-    // 2. Confirm Payment & Allocate to Invoices (Admin / Accountant)
-    if (action === "confirmPayment") {
-      // Find row in Fund Inflow Register and update status
-      const receiptSheet = ss.getSheetByName("Fund Inflow Register");
-      const rValues = receiptSheet.getDataRange().getValues();
-      for (let i = 1; i < rValues.length; i++) {
-        if (rValues[i][1] === payload.receiptNumber) {
-          receiptSheet.getRange(i + 1, 18).setValue("Confirmed"); // Receipt_Status column
-          break;
-        }
-      }
-
-      logAudit(ss, "APPROVE", "Fund Inflow Register", payload.receiptNumber, "Payment confirmed and verified", payload.createdByName);
-      return responseJSON({ status: "success", message: "Payment confirmed" });
-    }
-
-    // 3. Upload File Attachment to Google Drive
-    if (action === "uploadFile") {
-      const folder = DriveApp.getFolderById(CONFIG.DRIVE_FOLDER_ID);
-      const decodedData = Utilities.base64Decode(payload.base64Data);
-      const blob = Utilities.newBlob(decodedData, payload.mimeType, payload.fileName);
-      const file = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-
-      return responseJSON({
-        status: "success",
-        fileUrl: file.getUrl(),
-        fileId: file.getId(),
-        fileName: file.getName()
-      });
-    }
-
-    return responseJSON({ status: "error", message: "Unsupported action: " + action });
+    return json_({status:"error", message:"Unsupported action"});
   } catch (err) {
-    return responseJSON({ status: "error", message: err.toString() });
+    return json_({status:"error", message:String(err.message || err)});
   }
 }
 
-/**
- * Append to Audit Log (Sheet R)
- */
-function logAudit(ss, actionType, moduleName, recordId, remarks, userName) {
-  try {
-    const auditSheet = ss.getSheetByName("Audit Log");
-    if (auditSheet) {
-      auditSheet.appendRow([
-        "LOG-" + new Date().getTime(),
-        userName || "System",
-        actionType,
-        moduleName,
-        recordId,
-        "",
-        remarks,
-        new Date().toISOString().replace("T", " ").substring(0, 19),
-        remarks
-      ]);
-    }
-  } catch (e) {
-    // Audit logging is non-blocking
+function login_(body) {
+  const societyCode = String(body.societyCode || "").trim().toUpperCase();
+  const loginId = String(body.loginId || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  if (!societyCode || !loginId || !password) throw new Error("Society Code, Login ID and Password are required.");
+  if (CONFIG.CENTRAL_MASTER_SPREADSHEET_ID.indexOf("PASTE_") === 0) {
+    throw new Error("Backend setup incomplete: set CENTRAL_MASTER_SPREADSHEET_ID in Code.gs.");
   }
+
+  const master = SpreadsheetApp.openById(CONFIG.CENTRAL_MASTER_SPREADSHEET_ID);
+  const societyRows = sheetObjects_(master.getSheetByName("Society Master"));
+  const society = societyRows.find(r => String(r.Society_Code || "").trim().toUpperCase() === societyCode);
+  if (!society) throw new Error("Invalid Society Code.");
+  if (String(society.Society_Status || "").toLowerCase() !== "active") {
+    throw new Error("This society account is not Active. Please contact the administrator.");
+  }
+  if (!society.Database_ID) throw new Error("Society database is not configured.");
+
+  const accessRows = sheetObjects_(master.getSheetByName("Society User Access"));
+  const user = accessRows.find(r =>
+    String(r.Society_Code || "").trim().toUpperCase() === societyCode &&
+    String(r.Login_ID || "").trim().toLowerCase() === loginId
+  );
+  if (!user) throw new Error("Invalid Login ID or Password.");
+  if (String(user.Account_Status || "").toLowerCase() !== "active") throw new Error("User account is not Active.");
+  if (!user.Password_Salt || !user.Password_Hash) {
+    throw new Error("Password is not configured for this user. Ask the Super Admin to set it up.");
+  }
+  const suppliedHash = sha256_(String(user.Password_Salt) + password);
+  if (suppliedHash !== String(user.Password_Hash)) throw new Error("Invalid Login ID or Password.");
+
+  const token = Utilities.getUuid().replace(/-/g, "") + Utilities.getUuid().replace(/-/g, "");
+  const session = {
+    societyCode:societyCode,
+    societyName:String(society.Society_Name || "ABAS SATHI"),
+    databaseId:String(society.Database_ID),
+    fullName:String(user.Full_Name || ""),
+    userId:String(user.UserID || user.Access_ID || ""),
+    loginId:String(user.Login_ID || ""),
+    role:String(user.Role || "Resident"),
+    propertyId:String(user.PropertyID || ""),
+    email:String(user.Email_ID || ""),
+    mobile:String(user.Mobile_No || "")
+  };
+  CacheService.getScriptCache().put("SESSION_" + token, JSON.stringify(session), CONFIG.SESSION_TTL_SECONDS);
+  return json_({status:"success", token:token, expiresIn:CONFIG.SESSION_TTL_SECONDS, user:session});
 }
 
-/**
- * Helper to respond with JSON + CORS Headers
- */
-function responseJSON(data) {
-  return ContentService.createTextOutput(JSON.stringify(data))
+function requireSession_(token) {
+  if (!token) throw new Error("Authentication required. Please sign in again.");
+  const raw = CacheService.getScriptCache().get("SESSION_" + token);
+  if (!raw) throw new Error("Session expired. Please sign in again.");
+  return JSON.parse(raw);
+}
+
+function sha256_(value) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8);
+  return bytes.map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join("");
+}
+
+function sheetObjects_(sheet) {
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
+  const headers = values[0].map(h => String(h).trim());
+  return values.slice(1).filter(row => row.some(v => v !== "" && v !== null)).map(row => {
+    const obj = {};
+    headers.forEach((h,i) => { if (h) obj[h] = row[i] instanceof Date ? row[i].toISOString() : row[i]; });
+    return obj;
+  });
+}
+
+function nextReceipt_(sheet) {
+  const n = Math.max(sheet.getLastRow(), 1);
+  return "RCT-" + String(n).padStart(6, "0");
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
- * Helper to transform sheet rows to array of JSON objects
+ * Run once manually from Apps Script to create a salted hash for a user.
+ * Replace the values and run createPasswordHash().
+ * Copy the returned salt/hash into Society User Access.
  */
-function sheetToObjects(sheet) {
-  if (!sheet) return [];
-  const rows = sheet.getDataRange().getValues();
-  if (rows.length < 2) return [];
-  const headers = rows[0];
-  return rows.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => {
-      obj[h] = row[i];
-    });
-    return obj;
-  });
+function createPasswordHash() {
+  const password = "CHANGE_THIS_TEMPORARY_PASSWORD";
+  const salt = Utilities.getUuid().replace(/-/g, "");
+  const hash = sha256_(salt + password);
+  Logger.log(JSON.stringify({Password_Salt:salt, Password_Hash:hash}));
 }
