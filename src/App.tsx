@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { Login } from './components/auth/Login';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
@@ -142,6 +143,17 @@ const MainLayout: React.FC = () => {
 };
 
 export default function App() {
+  const [session, setSession] = useState<any>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('abasSathiSession') || 'null');
+      if (saved && saved.token && saved.expiresAt > Date.now()) return saved;
+      localStorage.removeItem('abasSathiSession');
+      return null;
+    } catch { return null; }
+  });
+
+  if (!session) return <Login onLogin={setSession} />;
+
   return (
     <AppProvider>
       <MainLayout />

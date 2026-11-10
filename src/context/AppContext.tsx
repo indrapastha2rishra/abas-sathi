@@ -27,27 +27,7 @@ import {
   AccountHeadMaster,
   PaymentMode,
 } from '../types/database';
-import {
-  initialProperties,
-  initialOwners,
-  initialOwnerships,
-  initialTenants,
-  initialUsers,
-  initialRates,
-  initialInvoices,
-  initialReceipts,
-  initialBillAllocations,
-  initialExpenses,
-  initialExpenseCategories,
-  initialBankAccounts,
-  initialActivityRequests,
-  initialNotices,
-  initialGallery,
-  initialPreventiveMaintenance,
-  initialAuditLogs,
-  initialFinancialYears,
-  initialAccountHeads,
-} from '../data/mockData';
+
 import { Language, translations } from '../utils/i18n';
 import {
   allocatePaymentToInvoice,
@@ -162,30 +142,30 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('en');
-  const [users, setUsers] = useState<UserMaster[]>(initialUsers);
-  const [currentUser, setCurrentUser] = useState<UserMaster>(initialUsers[0]); // Starts as Admin
-  const [activeRole, setActiveRole] = useState<UserRole>('Admin');
+  const [users, setUsers] = useState<UserMaster[]>([]);
+  const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:u.role || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
+  const [activeRole, setActiveRole] = useState<UserRole>(() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}').user?.role || 'Resident'; } catch { return 'Resident'; } });
   const [activeTab, setActiveTab] = useState<string>('dashboard');
 
   // Database collections
-  const [properties, setProperties] = useState<PropertyMaster[]>(initialProperties);
-  const [owners, setOwners] = useState<OwnerMaster[]>(initialOwners);
-  const [ownerships, setOwnerships] = useState<OwnershipHistory[]>(initialOwnerships);
-  const [tenants, setTenants] = useState<TenantMaster[]>(initialTenants);
-  const [rates, setRates] = useState<RateMaster[]>(initialRates);
-  const [invoices, setInvoices] = useState<InvoiceRegister[]>(initialInvoices);
-  const [receipts, setReceipts] = useState<FundInflowRegister[]>(initialReceipts);
-  const [billAllocations, setBillAllocations] = useState<BillWiseDetails[]>(initialBillAllocations);
-  const [expenses, setExpenses] = useState<ExpenseRegister[]>(initialExpenses);
-  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryMaster[]>(initialExpenseCategories);
-  const [bankAccounts, setBankAccounts] = useState<BankAccountMaster[]>(initialBankAccounts);
-  const [activityRequests, setActivityRequests] = useState<ActivityRequestRegister[]>(initialActivityRequests);
-  const [notices, setNotices] = useState<NoticeMaster[]>(initialNotices);
-  const [gallery, setGallery] = useState<GalleryMaster[]>(initialGallery);
-  const [preventiveMaintenance, setPreventiveMaintenance] = useState<PreventiveMaintenanceMaster[]>(initialPreventiveMaintenance);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
-  const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>(initialFinancialYears);
-  const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>(initialAccountHeads);
+  const [properties, setProperties] = useState<PropertyMaster[]>([]);
+  const [owners, setOwners] = useState<OwnerMaster[]>([]);
+  const [ownerships, setOwnerships] = useState<OwnershipHistory[]>([]);
+  const [tenants, setTenants] = useState<TenantMaster[]>([]);
+  const [rates, setRates] = useState<RateMaster[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceRegister[]>([]);
+  const [receipts, setReceipts] = useState<FundInflowRegister[]>([]);
+  const [billAllocations, setBillAllocations] = useState<BillWiseDetails[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRegister[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryMaster[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccountMaster[]>([]);
+  const [activityRequests, setActivityRequests] = useState<ActivityRequestRegister[]>([]);
+  const [notices, setNotices] = useState<NoticeMaster[]>([]);
+  const [gallery, setGallery] = useState<GalleryMaster[]>([]);
+  const [preventiveMaintenance, setPreventiveMaintenance] = useState<PreventiveMaintenanceMaster[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>([]);
+  const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>([]);
 
   // Document preview modals
   const [previewInvoice, setPreviewInvoice] = useState<InvoiceRegister | null>(null);
@@ -195,10 +175,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Google backend configuration. Saved locally in this browser.
   const [googleConfig, setGoogleConfig] = useState<GoogleBackendConfig>(() => {
     const defaults: GoogleBackendConfig = {
-      spreadsheetId: '[ADD_SPREADSHEET_ID]',
-      driveFolderId: '[ADD_DRIVE_FOLDER_ID]',
-      appsScriptWebAppUrl: '[ADD_APPS_SCRIPT_WEB_APP_URL]',
-      mode: 'demo',
+      spreadsheetId: '',
+      driveFolderId: '',
+      appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
+      mode: 'live',
     };
     try {
       if (typeof window === 'undefined') return defaults;
@@ -233,65 +213,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const t = translations[language];
 
-  // Load Property Master from Google Sheets when a valid backend URL is saved.
+  // Load all 21 society database tabs after authenticated login.
   useEffect(() => {
-    if (googleConfig.mode !== 'live') return;
     const baseUrl = googleConfig.appsScriptWebAppUrl.trim();
-    if (!baseUrl || baseUrl.startsWith('[ADD_')) return;
-
+    let session: any = {};
+    try { session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
+    if (!session.token || !baseUrl) return;
     let cancelled = false;
-    const loadProperties = async () => {
+
+    const keyOf = (header: string) => header.trim()
+      .replace(/[./()-]/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_');
+
+    const normalizeRows = (rows: any[]) => (Array.isArray(rows) ? rows : []).map((row) => {
+      const out: Record<string, any> = {};
+      Object.keys(row || {}).forEach((key) => {
+        let normalized = keyOf(key);
+        // Preserve the exact TypeScript field names expected by existing screens.
+        const aliases: Record<string,string> = {
+          'Flat_No':'Flat_No', 'Flat_No_':'Flat_No', 'Floor_No':'Floor_No',
+          'Block_Tower':'Block_Tower', 'Property_Type':'Property_Type',
+          'Cover_Area':'Cover_Area', 'Coridoor_Area':'Corridor_Area',
+          'Corridor_Area':'Corridor_Area', 'Super_Buildup_Area':'Super_Builtup_Area',
+          'Super_Builtup_Area':'Super_Builtup_Area', 'Occupancy_Status':'Occupancy_Status',
+          'Property_Status':'Property_Status', 'Owner_Name':'Owner_Name',
+          'Email_ID':'Email_ID', 'Mobile_No':'Mobile_No'
+        };
+        normalized = aliases[normalized] || normalized;
+        let value = row[key];
+        if (typeof value === 'string' && value.trim() !== '' && /^-?\\d+(\\.\\d+)?$/.test(value.trim())) {
+          value = Number(value);
+        }
+        out[normalized] = value;
+      });
+      return out;
+    });
+
+    const load = async () => {
       try {
-        const separator = baseUrl.includes('?') ? '&' : '?';
-        const response = await fetch(`${baseUrl}${separator}action=getProperties`);
-        if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+        const response = await fetch(`${baseUrl}?action=getSocietyData&token=${encodeURIComponent(session.token)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = await response.json();
-        if (result.status !== 'success' || !Array.isArray(result.data)) {
-          throw new Error(result.message || 'Invalid Google Sheets API response');
+        if (result.status !== 'success') throw new Error(result.message || 'Database read failed');
+        const d = result.data || {};
+        const rows = (name: string) => normalizeRows(d[name] || []);
+        const propertyRows = rows('Property Master').map((r:any) => ({
+          ...r,
+          PropertyID:String(r.PropertyID || ''),
+          Flat_No:String(r.Flat_No || ''),
+          Block_Tower:String(r.Block_Tower || ''),
+          Floor_No:Number(r.Floor_No || 0),
+          Cover_Area:Number(r.Cover_Area || 0),
+          Corridor_Area:Number(r.Corridor_Area || 0),
+          Super_Builtup_Area:Number(r.Super_Builtup_Area || 0),
+          Total_Area:Number(r.Total_Area || 0),
+          Occupancy_Status:r.Occupancy_Status === 'Occupied' ? 'Self Occupied' : (r.Occupancy_Status || 'Vacant'),
+          Property_Status:r.Property_Status || 'Active'
+        }));
+        if (cancelled) return;
+        setProperties(propertyRows as PropertyMaster[]);
+        setOwners(rows('Owner Master') as OwnerMaster[]);
+        setOwnerships(rows('Ownership History') as OwnershipHistory[]);
+        setTenants(rows('Tenant Master') as TenantMaster[]);
+        setRates(rows('Rate Master') as RateMaster[]);
+        setInvoices(rows('Invoice_Register') as InvoiceRegister[]);
+        setReceipts(rows('Fund Inflow Register') as FundInflowRegister[]);
+        setBillAllocations(rows('Bill Wise Details') as BillWiseDetails[]);
+        setExpenses(rows('Expense Register') as ExpenseRegister[]);
+        setExpenseCategories(rows('Expense Category Master') as ExpenseCategoryMaster[]);
+        setBankAccounts(rows('Bank Account Master') as BankAccountMaster[]);
+        setUsers(rows('User Master & Role Management') as UserMaster[]);
+        setActivityRequests(rows('Activity Request Register') as ActivityRequestRegister[]);
+        setNotices(rows('Notice Master') as NoticeMaster[]);
+        setGallery(rows('Gallery Master') as GalleryMaster[]);
+        setPreventiveMaintenance(rows('Preventive Maintenance Master') as PreventiveMaintenanceMaster[]);
+        setAuditLogs(rows('Audit Log') as AuditLog[]);
+        setFinancialYears(rows('Financial Year Master') as FinancialYearMaster[]);
+        setAccountHeads(rows('Account Head Master') as AccountHeadMaster[]);
+        console.info('ABAS SATHI: Loaded society database sheets from Google Sheets.');
+      } catch (error:any) {
+        console.error('ABAS SATHI database load failed:', error);
+        if (String(error?.message || '').toLowerCase().includes('session')) {
+          localStorage.removeItem('abasSathiSession');
+          window.location.reload();
         }
-
-        const liveProperties = result.data.map((row: Record<string, unknown>) => {
-          const floorText = String(row['Floor No.'] ?? '');
-          const floorMatch = floorText.match(/-?\d+/);
-          const rawOccupancy = String(row['Occupancy Status'] ?? 'Vacant');
-          const occupancy = rawOccupancy === 'Occupied' ? 'Self Occupied' : rawOccupancy;
-          const rawPropertyStatus = String(row['Property_Status'] ?? 'Active');
-          const propertyStatus = ['Active', 'Inactive', 'Under Renovation'].includes(rawPropertyStatus)
-            ? rawPropertyStatus
-            : 'Active';
-
-          return {
-            PropertyID: String(row['PropertyID'] ?? ''),
-            Flat_No: String(row['Flat No.'] ?? ''),
-            Block_Tower: String(row['Block / Tower'] ?? ''),
-            Floor_No: floorMatch ? Number(floorMatch[0]) : 0,
-            Property_Type: String(row['Property Type'] ?? '2BHK').replace(/\s+/g, '') as PropertyMaster['Property_Type'],
-            Cover_Area: Number(row['Cover Area'] ?? 0),
-            Corridor_Area: Number(row['Coridoor Area'] ?? 0),
-            Super_Builtup_Area: Number(row['Super Buildup Area'] ?? 0),
-            Total_Area: Number(row['Total Area'] ?? 0),
-            Occupancy_Status: (['Self Occupied', 'Tenant Occupied', 'Vacant'].includes(occupancy)
-              ? occupancy
-              : 'Vacant') as PropertyMaster['Occupancy_Status'],
-            Property_Status: propertyStatus as PropertyMaster['Property_Status'],
-            Remarks: String(row['Remarks'] ?? ''),
-            Created_By: String(row['Created_By'] ?? ''),
-            Created_At: String(row['Created_At'] ?? ''),
-          };
-        }) as PropertyMaster[];
-
-        if (!cancelled) {
-          setProperties(liveProperties);
-          console.info(`ABAS SATHI: Loaded ${liveProperties.length} properties from Google Sheets.`);
-        }
-      } catch (error) {
-        console.error('ABAS SATHI Google Sheets read failed:', error);
       }
     };
-
-    loadProperties();
+    load();
     return () => { cancelled = true; };
-  }, [googleConfig.mode, googleConfig.appsScriptWebAppUrl]);
+  }, [googleConfig.appsScriptWebAppUrl]);
 
   // Helper to add audit log
   const logAction = (action: AuditLog['Action_Type'], module: string, recordId: string, oldVal: string, newVal: string, remarks: string) => {
@@ -312,8 +323,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Find resident's property
   const residentProperty = currentUser.PropertyID
-    ? properties.find((p) => p.PropertyID === currentUser.PropertyID) || properties[0]
-    : properties[0];
+    ? properties.find((p) => p.PropertyID === currentUser.PropertyID) || null
+    : (properties[0] || null);
 
   const switchUser = (userId: string) => {
     const found = users.find((u) => u.UserID === userId);

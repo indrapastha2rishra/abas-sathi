@@ -27,7 +27,7 @@ In accordance with strict budget guidelines:
 
 ## 3. Supported User Roles & Permissions
 
-Use the top-right **Role Switcher** in the app header to experience all 4 roles:
+Users sign in with Society Code, Login ID and Password. Role and flat access are read from the Central Master Database.
 
 1. **Admin (সোসাইটি সভাপতি / প্রশাসক):**
    - Full access across all 8 modules.
@@ -149,3 +149,16 @@ Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigat
 ---
 
 *ABAS SATHI (আবাসসাথী) — Smart Living. Better Community.*
+
+
+## Updated live multi-society setup (10-Nov-2026)
+
+1. Convert `ABAS_SATHI_Central_Master_Database.xlsx` to a Google Sheet.
+2. Copy its Spreadsheet ID into `CENTRAL_MASTER_SPREADSHEET_ID` in `apps_script/Code.gs`.
+3. In `Society User Access`, add `Password_Salt` and `Password_Hash` columns.
+4. Create each user's salted SHA-256 password hash using the helper `createPasswordHash()` (change the temporary password first), then paste the salt/hash into that user's row.
+5. Ensure the society row has `Society_Code`, `Society_Status=Active`, and `Database_ID` pointing to that society's database spreadsheet.
+6. Deploy the Apps Script as a Web App and set its `/exec` URL in `Login.tsx` if the deployment URL differs.
+7. Push the complete updated repository to GitHub and allow the Actions deployment to finish.
+
+The website now starts at Login and does not initialize sample/demo records. After authentication it reads the society's 21 tabs through the backend. This version focuses on live reads; existing create/update actions in the React screens are not all synchronized to Sheets yet. Do not treat the website as production-ready accounting software until those write operations, role-based server authorization, and file permissions have been completed and tested.

@@ -1,0 +1,50 @@
+ABAS SATHI — UPDATED SOURCE PACKAGE
+Date: 10 November 2026
+
+WHAT CHANGED
+- Added Society Code + Login ID + Password login screen.
+- App shell is hidden until login succeeds.
+- Removed initialization of demo records from AppContext.
+- Added authenticated multi-society backend read for all 21 database tabs.
+- Header reads Society Name from authenticated session.
+- Added sign-out action.
+- Replaced Apps Script backend with Central Master lookup and short-lived session tokens.
+
+REQUIRED BEFORE TESTING
+A. Central Master spreadsheet
+- Convert the supplied ABAS_SATHI_Central_Master_Database.xlsx into Google Sheets.
+- Put the resulting spreadsheet ID in Code.gs:
+  CENTRAL_MASTER_SPREADSHEET_ID
+- The code cannot infer the Google Sheet ID from the Excel filename.
+
+B. Central Master columns
+- Society Master: Society_Code, Society_Name, Society_Status, Database_ID
+- Society User Access: Society_Code, Login_ID, Full_Name, UserID (or Access_ID), Role,
+  PropertyID, Email_ID, Mobile_No, Account_Status, Password_Salt, Password_Hash
+- Add Password_Salt and Password_Hash columns. Do not store plaintext passwords.
+- Password hash format used here: lowercase hex SHA-256(Password_Salt + password).
+- `createPasswordHash()` is a helper: replace the temporary password and run it in Apps Script;
+  copy the resulting salt and hash to the relevant user row.
+
+C. Society DB
+- Each Society Master Database_ID must point to a Google spreadsheet containing the 21 named tabs.
+- Sheet names are case-sensitive and must match Code.gs SOCIETY_SHEETS.
+
+D. Deployment
+- Replace the Code.gs content in the Apps Script editor, save, then Deploy > Manage deployments >
+  Edit > New version > Deploy.
+- If deployment URL changes, update DEFAULT_BACKEND_URL in src/components/auth/Login.tsx
+  and the fallback in Header.tsx.
+- Build locally with `npm install`, `npm run lint`, `npm run build`.
+- Push to GitHub; GitHub Actions should publish the site.
+
+IMPORTANT LIMITATIONS / SECURITY
+- This package reads all 21 tabs, but the existing React forms' create/update/delete operations
+  have not all been converted into authenticated Apps Script writes. Those screens may still
+  update local in-memory state only. Do not use this version for actual financial entries.
+- Server-side role-based authorization for each write action is not yet implemented.
+- Session tokens are stored in browser localStorage and cached server-side for 6 hours.
+- Google Apps Script Web App public deployment needs additional security review. Do not upload
+  sensitive documents with public link sharing.
+- The React code's existing calculations and some screens were designed around mock-data field
+  assumptions. Test every module against actual sheet headers before operational use.

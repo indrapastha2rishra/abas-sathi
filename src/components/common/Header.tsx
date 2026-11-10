@@ -11,12 +11,12 @@ import {
   UserCheck,
   Bell,
   Database,
+  LogOut,
   ExternalLink,
   ChevronDown,
   Sparkles,
   ShieldAlert,
 } from 'lucide-react';
-import { RoleSwitcherModal } from '../modals/RoleSwitcherModal';
 
 interface Props {
   onToggleSidebar: () => void;
@@ -34,8 +34,21 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
     setActiveTab,
   } = useApp();
 
-  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   const [showDemoInfo, setShowDemoInfo] = useState(false);
+  const [societyName] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}').societyName || 'ABAS SATHI'; }
+    catch { return 'ABAS SATHI'; }
+  });
+  const signOut = async () => {
+    try {
+      const cfg = JSON.parse(localStorage.getItem('abasSathiGoogleConfig') || '{}');
+      const url = cfg.appsScriptWebAppUrl || 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec';
+      const session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
+      await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'logout', token:session.token}) });
+    } catch {}
+    localStorage.removeItem('abasSathiSession');
+    window.location.reload();
+  };
 
   const pendingRequestsCount = activityRequests.filter((r) => r.Request_Status === 'Pending').length;
   const pendingReceiptsCount = receipts.filter((r) => r.Receipt_Status === 'Pending Verification').length;
@@ -138,6 +151,8 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
             )}
           </div>
 
+          <div className="hidden md:block max-w-[220px] truncate text-sm font-semibold text-[#536B4D]" title={societyName}>{societyName}</div>
+
           {/* Bengali / English Language Switcher */}
           <button
             onClick={() => setLanguage(language === 'en' ? 'bn' : 'en')}
@@ -147,41 +162,6 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
           >
             <Languages className="h-4 w-4 text-[#536B4D]" />
             <span className="font-bold">{language === 'en' ? 'বাংলা' : 'English'}</span>
-          </button>
-
-          {/* Role Switcher Pill */}
-          <button
-            onClick={() => setIsRoleModalOpen(true)}
-            className="flex items-center gap-2 rounded-xl border border-[#E8E1D4] bg-white px-2.5 sm:px-3 py-1.5 text-xs font-medium text-[#29352D] hover:border-[#536B4D] hover:bg-[#F7F4EC] transition-all cursor-pointer shadow-2xs"
-            title="Switch User Role (Admin, Committee, Accountant, Resident)"
-          >
-            <div
-              className={`h-2.5 w-2.5 rounded-full ${
-                activeRole === 'Admin'
-                  ? 'bg-[#536B4D]'
-                  : activeRole === 'Committee'
-                  ? 'bg-indigo-600'
-                  : activeRole === 'Accountant'
-                  ? 'bg-emerald-600'
-                  : 'bg-[#C97958]'
-              }`}
-            ></div>
-            <div className="text-left hidden sm:block">
-              <span className="font-bold block leading-tight">
-                {activeRole === 'Admin'
-                  ? t.roleAdmin
-                  : activeRole === 'Committee'
-                  ? t.roleCommittee
-                  : activeRole === 'Accountant'
-                  ? t.roleAccountant
-                  : t.roleResident}
-              </span>
-              <span className="text-[10px] text-[#29352D]/60 block leading-none truncate max-w-[110px]">
-                {currentUser.Full_Name.split(' ')[0]}
-              </span>
-            </div>
-            <span className="sm:hidden font-bold">{activeRole}</span>
-            <ChevronDown className="h-3.5 w-3.5 text-[#29352D]/60" />
           </button>
 
           {/* Notification Bell */}
@@ -206,13 +186,10 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
               )}
             </button>
           </div>
+          <button onClick={signOut} className="ml-2 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="Sign out"><LogOut size={15}/><span className="hidden sm:inline">Sign out</span></button>
         </div>
       </header>
 
-      <RoleSwitcherModal
-        isOpen={isRoleModalOpen}
-        onClose={() => setIsRoleModalOpen(false)}
-      />
     </>
   );
 };
