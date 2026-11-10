@@ -14,7 +14,7 @@
  * upload permissions and production hardening must be reviewed before real use.
  */
 const CONFIG = {
-  CENTRAL_MASTER_SPREADSHEET_ID: "PASTE_CENTRAL_MASTER_GOOGLE_SHEET_ID_HERE",
+  CENTRAL_MASTER_SPREADSHEET_ID: "1zcvrYRj1BtgcCo8Skfyf14RVQOTuoGclldWxUWYy470",
   DEFAULT_DRIVE_FOLDER_ID: "1aUS1Dn09JSBP55C_yKmX4nWRirM_p9wB",
   SESSION_TTL_SECONDS: 21600, // 6 hours
   SOCIETY_SHEETS: [
