@@ -162,3 +162,7 @@ Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigat
 7. Push the complete updated repository to GitHub and allow the Actions deployment to finish.
 
 The website now starts at Login and does not initialize sample/demo records. After authentication it reads the society's 21 tabs through the backend. This version focuses on live reads; existing create/update actions in the React screens are not all synchronized to Sheets yet. Do not treat the website as production-ready accounting software until those write operations, role-based server authorization, and file permissions have been completed and tested.
+
+
+## Authentication, profile and KYC update
+See `AUTH_KYC_SETUP_BN_EN.txt` for the complete setup and deployment guide. The updated Apps Script backend is `apps_script/Code.gs`.

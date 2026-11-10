@@ -1,0 +1,137 @@
+ABAS SATHI — AUTHENTICATION, USER MANAGEMENT & KYC UPDATE
+========================================================
+
+This update adds:
+1. Admin-only user creation (Committee / Accountant / Resident only).
+2. Admin approval/rejection before a created user can sign in.
+3. Stronger iterated HMAC-SHA256 password derivation; legacy salted SHA-256
+   hashes are upgraded after successful login.
+4. User self-service profile updates (name, mobile, address, emergency contact).
+   Registered email is intentionally read-only; email changes need an admin process
+   because it is the password-recovery destination.
+5. Private KYC document upload (PDF/JPG/PNG, max 5 MB), with Drive access granted
+   only to uploader and active society Admins.
+6. Email OTP password reset (10-minute expiry, 5 attempts, request throttling).
+7. Server-side role checks, session expiry, login attempt throttling and audit entries.
+
+IMPORTANT: this is a substantial authentication and KYC implementation, but it
+does NOT convert every existing financial/property CRUD screen into secure,
+server-authorized live database operations. Existing application modules may
+still contain demo/local state and should not be used for real financial operations
+until every operation has been migrated to server-side validated endpoints and
+tested. Do not describe the whole app as production-ready yet.
+
+A. CENTRAL MASTER GOOGLE SHEET
+------------------------------
+The existing central workbook must contain these tabs:
+
+1) Society Master
+   Required headers:
+   Society_Code | Society_Status | Database_ID | Society_Name
+
+2) Society User Access
+   Required headers (existing headers may be in any order):
+   Society_Code | Login_ID | UserID | Full_Name | Email_ID | Mobile_No |
+   Role | PropertyID | Account_Status | Password_Salt | Password_Hash
+
+The backend automatically appends these optional columns if missing:
+Profile_Address, Emergency_Contact, KYC_Status, KYC_Documents, Created_At,
+Created_By, Approved_At, Approved_By, Last_Login, Password_Changed_At.
+
+Never add a plaintext Password column. Never store plaintext passwords.
+
+B. GOOGLE DRIVE
+---------------
+1. Ensure DEFAULT_DRIVE_FOLDER_ID points to your ABAS SATHI root folder.
+2. Set the folder's General access to Restricted (not Anyone with the link).
+3. The script refuses KYC uploads if the root folder is not private.
+4. KYC files are stored under KYC_<SOCIETY_CODE>. Do not share this folder
+   publicly. The script grants viewer access to the uploader and active Admin
+   email addresses only.
+
+C. CREATE THE FIRST ADMIN (ONE TIME)
+------------------------------------
+1. Open Apps Script attached to the Central Master spreadsheet.
+2. Replace the entire Code.gs with apps_script/Code.gs.
+3. Check CENTRAL_MASTER_SPREADSHEET_ID and DEFAULT_DRIVE_FOLDER_ID at the top.
+4. In bootstrapFirstAdmin(), replace:
+      societyCode = "SO001"
+      loginId = "admin001"
+      password = "ChangeThis!Strong2026"
+      email = "admin@example.com"
+      fullName = "Society Administrator"
+   with your actual society code, unique Login ID, a unique 12+ character
+   password, and the Admin's real email.
+5. Select authorizeRequiredServices from the function dropdown and click Run.
+   Approve the Google Sheets, Drive and Mail permissions.
+6. Select bootstrapFirstAdmin and click Run once.
+7. Verify the Admin row appears in Society User Access with Account_Status=Active,
+   Role=Admin, Password_Salt and Password_Hash populated.
+8. Immediately remove the hard-coded password and bootstrapFirstAdmin helper
+   from Code.gs after successful creation. Save the script.
+
+Do not run bootstrapFirstAdmin repeatedly. It is only for initial setup.
+
+D. DEPLOY APPS SCRIPT
+---------------------
+1. Save Code.gs.
+2. Deploy > Manage deployments > Edit (pencil) > New version > Deploy.
+3. Execute as: Me.
+4. Who has access: Anyone (needed for GitHub Pages public frontend).
+5. Copy the current Web App /exec URL.
+6. Open ABAS SATHI website > Settings > Google Backend Setup Guide and save
+   the exact /exec URL, then reload the website.
+7. Sign in with the first Admin account.
+
+The public Web App URL is not a secret. Every protected action checks the server
+session and role. Do not put service-account credentials or passwords in React.
+
+E. ADMIN ADDS AND APPROVES USERS
+--------------------------------
+1. Sign in as Admin.
+2. Open Settings > User Management.
+3. Create a user and choose only Committee, Accountant or Resident.
+4. Resident must be assigned a Property ID.
+5. Set an initial password meeting the password rules.
+6. The account is created as Pending.
+7. In the user table, Admin clicks Approve to activate or Reject to reject.
+8. Give the Login ID, Society Code and initial password to the user using a
+   secure channel. The user can then sign in and change their profile.
+
+F. PROFILE AND KYC
+------------------
+1. User clicks Profile in the top header.
+2. Update name, mobile, address and emergency contact.
+3. Registered email is locked to prevent unverified email takeover.
+4. Upload PDF/JPG/PNG documents, maximum 5 MB each.
+5. Admin reviews the private Drive file and updates KYC status from User
+   Management. The Admin's Google account must match the email on that user row
+   and have access to Google Drive.
+
+G. FORGOT PASSWORD
+------------------
+1. Login > Forgot Password.
+2. Enter Society Code, Login ID and registered email.
+3. If all details match an active account, a 6-digit OTP is sent by MailApp.
+4. Enter OTP and a new password. OTP expires after 10 minutes and allows at most
+   5 attempts.
+5. If no email arrives, check Apps Script execution logs, Mail quota and spam.
+
+Password policy: minimum 12 characters, maximum 128, uppercase + lowercase +
+number + symbol.
+
+H. PRODUCTION READINESS / SECURITY GATE
+---------------------------------------
+Before using real resident KYC or financial data:
+- Confirm the Drive root folder is private and inspect its inherited permissions.
+- Test each role with separate accounts and verify data isolation.
+- Migrate every create/update/delete and report endpoint to Apps Script server
+  validation; never rely on hidden UI buttons for authorization.
+- Review the existing payment, invoice, expense and file upload flows. Some
+  current screens are still mock/local-only.
+- Add automated integration tests, backup/restore tests, monitoring and incident
+  recovery.
+- Google Apps Script has execution quotas and MailApp daily sending limits.
+- This implementation uses an iterated HMAC-SHA256 password KDF, not Argon2id.
+  For a high-risk commercial deployment, use a managed identity provider such as
+  Firebase Authentication and a backend/database designed for production.

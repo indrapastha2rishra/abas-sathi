@@ -60,107 +60,7 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
     setTimeout(() => setSaveNotice(''), 3000);
   };
 
-  const appsScriptCode = `/**
- * ====================================================================
- * ABAS SATHI (আবাসসাথী) - GOOGLE APPS SCRIPT BACKEND (Code.gs)
- * Smart Living. Better Community.
- * Free-tier server proxy for Google Sheets database & Google Drive
- * ====================================================================
- */
-
-const CONFIG = {
-  SPREADSHEET_ID: "${spreadsheetId}",
-  DRIVE_FOLDER_ID: "${driveFolderId}",
-  ALLOWED_ORIGINS: ["*"], // Restrict to your GitHub Pages URL in production
-};
-
-function doGet(e) {
-  try {
-    const action = e.parameter.action;
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-
-    if (action === "ping") {
-      return responseJSON({ status: "success", message: "ABAS SATHI Apps Script Backend is Online" });
-    }
-
-    if (action === "getProperties") {
-      const sheet = ss.getSheetByName("Property Master");
-      const data = sheetToObjects(sheet);
-      return responseJSON({ status: "success", data: data });
-    }
-
-    if (action === "getInvoices") {
-      const sheet = ss.getSheetByName("Invoice_Register");
-      const data = sheetToObjects(sheet);
-      return responseJSON({ status: "success", data: data });
-    }
-
-    if (action === "getReceipts") {
-      const sheet = ss.getSheetByName("Fund Inflow Register");
-      const data = sheetToObjects(sheet);
-      return responseJSON({ status: "success", data: data });
-    }
-
-    return responseJSON({ status: "error", message: "Invalid action" });
-  } catch (error) {
-    return responseJSON({ status: "error", message: error.toString() });
-  }
-}
-
-function doPost(e) {
-  try {
-    const payload = JSON.parse(e.postData.contents);
-    const action = payload.action;
-    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-
-    if (action === "recordPayment") {
-      // Validate payment submission and append to Fund Inflow Register
-      const sheet = ss.getSheetByName("Fund Inflow Register");
-      sheet.appendRow([
-        payload.transactionId,
-        payload.receiptNumber,
-        new Date().toISOString().split("T")[0],
-        payload.propertyId,
-        payload.ownershipId,
-        payload.ownerId,
-        payload.flatNo,
-        payload.ownerName,
-        payload.amount,
-        payload.mode,
-        payload.reference,
-        payload.bankAccount,
-        payload.amount,
-        payload.remarks || "",
-        payload.fileReference || "",
-        payload.userId,
-        new Date().toISOString(),
-        "Pending Verification" // Mandatory review
-      ]);
-
-      return responseJSON({ status: "success", message: "Payment recorded as Pending Verification" });
-    }
-
-    return responseJSON({ status: "error", message: "Unsupported POST action" });
-  } catch (error) {
-    return responseJSON({ status: "error", message: error.toString() });
-  }
-}
-
-function responseJSON(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function sheetToObjects(sheet) {
-  const rows = sheet.getDataRange().getValues();
-  if (rows.length < 2) return [];
-  const headers = rows[0];
-  return rows.slice(1).map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i]; });
-    return obj;
-  });
-}`;
+  const appsScriptCode = 'apps_script/Code.gs — use the complete updated file from the ABAS SATHI project ZIP. The previous inline template has been removed to prevent accidental deployment of outdated code.';
 
   return (
     <div className="space-y-6">
@@ -297,15 +197,15 @@ function sheetToObjects(sheet) {
             </form>
           </div>
 
-          {/* Apps Script Code.gs Template */}
+          {/* Updated Apps Script backend reference */}
           <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-sm text-[#29352D]">
-                  Google Apps Script Backend Script (`Code.gs`)
+                  Updated Google Apps Script Backend (`apps_script/Code.gs`)
                 </h3>
                 <p className="text-xs text-gray-500">
-                  Deploy as Web App in your Google Sheets container (Extensions → Apps Script)
+                  Replace the entire Apps Script editor content with the updated file included in the project ZIP.
                 </p>
               </div>
               <button
@@ -317,7 +217,7 @@ function sheetToObjects(sheet) {
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E8E1D4] bg-[#F7F4EC] text-xs font-bold text-[#536B4D] hover:bg-[#E8E1D4] transition-colors cursor-pointer"
               >
                 {copiedScript ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-                <span>{copiedScript ? 'Copied!' : 'Copy Code.gs'}</span>
+                <span>{copiedScript ? 'Copied!' : 'Copy Code.gs file path'}</span>
               </button>
             </div>
 

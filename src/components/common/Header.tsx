@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Sparkles,
   ShieldAlert,
+  UserRound,
 } from 'lucide-react';
 
 interface Props {
@@ -163,6 +164,8 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
             <Languages className="h-4 w-4 text-[#536B4D]" />
             <span className="font-bold">{language === 'en' ? 'বাংলা' : 'English'}</span>
           </button>
+
+          <button onClick={() => setActiveTab('profile')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="My Profile"><UserRound size={15}/><span className="hidden sm:inline">Profile</span></button>
 
           {/* Notification Bell */}
           <div className="relative">

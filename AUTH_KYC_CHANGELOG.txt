@@ -1,0 +1,26 @@
+ABAS SATHI — AUTH / PROFILE / KYC UPDATE
+Date: 10 November 2026
+
+Frontend:
+- Login: Forgot Password OTP request and password reset screens.
+- Settings > User Management: Admin-only create, approve and reject users.
+- Profile button in the top header.
+- My Profile: update name, mobile, address, emergency contact.
+- KYC upload: PDF/JPG/PNG, max 5 MB.
+- Admin KYC document links and status controls.
+- Removed the obsolete embedded Apps Script sample from Settings to prevent copying stale code.
+
+Backend (apps_script/Code.gs):
+- Central Master based multi-society identity.
+- Admin-only creation for Committee, Accountant, Resident.
+- Pending status until Admin approval.
+- Iterated HMAC-SHA256 password KDF and legacy hash upgrade.
+- Email OTP password reset with expiry, attempts and throttling.
+- Private Drive KYC storage and uploader/Admin-only file sharing.
+- Server-side role checks, session revalidation, login throttling and audit events.
+- Resident data read scoping for property-linked datasets.
+
+Validation:
+- Apps Script JavaScript syntax check passed.
+- All 29 TypeScript/TSX files passed TypeScript transpile syntax check.
+- Full npm build/typecheck was not run because dependencies could not be installed in this environment.

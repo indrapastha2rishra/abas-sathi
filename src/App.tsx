@@ -23,12 +23,15 @@ import { ResidentNoticesView } from './components/resident/ResidentNoticesView';
 import { InvoicePrintModal } from './components/modals/InvoicePrintModal';
 import { ReceiptPrintModal } from './components/modals/ReceiptPrintModal';
 import { ExpenseVoucherModal } from './components/modals/ExpenseVoucherModal';
+import { AdminUsersView, ProfileView } from './components/settings/AccountViews';
 
 const MainLayout: React.FC = () => {
   const { activeTab, activeRole } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const renderContent = () => {
+    if (activeTab === 'profile') return <ProfileView />;
+    if (activeTab === 'settings_users') return <AdminUsersView />;
     // 1. Dashboard (Role-specific)
     if (activeTab === 'dashboard') {
       return activeRole === 'Resident' ? <ResidentDashboard /> : <AdminDashboard />;
