@@ -124,9 +124,17 @@ function login_(body) {
   if (!user || String(user.Account_Status).toLowerCase() !== "active") { recordLoginFailure_(failKey,cache); throw new Error("Invalid credentials or account is not active. Contact your society Admin."); }
   if (!user.Password_Salt || !user.Password_Hash) throw new Error("Password is not configured. Contact your society Admin.");
   const expected = String(user.Password_Hash);
-  const actual = hashPassword_(String(user.Password_Salt),password);
-  const legacyMatch = expected.length === 64 && constantTimeEqual_(sha256_(String(user.Password_Salt)+password),expected);
-  if (!constantTimeEqual_(actual,expected) && !legacyMatch) { recordLoginFailure_(failKey,cache); throw new Error("Invalid credentials or account is not active. Contact your society Admin."); }
+  const currentSalt = String(user.Password_Salt);
+  // Check the existing v5.1 SHA-256 format first. This avoids running the
+  // newer KDF unnecessarily and allows existing users to sign in and upgrade.
+  const legacyMatch = expected.length === 64 &&
+    constantTimeEqual_(sha256_(currentSalt + password), expected);
+  const currentMatch = !legacyMatch &&
+    constantTimeEqual_(hashPassword_(currentSalt, password), expected);
+  if (!legacyMatch && !currentMatch) {
+    recordLoginFailure_(failKey,cache);
+    throw new Error("Invalid credentials or account is not active. Contact your society Admin.");
+  }
   cache.remove(failKey);
   // Upgrade legacy SHA-256 hashes after successful authentication.
   if (legacyMatch) {
@@ -355,9 +363,16 @@ function requireSession_(token) {
 }
 function requireRole_(session,roles) {if(!roles.includes(session.role)) throw new Error("Permission denied.");}
 function hashPassword_(salt,password) {
-  // Iterated HMAC-SHA256 password KDF. Use Firebase Auth/Argon2id for high-risk production.
-  let value=Utilities.computeHmacSha256Signature(password,salt);
-  for(let i=1;i<CONFIG.PASSWORD_ITERATIONS;i++) value=Utilities.computeHmacSha256Signature(value,salt);
+  // Iterated HMAC-SHA256 KDF. Apps Script's String overload must be used
+  // consistently: the HMAC output is a byte array, so encode it before using
+  // it as the next round's String input. Passing the raw array with a String
+  // key causes: (number[],String) method-signature mismatch.
+  let value = Utilities.computeHmacSha256Signature(String(password), String(salt));
+  for (let i = 1; i < CONFIG.PASSWORD_ITERATIONS; i++) {
+    value = Utilities.computeHmacSha256Signature(
+      Utilities.base64Encode(value), String(salt)
+    );
+  }
   return bytesToHex_(value);
 }
 function verifyPassword_(salt,password) {
