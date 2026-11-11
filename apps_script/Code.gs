@@ -121,7 +121,7 @@ function login_(body) {
   const cache = CacheService.getScriptCache();
   if (Number(cache.get(failKey) || 0) >= 10) throw new Error("Too many sign-in attempts. Please wait 15 minutes.");
   const user = rows.find(r => normalizeLogin_(r.Login_ID) === loginId);
-  if (!user || String(user.Account_Status).toLowerCase() !== "active") { recordLoginFailure_(failKey,cache); throw new Error("Invalid credentials or account is not active. Contact your society Admin."); }
+  if (!user || String(user.Account_Status || "").trim().toLowerCase() !== "active") { recordLoginFailure_(failKey,cache); throw new Error("Invalid credentials or account is not active. Contact your society Admin."); }
   if (!user.Password_Salt || !user.Password_Hash) throw new Error("Password is not configured. Contact your society Admin.");
   const expected = String(user.Password_Hash);
   const currentSalt = String(user.Password_Salt);
@@ -263,7 +263,7 @@ function uploadKycDocument_(session,body) {
   const file = folder.createFile(Utilities.newBlob(bytes,mime,safeName));
   // Grant access only to uploader and active Admins of this society; never enable link/public sharing.
   if (session.email) { try { file.addViewer(session.email); } catch (e) {} }
-  rows.filter(r => r.Role === "Admin" && String(r.Account_Status).toLowerCase() === "active" && r.Email_ID)
+  rows.filter(r => r.Role === "Admin" && String(r.Account_Status || "").trim().toLowerCase() === "active" && r.Email_ID)
     .forEach(r => { try { file.addViewer(String(r.Email_ID)); } catch (e) {} });
   const docs = parseJsonArray_(user.KYC_Documents);
   docs.push({fileId:file.getId(),fileName:safeName,mimeType:mime,uploadedAt:new Date().toISOString(),status:"Submitted"});
@@ -279,7 +279,7 @@ function forgotPasswordRequest_(body) {
   const cache=CacheService.getScriptCache(), throttle="OTP_REQ_"+sha256_(code+"|"+loginId);
   if (cache.get(throttle)) throw new Error("Please wait before requesting another code.");
   const {rows}=societyAndUsers_(code);
-  const user=rows.find(r=>normalizeLogin_(r.Login_ID)===loginId && normalizeEmail_(r.Email_ID)===email && String(r.Account_Status).toLowerCase()==="active");
+  const user=rows.find(r=>normalizeLogin_(r.Login_ID)===loginId && normalizeEmail_(r.Email_ID)===email && String(r.Account_Status || "").trim().toLowerCase()==="active");
   // Same response whether a user exists or not, to reduce account enumeration.
   if (user) {
     const otp=String(parseInt(randomHex_(4),16)%900000+100000);
@@ -302,7 +302,7 @@ function forgotPasswordVerify_(body) {
     rec.attempts++;cache.put(key,JSON.stringify(rec),CONFIG.OTP_TTL_SECONDS);throw new Error("Incorrect verification code.");
   }
   const {usersSheet,rows}=societyAndUsers_(code), user=rows.find(r=>String(r.UserID || r.Access_ID)===rec.userId);
-  if(!user || String(user.Account_Status).toLowerCase()!=="active") throw new Error("Account cannot be reset.");
+  if(!user || String(user.Account_Status || "").trim().toLowerCase()!=="active") throw new Error("Account cannot be reset.");
   const salt=randomHex_(24);
   setCell_(usersSheet,user.__row,"Password_Salt",salt);
   setCell_(usersSheet,user.__row,"Password_Hash",hashPassword_(salt,password));
@@ -323,7 +323,7 @@ function societyAndUsers_(code) {
   const master=SpreadsheetApp.openById(CONFIG.CENTRAL_MASTER_SPREADSHEET_ID);
   const societies=sheetObjects_(master.getSheetByName("Society Master"));
   const society=societies.find(r=>normalizeSociety_(r.Society_Code)===code);
-  if(!society || String(society.Society_Status).toLowerCase()!=="active") throw new Error("Society not found or inactive.");
+  if(!society || String(society.Society_Status || "").trim().toLowerCase()!=="active") throw new Error("Society not found or inactive.");
   if(!society.Database_ID) throw new Error("Society database is not configured.");
   const usersSheet=master.getSheetByName("Society User Access");
   if(!usersSheet) throw new Error('Missing Central Master tab: Society User Access');
@@ -350,7 +350,7 @@ function requireSession_(token) {
   // approval/rejection or role changes take effect without waiting for token expiry.
   const {rows}=societyAndUsers_(session.societyCode);
   const user=rows.find(r=>String(r.UserID||r.Access_ID)===session.userId);
-  if(!user || String(user.Account_Status).toLowerCase()!=="active") {
+  if(!user || String(user.Account_Status || "").trim().toLowerCase()!=="active") {
     CacheService.getScriptCache().remove("SESSION_"+token);
     throw new Error("Your account is inactive. Contact your society Admin.");
   }
@@ -431,13 +431,82 @@ function authorizeRequiredServices() {
   Logger.log("Spreadsheet, Drive and Mail permissions authorized.");
 }
 
-/** One-time helper for first Admin bootstrap only. Set temporary values, run, then remove them. */
+/**
+ * Bootstrap is intentionally disabled because SO001 already has an Active Admin.
+ * Do not run this to reset an existing account.
+ */
 function bootstrapFirstAdmin() {
-  const societyCode="SO001", loginId="admin", password="AdminNew@2026";
-  const email="indrapastha2rishra@gmail.com", fullName="Sanju Kr. Mallik";
-  const {usersSheet,rows}=societyAndUsers_(societyCode);
-  if(rows.some(r=>r.Role==="Admin" && String(r.Account_Status).toLowerCase()==="active"))throw new Error("An active Admin already exists.");
-  validatePassword_(password);const salt=randomHex_(24);
-  appendObject_(usersSheet,{Society_Code:societyCode,Login_ID:loginId,UserID:"USR-ADMIN-001",Full_Name:fullName,Email_ID:cleanEmail_(email),Mobile_No:"",Role:"Admin",PropertyID:"",Account_Status:"Active",Password_Salt:salt,Password_Hash:hashPassword_(salt,password),Profile_Address:"",Emergency_Contact:"",KYC_Status:"Not Submitted",KYC_Documents:"[]",Created_At:new Date(),Created_By:"SYSTEM",Approved_At:new Date(),Approved_By:"SYSTEM",Last_Login:"",Password_Changed_At:new Date()});
-  Logger.log("Admin created. Login ID: "+loginId+"; set a unique password and remove bootstrap values from source.");
+  throw new Error("An Active Admin already exists. Use resetExistingAdminPasswordOnce() to reset its password.");
+}
+
+/**
+ * ONE-TIME ADMIN PASSWORD RESET for the existing SO001 Admin.
+ *
+ * Before running:
+ * 1) Replace the placeholder below with a new unique password.
+ * 2) Save the project.
+ * 3) Select resetExistingAdminPasswordOnce in the function dropdown and Run.
+ * 4) After SUCCESS, remove this helper and deploy a new version.
+ *
+ * Never share the password, Password_Salt or Password_Hash.
+
+function resetExistingAdminPasswordOnce() {
+  const societyCode = "SO001";
+  const loginId = "admin";
+  const newPassword = "AdminNew@2026";
+
+  if (newPassword === "REPLACE_WITH_YOUR_OWN_STRONG_PASSWORD") {
+    throw new Error("First set your own new password inside resetExistingAdminPasswordOnce().");
+  }
+
+  validatePassword_(newPassword);
+
+  const result = societyAndUsers_(societyCode);
+  const matches = result.rows.filter(r =>
+    normalizeLogin_(r.Login_ID) === normalizeLogin_(loginId) &&
+    String(r.Role || "").trim().toLowerCase() === "admin" &&
+    String(r.Account_Status || "").trim().toLowerCase() === "active"
+  );
+
+  if (matches.length !== 1) {
+    throw new Error("Expected exactly one Active Admin for SO001/admin; found " + matches.length + ".");
+  }
+
+  const user = matches[0];
+  const newSalt = randomHex_(24);
+  const newHash = hashPassword_(newSalt, newPassword);
+
+  setCell_(result.usersSheet, user.__row, "Password_Salt", newSalt);
+  setCell_(result.usersSheet, user.__row, "Password_Hash", newHash);
+  setCell_(result.usersSheet, user.__row, "Password_Changed_At", new Date());
+
+  Logger.log("SUCCESS: Existing Admin password reset.");
+  Logger.log("Society Code: " + societyCode);
+  Logger.log("Login ID: " + loginId);
+} */
+
+/**
+ * Safe diagnostic: logs account metadata only, never password or hash values.
+ * Run this if the reset helper reports that it cannot find exactly one Admin.
+ */
+function diagnoseExistingAdminRecord() {
+  const societyCode = "SO001";
+  const loginId = "admin";
+  const result = societyAndUsers_(societyCode);
+
+  const matches = result.rows.filter(r =>
+    normalizeLogin_(r.Login_ID) === normalizeLogin_(loginId)
+  );
+
+  Logger.log("Society Code: " + societyCode);
+  Logger.log("Matching Login ID rows: " + matches.length);
+
+  matches.forEach((r, i) => {
+    Logger.log("Record " + (i + 1) +
+      " | Role=" + String(r.Role || "").trim() +
+      " | Account_Status=" + String(r.Account_Status || "").trim() +
+      " | Password_Salt present=" + Boolean(r.Password_Salt) +
+      " | Password_Hash present=" + Boolean(r.Password_Hash) +
+      " | Sheet row=" + r.__row);
+  });
 }
