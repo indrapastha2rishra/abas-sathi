@@ -104,12 +104,12 @@ export const ResidentDashboard: React.FC = () => {
               <span className="font-semibold text-[#29352D]">{myProperty?.Property_Type}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
-              <span className="text-[#29352D]/70">Super Builtup Area:</span>
-              <span className="font-bold text-[#536B4D]">{myProperty?.Super_Builtup_Area} Sq.Ft.</span>
+              <span className="text-[#29352D]/70">Structural Area:</span>
+              <span className="font-bold text-[#536B4D]">{myProperty?.Structural_Area} Sq.Ft.</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
-              <span className="text-[#29352D]/70">Covered Area:</span>
-              <span className="font-medium text-[#29352D]">{myProperty?.Cover_Area} Sq.Ft.</span>
+              <span className="text-[#29352D]/70">Carpet Area:</span>
+              <span className="font-medium text-[#29352D]">{myProperty?.Carpet_Area} Sq.Ft.</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-[#29352D]/70">Property ID:</span>

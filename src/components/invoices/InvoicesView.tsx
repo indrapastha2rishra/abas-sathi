@@ -54,9 +54,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   const currentProperty = properties.find((p) => p.PropertyID === selectedPropertyId) || properties[0];
   const currentRate = rates.find((r) => r.RateID === selectedRateId) || rates[0];
 
-  const previewArea = currentRate?.Area_Basis === 'Super Builtup Area'
-    ? currentProperty?.Super_Builtup_Area || 1200
-    : currentProperty?.Cover_Area || 1000;
+  const previewArea = currentRate?.Area_Basis === 'Structural_Area' ? currentProperty?.Structural_Area || 0
+    : currentRate?.Area_Basis === 'Carpet_Area' ? currentProperty?.Carpet_Area || 0
+    : currentRate?.Area_Basis === 'Allocated_Common_Area' ? currentProperty?.Allocated_Common_Area || 0
+    : currentRate?.Area_Basis === 'Super_Built-up_Area' ? currentProperty?.Super_Built_up_Area || 0 : 1;
 
   const baseCharge = currentRate
     ? calculateChargeAmount(currentRate.Calculation_Method, currentRate.Rate_Per_SqFt_Unit, previewArea, 1)
@@ -312,12 +313,12 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                 >
                   {properties.map((p) => (
                     <option key={p.PropertyID} value={p.PropertyID}>
-                      Flat {p.Flat_No} ({p.Block_Tower}) - {p.Super_Builtup_Area} sq.ft
+                      Flat {p.Flat_No} ({p.Block_Tower}) - {p.Super_Built_up_Area} sq.ft
                     </option>
                   ))}
                 </select>
                 <p className="text-[10px] text-gray-500 mt-1">
-                  Super Builtup: {currentProperty?.Super_Builtup_Area} sq.ft | Floor: {currentProperty?.Floor_No}
+                  Super Built-up Area: {currentProperty?.Super_Built_up_Area} | Structural Area: {currentProperty?.Structural_Area} sq.ft | Floor: {currentProperty?.Floor_No}
                 </p>
               </div>
 

@@ -91,7 +91,7 @@ export const InvoicePrintModal: React.FC = () => {
               <p className="text-xs font-bold uppercase tracking-wider text-[#536B4D]">Property & Billing Period</p>
               <p className="text-xs text-[#29352D]/80 mt-1">Property ID: {previewInvoice.PropertyID}</p>
               <p className="text-xs text-[#29352D]/80">
-                Super Builtup Area: <strong>{previewInvoice.Area_SqFt} Sq.Ft.</strong>
+                Structural Area: <strong>{previewInvoice.Area_SqFt} Sq.Ft.</strong>
               </p>
               <p className="text-xs text-[#29352D]/80">
                 Period: <strong>{previewInvoice.Bill_Period_From}</strong> to <strong>{previewInvoice.Bill_Period_To}</strong>

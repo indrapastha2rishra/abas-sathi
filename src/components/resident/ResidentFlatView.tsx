@@ -59,16 +59,20 @@ export const ResidentFlatView: React.FC = () => {
               <span className="font-bold text-[#29352D]">{residentProperty?.Property_Type}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/60">
-              <span className="text-gray-500">Covered Carpet Area:</span>
-              <span className="font-medium">{residentProperty?.Cover_Area} Sq.Ft.</span>
+              <span className="text-gray-500">Carpet Area:</span>
+              <span className="font-medium">{residentProperty?.Carpet_Area} Sq.Ft.</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/60">
-              <span className="text-gray-500">Corridor / Common Share:</span>
-              <span className="font-medium">{residentProperty?.Corridor_Area} Sq.Ft.</span>
+              <span className="text-gray-500">Allocated Common Area:</span>
+              <span className="font-medium">{residentProperty?.Allocated_Common_Area} Sq.Ft.</span>
+            </div>
+            <div className="flex justify-between py-1 border-b border-[#E8E1D4]/60">
+              <span className="text-gray-500">Structural Area:</span>
+              <span className="font-bold text-[#536B4D] text-sm">{residentProperty?.Structural_Area} Sq.Ft.</span>
             </div>
             <div className="flex justify-between py-1">
-              <span className="text-gray-500 font-bold">Super Builtup Area (Billing Basis):</span>
-              <span className="font-bold text-[#536B4D] text-sm">{residentProperty?.Super_Builtup_Area} Sq.Ft.</span>
+              <span className="text-gray-500 font-bold">Super Built-up Area:</span>
+              <span className="font-bold text-[#536B4D]">{residentProperty?.Super_Built_up_Area} Sq.Ft.</span>
             </div>
           </div>
         </div>

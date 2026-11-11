@@ -40,7 +40,6 @@ export interface GoogleBackendConfig {
   spreadsheetId: string;
   driveFolderId: string;
   appsScriptWebAppUrl: string;
-  mode: 'demo' | 'live';
 }
 
 interface AppContextType {
@@ -179,7 +178,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       driveFolderId: '',
       //appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
       appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
-      mode: 'live',
     };
     try {
       if (typeof window === 'undefined') return defaults;
@@ -193,14 +191,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateGoogleConfig = (cfg: Partial<GoogleBackendConfig>) => {
     setGoogleConfig((prev) => {
       const next = { ...prev, ...cfg };
-      // The current Settings screen has no separate Live/Demo selector.
-      // A real Apps Script URL therefore enables Live mode automatically.
-      const url = next.appsScriptWebAppUrl.trim();
-      if (cfg.appsScriptWebAppUrl !== undefined) {
-        next.mode = url.startsWith('https://script.google.com/macros/s/') && url.endsWith('/exec')
-          ? 'live'
-          : 'demo';
-      }
       try {
         if (typeof window !== 'undefined') {
           window.localStorage.setItem('abasSathiGoogleConfig', JSON.stringify(next));
@@ -233,16 +223,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let normalized = keyOf(key);
         // Preserve the exact TypeScript field names expected by existing screens.
         const aliases: Record<string,string> = {
-          'Flat_No':'Flat_No', 'Flat_No_':'Flat_No', 'Floor_No':'Floor_No',
-          'Block_Tower':'Block_Tower', 'Property_Type':'Property_Type',
-          'Cover_Area':'Cover_Area', 'Coridoor_Area':'Corridor_Area',
-          'Corridor_Area':'Corridor_Area', 'Super_Buildup_Area':'Super_Builtup_Area',
-          'Super_Builtup_Area':'Super_Builtup_Area', 'Occupancy_Status':'Occupancy_Status',
-          'Property_Status':'Property_Status', 'Owner_Name':'Owner_Name',
-          'Email_ID':'Email_ID', 'Mobile_No':'Mobile_No'
+          Flat_No:'Flat_No', Flat_No_:'Flat_No', Floor_No:'Floor_No',
+          Block_Tower:'Block_Tower', Property_Type:'Property_Type',
+          Cover_Area:'Carpet_Area', Carpet_Area:'Carpet_Area',
+          Coridoor_Area:'Allocated_Common_Area', Corridor_Area:'Allocated_Common_Area',
+          Allocated_Common_Area:'Allocated_Common_Area',
+          Super_Buildup_Area:'Structural_Area', Super_Builtup_Area:'Structural_Area',
+          Structural_Area:'Structural_Area',
+          Total_Area:'Super_Built_up_Area', Super_Built_up_Area:'Super_Built_up_Area',
+          Occupancy_Status:'Occupancy_Status', Property_Status:'Property_Status',
+          Owner_Name:'Owner_Name', Email_ID:'Email_ID', Mobile_No:'Mobile_No'
         };
         normalized = aliases[normalized] || normalized;
         let value = row[key];
+        if (normalized === 'Area_Basis' && typeof value === 'string') {
+          const basis = value.trim().toLowerCase().replace(/[ _-]+/g, ' ');
+          const basisAliases: Record<string,string> = {
+            'cover area':'Carpet_Area', 'cover':'Carpet_Area',
+            'corridor area':'Allocated_Common_Area', 'corridor':'Allocated_Common_Area',
+            'super builtup area':'Structural_Area', 'super built up area':'Structural_Area',
+            'structural area':'Structural_Area', 'super built-up area':'Super_Built-up_Area',
+            'total area':'Super_Built-up_Area', 'allocated common area':'Allocated_Common_Area',
+            'carpet area':'Carpet_Area', 'not applicable':'None', 'none':'None'
+          };
+          value = basisAliases[basis] || value;
+        }
         if (typeof value === 'string' && value.trim() !== '' && /^-?\\d+(\\.\\d+)?$/.test(value.trim())) {
           value = Number(value);
         }
@@ -265,10 +270,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           Flat_No:String(r.Flat_No || ''),
           Block_Tower:String(r.Block_Tower || ''),
           Floor_No:Number(r.Floor_No || 0),
-          Cover_Area:Number(r.Cover_Area || 0),
-          Corridor_Area:Number(r.Corridor_Area || 0),
-          Super_Builtup_Area:Number(r.Super_Builtup_Area || 0),
-          Total_Area:Number(r.Total_Area || 0),
+          Carpet_Area:Number(r.Carpet_Area || 0),
+          Allocated_Common_Area:Number(r.Allocated_Common_Area || 0),
+          Structural_Area:Number(r.Structural_Area || 0),
+          Super_Built_up_Area:Number(r.Super_Built_up_Area || 0),
           Occupancy_Status:r.Occupancy_Status === 'Occupied' ? 'Self Occupied' : (r.Occupancy_Status || 'Vacant'),
           Property_Status:r.Property_Status || 'Active'
         }));
@@ -364,7 +369,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const owner = owners.find((o) => o.OwnerID === ownership.OwnerID) || owners[0];
     const rate = rates.find((r) => r.RateID === params.rateId) || rates[0];
 
-    const area = rate.Area_Basis === 'Super Builtup Area' ? prop.Super_Builtup_Area : prop.Cover_Area;
+    const area = rate.Area_Basis === 'Structural_Area' ? prop.Structural_Area
+      : rate.Area_Basis === 'Carpet_Area' ? prop.Carpet_Area
+      : rate.Area_Basis === 'Allocated_Common_Area' ? prop.Allocated_Common_Area
+      : rate.Area_Basis === 'Super_Built-up_Area' ? prop.Super_Built_up_Area : 1;
     const charge = calculateChargeAmount(rate.Calculation_Method, rate.Rate_Per_SqFt_Unit, area, 1);
     const lateFee = params.lateFee || 0;
     const discount = params.discount || 0;

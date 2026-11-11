@@ -14,10 +14,10 @@ export interface PropertyMaster {
   Block_Tower: string;
   Floor_No: number;
   Property_Type: '2BHK' | '3BHK' | '4BHK' | 'Penthouse' | 'Studio';
-  Cover_Area: number; // sq ft
-  Corridor_Area: number;
-  Super_Builtup_Area: number;
-  Total_Area: number;
+  Carpet_Area: number; // sq ft
+  Allocated_Common_Area: number;
+  Structural_Area: number;
+  Super_Built_up_Area: number;
   Occupancy_Status: OccupancyStatus;
   Property_Status: PropertyStatus;
   Remarks: string;
@@ -58,7 +58,7 @@ export interface OwnershipHistory {
 }
 
 export type CalculationMethod = 'Area × Rate' | 'Quantity × Rate' | 'Fixed Amount';
-export type AreaBasis = 'Super Builtup Area' | 'Cover Area' | 'Total Area' | 'None';
+export type AreaBasis = 'Structural_Area' | 'Carpet_Area' | 'Allocated_Common_Area' | 'Super_Built-up_Area' | 'None';
 
 export interface RateMaster {
   RateID: string;

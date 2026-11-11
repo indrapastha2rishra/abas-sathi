@@ -7,7 +7,7 @@
 
 ## 1. Project Overview & Phase Roadmap
 
-- **Phase 1 (Completed):** Fully functional, responsive, bilingual (English & Bengali) Website foundation. Includes all 4 roles (Admin, Committee, Accountant, Resident), 21 Google Sheets database models, rate calculations, payment workflows, print/save PDF modals, and Google Apps Script integration architecture.
+- **Website foundation:** Responsive, bilingual (English & Bengali) React application. Includes all 4 roles (Admin, Committee, Accountant, Resident), 21 Google Sheets database models, rate calculations, payment workflows, print/save PDF modals, and Google Apps Script integration architecture.
 - **Phase 2 (Next):** Live Google Sheets & Google Drive API backend synchronization.
 - **Phase 3:** Website stabilization and production deployment on GitHub Pages.
 - **Phase 4:** Android packaging via Capacitor / Trusted Web Activity (PWA-ready).
@@ -121,7 +121,7 @@ Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigat
 ## 6. Financial Calculations & Rules
 
 - **Base Rate Calculation:**
-  - Area × Rate: `Super_Builtup_Area × Rate_Per_SqFt`
+  - Area × Rate: `Structural_Area × Rate_Per_SqFt`
   - Quantity × Rate: `Quantity × Unit_Rate`
   - Fixed Amount: Fixed fee
 - **Net Charge Formula:**
@@ -161,8 +161,17 @@ Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigat
 6. Deploy the Apps Script as a Web App and set its `/exec` URL in `Login.tsx` if the deployment URL differs.
 7. Push the complete updated repository to GitHub and allow the Actions deployment to finish.
 
-The website now starts at Login and does not initialize sample/demo records. After authentication it reads the society's 21 tabs through the backend. This version focuses on live reads; existing create/update actions in the React screens are not all synchronized to Sheets yet. Do not treat the website as production-ready accounting software until those write operations, role-based server authorization, and file permissions have been completed and tested.
+The website now starts at Login and does not initialize sample/demo records. After authentication it reads the society's 21 tabs through the backend. This codebase currently supports authenticated live reads and selected backend actions only. Several create/update workflows still update browser state rather than persisting to Google Sheets, and not every write action has server-side role authorization. It is therefore not yet production-ready for live financial/accounting operations. Complete and independently test every write API, server-side authorization rule, audit trail, concurrency control, backup/restore and Drive permission before real deployment.
 
 
 ## Authentication, profile and KYC update
 See `AUTH_KYC_SETUP_BN_EN.txt` for the complete setup and deployment guide. The updated Apps Script backend is `apps_script/Code.gs`.
+
+
+## Version 5.2 corrections
+
+- Removed the Demo Mode badge and demo-mode configuration. The app requires a valid authenticated session and live Apps Script backend.
+- The authenticated header shows the society name and the society address below it. Configure `Society_Address` (or `Registered_Address` / `Address`) in the Central `Society Master` tab.
+- Canonical Property Master fields are `Carpet_Area`, `Allocated_Common_Area`, `Structural_Area`, and `Super_Built_up_Area`. The frontend accepts legacy area headers on read for migration compatibility; new/updated sheets should use the canonical names.
+- Ownership History joins `Owner Master` and `Property Master` in the UI and no longer displays `PropertyID` as a column.
+- Sign-out clears the local session immediately; server token revocation is sent best-effort in the background.

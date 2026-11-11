@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'properties_all' }) => {
-  const { properties, owners, ownerships, tenants, activeTab, setActiveTab, t } = useApp();
+  const { properties, owners, ownerships, tenants, t } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'all' | 'owners' | 'history' | 'tenants'>(
     subtab === 'properties_owners'
@@ -165,8 +165,10 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                   <th className="px-4 py-3 font-semibold">Tower / Block</th>
                   <th className="px-4 py-3 font-semibold">Floor</th>
                   <th className="px-4 py-3 font-semibold">Type</th>
-                  <th className="px-4 py-3 font-semibold text-right">Cover Area</th>
-                  <th className="px-4 py-3 font-semibold text-right">Super Builtup</th>
+                  <th className="px-4 py-3 font-semibold text-right">Carpet Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Allocated Common Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Super Built-up Area</th>
                   <th className="px-4 py-3 font-semibold text-center">Occupancy Status</th>
                   <th className="px-4 py-3 font-semibold text-center">Status</th>
                 </tr>
@@ -179,8 +181,10 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                     <td className="px-4 py-3 font-medium text-[#536B4D]">{prop.Block_Tower}</td>
                     <td className="px-4 py-3">Floor {prop.Floor_No}</td>
                     <td className="px-4 py-3 font-semibold">{prop.Property_Type}</td>
-                    <td className="px-4 py-3 text-right">{prop.Cover_Area} sq.ft</td>
-                    <td className="px-4 py-3 text-right font-bold text-[#536B4D]">{prop.Super_Builtup_Area} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{prop.Carpet_Area} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{prop.Structural_Area} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{prop.Allocated_Common_Area} sq.ft</td>
+                    <td className="px-4 py-3 text-right font-bold text-[#536B4D]">{prop.Super_Built_up_Area} sq.ft</td>
                     <td className="px-4 py-3 text-center">
                       <span
                         className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -251,7 +255,14 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
               <thead className="bg-[#536B4D] text-white">
                 <tr>
                   <th className="px-4 py-3 font-semibold">Ownership ID</th>
-                  <th className="px-4 py-3 font-semibold">Property ID</th>
+                  <th className="px-4 py-3 font-semibold">Owner Name</th>
+                  <th className="px-4 py-3 font-semibold">Flat No.</th>
+                  <th className="px-4 py-3 font-semibold">Floor No.</th>
+                  <th className="px-4 py-3 font-semibold">Property Type</th>
+                  <th className="px-4 py-3 font-semibold text-right">Carpet Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Allocated Common Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Super Built-up Area</th>
                   <th className="px-4 py-3 font-semibold">Deed Number</th>
                   <th className="px-4 py-3 font-semibold">KMC Assessee No</th>
                   <th className="px-4 py-3 font-semibold">KMC Holding No</th>
@@ -261,22 +272,29 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {ownerships.slice(0, 20).map((osh) => (
-                  <tr key={osh.Ownership_ID} className="hover:bg-neutral-50 transition-colors">
-                    <td className="px-4 py-3 font-mono font-bold text-[#29352D]">{osh.Ownership_ID}</td>
-                    <td className="px-4 py-3 font-mono text-[#536B4D]">{osh.PropertyID}</td>
-                    <td className="px-4 py-3 font-mono text-[#C97958] font-semibold">{osh.Deed_No}</td>
-                    <td className="px-4 py-3 font-mono">{osh.Municipality_Assessee_No}</td>
-                    <td className="px-4 py-3 font-mono">{osh.Municipality_Holding_No}</td>
-                    <td className="px-4 py-3 font-mono">{osh.Khatian} (JL: {osh.JL_No})</td>
-                    <td className="px-4 py-3 text-center font-bold">{osh.Ownership_Share}%</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                        {osh.Ownership_Status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {ownerships.slice(0, 20).map((osh) => {
+                  const property = properties.find((p) => p.PropertyID === osh.PropertyID);
+                  const owner = owners.find((o) => o.OwnerID === osh.OwnerID);
+                  return (
+                    <tr key={osh.Ownership_ID} className="hover:bg-neutral-50 transition-colors">
+                      <td className="px-4 py-3 font-mono font-bold text-[#29352D]">{osh.Ownership_ID}</td>
+                      <td className="px-4 py-3 font-semibold">{owner?.Owner_Name || '—'}</td>
+                      <td className="px-4 py-3 font-bold text-[#536B4D]">{property?.Flat_No || '—'}</td>
+                      <td className="px-4 py-3">{property?.Floor_No ?? '—'}</td>
+                      <td className="px-4 py-3">{property?.Property_Type || '—'}</td>
+                      <td className="px-4 py-3 text-right">{property?.Carpet_Area ?? '—'}</td>
+                      <td className="px-4 py-3 text-right">{property?.Structural_Area ?? '—'}</td>
+                      <td className="px-4 py-3 text-right">{property?.Allocated_Common_Area ?? '—'}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{property?.Super_Built_up_Area ?? '—'}</td>
+                      <td className="px-4 py-3 font-mono text-[#C97958] font-semibold">{osh.Deed_No || '—'}</td>
+                      <td className="px-4 py-3 font-mono">{osh.Municipality_Assessee_No || '—'}</td>
+                      <td className="px-4 py-3 font-mono">{osh.Municipality_Holding_No || '—'}</td>
+                      <td className="px-4 py-3 font-mono">{osh.Khatian || '—'} (JL: {osh.JL_No || '—'})</td>
+                      <td className="px-4 py-3 text-center font-bold">{osh.Ownership_Share}%</td>
+                      <td className="px-4 py-3 text-center"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">{osh.Ownership_Status}</span></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

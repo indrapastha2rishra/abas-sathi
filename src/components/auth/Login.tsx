@@ -23,7 +23,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
     e.preventDefault();setError('');setNotice('');setLoading(true);
     try {
       const result:any=await authRequest({action:'login',societyCode,loginId,password});
-      const session={token:result.token,expiresAt:Date.now()+(result.expiresIn||21600)*1000,user:result.user,societyName:result.user.societyName,societyCode:result.user.societyCode};
+      const session={token:result.token,expiresAt:Date.now()+(result.expiresIn||21600)*1000,user:result.user,societyName:result.user.societyName,societyAddress:result.user.societyAddress,societyCode:result.user.societyCode};
       localStorage.setItem('abasSathiSession',JSON.stringify(session));onLogin(session);
     } catch(err:any){setError(err.message||'Unable to sign in.');}
     finally{setLoading(false);}

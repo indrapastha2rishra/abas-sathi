@@ -13,7 +13,6 @@ export const translations = {
     tagline: 'Smart Living. Better Community.',
     apartmentName: 'Abas Sathi Housing Society',
     apartmentAddress: '14/B, Raja Subodh Chandra Mallick Road, Jadavpur, Kolkata - 700032',
-    demoModeNotice: 'Phase 1 Website Demo Mode (Safe In-Memory / Local Storage). Google Apps Script & Sheets integration schema ready.',
 
     // Roles
     roleAdmin: 'Admin',
@@ -148,7 +147,6 @@ export const translations = {
     tagline: 'স্মার্ট লিভিং। উন্নত সম্প্রদায়।',
     apartmentName: 'আবাসসাথী হাউজিং সোসাইটি',
     apartmentAddress: '১৪/বি, রাজা সুবোধ চন্দ্র মল্লিক রোড, যাদবপুর, কলকাতা - ৭০০০৩২',
-    demoModeNotice: 'ফেজ ১ ওয়েবসাইট ডেমো মোড (নিরাপদ লোকাল মেমোরি)। গুগল অ্যাপস স্ক্রিপ্ট ও শিটস সংযোগ প্রস্তুত।',
 
     // Roles
     roleAdmin: 'অ্যাডমিন',

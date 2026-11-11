@@ -17,7 +17,7 @@ This update adds:
 IMPORTANT: this is a substantial authentication and KYC implementation, but it
 does NOT convert every existing financial/property CRUD screen into secure,
 server-authorized live database operations. Existing application modules may
-still contain demo/local state and should not be used for real financial operations
+still contain browser-local state and should not be used for real financial operations
 until every operation has been migrated to server-side validated endpoints and
 tested. Do not describe the whole app as production-ready yet.
 
@@ -27,14 +27,14 @@ The existing central workbook must contain these tabs:
 
 1) Society Master
    Required headers:
-   Society_Code | Society_Status | Database_ID | Society_Name
+   Society_Code | Society_Status | Database_ID | Society_Name | Society_Address
 
 2) Society User Access
    Required headers (existing headers may be in any order):
    Society_Code | Login_ID | UserID | Full_Name | Email_ID | Mobile_No |
    Role | PropertyID | Account_Status | Password_Salt | Password_Hash
 
-The backend automatically appends these optional columns if missing:
+The backend automatically appends these optional columns if missing. `Society_Address` is a recommended field in Society Master and is displayed under the society name after login:
 Profile_Address, Emergency_Contact, KYC_Status, KYC_Documents, Created_At,
 Created_By, Approved_At, Approved_By, Last_Login, Password_Changed_At.
 

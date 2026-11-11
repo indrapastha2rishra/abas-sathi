@@ -8,14 +8,8 @@ import { useApp } from '../../context/AppContext';
 import {
   Menu,
   Languages,
-  UserCheck,
   Bell,
-  Database,
   LogOut,
-  ExternalLink,
-  ChevronDown,
-  Sparkles,
-  ShieldAlert,
   UserRound,
 } from 'lucide-react';
 
@@ -35,20 +29,23 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
     setActiveTab,
   } = useApp();
 
-  const [showDemoInfo, setShowDemoInfo] = useState(false);
-  const [societyName] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}').societyName || 'ABAS SATHI'; }
-    catch { return 'ABAS SATHI'; }
-  });
-  const signOut = async () => {
+  const [society] = useState(() => {
     try {
-      const cfg = JSON.parse(localStorage.getItem('abasSathiGoogleConfig') || '{}');
-      const url = cfg.appsScriptWebAppUrl || 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec';
-      const session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
-      await fetch(url, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'logout', token:session.token}) });
-    } catch {}
+      const u = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
+      return { name: u.societyName || '', address: u.societyAddress || '' };
+    } catch { return { name: '', address: '' }; }
+  });
+  const signOut = () => {
+    const session = (() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch { return {}; } })();
     localStorage.removeItem('abasSathiSession');
-    window.location.reload();
+    window.location.replace(window.location.pathname);
+    const cfg = (() => { try { return JSON.parse(localStorage.getItem('abasSathiGoogleConfig') || '{}'); } catch { return {}; } })();
+    if (cfg.appsScriptWebAppUrl && session.token) {
+      void fetch(cfg.appsScriptWebAppUrl, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'logout', token: session.token }), keepalive: true,
+      }).catch(() => undefined);
+    }
   };
 
   const pendingRequestsCount = activityRequests.filter((r) => r.Request_Status === 'Pending').length;
@@ -103,56 +100,12 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
           </div>
         </div>
 
-        {/* Right actions: Demo Badge, Language Switcher, Role Badge, Notifications */}
+        {/* Right actions: Society, Language, Notifications and Sign out */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Demo Mode Badge */}
-          <div className="relative">
-            <button
-              onClick={() => setShowDemoInfo(!showDemoInfo)}
-              className="hidden lg:flex items-center gap-1.5 rounded-full bg-[#536B4D]/10 px-3 py-1 text-xs font-semibold text-[#536B4D] border border-[#536B4D]/20 hover:bg-[#536B4D]/20 transition-colors cursor-pointer"
-              title="Click to view Phase 1 Demo Architecture status"
-            >
-              <span className="h-2 w-2 rounded-full bg-[#536B4D] animate-pulse"></span>
-              <span>Phase 1 Demo Mode</span>
-              <Database className="h-3.5 w-3.5 ml-0.5 opacity-70" />
-            </button>
-
-            {showDemoInfo && (
-              <div className="absolute right-0 mt-2 w-80 rounded-xl bg-white p-4 shadow-xl border border-[#E8E1D4] text-xs z-50 animate-in fade-in zoom-in-95">
-                <div className="flex items-center justify-between pb-2 border-b border-[#E8E1D4]">
-                  <span className="font-bold text-[#29352D] flex items-center gap-1.5">
-                    <Database className="h-4 w-4 text-[#536B4D]" />
-                    Phase 1 Demo Architecture
-                  </span>
-                  <button
-                    onClick={() => setShowDemoInfo(false)}
-                    className="text-gray-400 hover:text-gray-600 text-sm font-bold"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <p className="mt-2 text-[#29352D]/80 leading-relaxed">
-                  All 21 Google Sheets database structures and relationships are simulated with realistic in-memory state.
-                </p>
-                <div className="mt-2.5 p-2 rounded-lg bg-[#F7F4EC] space-y-1 font-mono text-[11px] text-[#29352D]">
-                  <p>• Spreadsheet: [ADD_SPREADSHEET_ID]</p>
-                  <p>• Drive Folder: [ADD_DRIVE_FOLDER_ID]</p>
-                  <p>• Web App: [ADD_APPS_SCRIPT_WEB_APP_URL]</p>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowDemoInfo(false);
-                    setActiveTab('settings_google');
-                  }}
-                  className="mt-3 w-full rounded-lg bg-[#536B4D] py-1.5 text-center font-medium text-white hover:bg-[#3F523A] transition-colors"
-                >
-                  View Setup Guide & Code.gs
-                </button>
-              </div>
-            )}
+          <div className="hidden md:block max-w-[260px] text-right leading-tight">
+            <div className="truncate text-sm font-bold text-[#536B4D]" title={society.name}>{society.name}</div>
+            {society.address && <div className="mt-1 truncate text-[10px] font-medium text-slate-500" title={society.address}>{society.address}</div>}
           </div>
-
-          <div className="hidden md:block max-w-[220px] truncate text-sm font-semibold text-[#536B4D]" title={societyName}>{societyName}</div>
 
           {/* Bengali / English Language Switcher */}
           <button

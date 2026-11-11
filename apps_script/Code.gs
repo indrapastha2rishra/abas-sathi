@@ -77,7 +77,7 @@ function doGet(e) {
         }
         result[name] = records;
       });
-      return json_({status:"success", society:{societyCode:session.societyCode,societyName:session.societyName},data:result});
+      return json_({status:"success", society:{societyCode:session.societyCode,societyName:session.societyName,societyAddress:session.societyAddress},data:result});
     }
     if (p.action === "getMyProfile") return json_({status:"success", profile:publicUser_(getUserRow_(session))});
     return json_({status:"error",message:"Unknown action"});
@@ -92,11 +92,12 @@ function doPost(e) {
       case "forgotPasswordRequest": return forgotPasswordRequest_(body);
       case "forgotPasswordVerify": return forgotPasswordVerify_(body);
     }
+    if (body.action === "logout") {
+      if (body.token) CacheService.getScriptCache().remove("SESSION_" + body.token);
+      return json_({status:"success",message:"Signed out"});
+    }
     const session = requireSession_(body.token);
     switch (body.action) {
-      case "logout":
-        CacheService.getScriptCache().remove("SESSION_" + body.token);
-        return json_({status:"success",message:"Signed out"});
       case "adminCreateUser": return adminCreateUser_(session,body);
       case "adminListUsers": return adminListUsers_(session);
       case "adminApproveUser": return adminApproveUser_(session,body);
@@ -136,7 +137,8 @@ function login_(body) {
   setCell_(usersSheet,user.__row,"Last_Login",new Date());
   const token = randomHex_(32);
   const session = {
-    societyCode:code, societyName:String(society.Society_Name || "ABAS SATHI"),
+    societyCode:code, societyName:String(society.Society_Name || ""),
+     societyAddress:String(society.Society_Address || society.Registered_Address || society.Address || ""),
     databaseId:String(society.Database_ID), fullName:String(user.Full_Name || ""),
     userId:String(user.UserID || ""), loginId:String(user.Login_ID || ""),
     role:String(user.Role || "Resident"), propertyId:String(user.PropertyID || ""),
