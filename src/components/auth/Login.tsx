@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Building2, LockKeyhole, Languages, ShieldCheck, ArrowLeft, LoaderCircle, Eye, EyeOff, Zap } from 'lucide-react';
-import { authRequest } from '../../utils/authClient';
+import { authRequest, BackendRequestError } from '../../utils/authClient';
 
 type Props = { onLogin: (session: any) => void };
 type Mode = 'login' | 'forgot' | 'reset';
@@ -43,7 +43,16 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
     try {
       if(remember) localStorage.setItem(REMEMBER_KEY,JSON.stringify({societyCode:code,loginId:id}));
       else localStorage.removeItem(REMEMBER_KEY);
-      const result:any=await authRequest({action:'login',societyCode:code,loginId:id,password},{timeoutMs:45000});
+      let result:any;
+      try {
+        result = await authRequest({action:'login',societyCode:code,loginId:id,password},{timeoutMs:30000});
+      } catch (firstError) {
+        // One bounded retry helps on mobile networks with a transient radio hand-off.
+        // Login is read/verify-only; a retry cannot duplicate a financial operation.
+        if (!(firstError instanceof BackendRequestError) || !firstError.retryable) throw firstError;
+        await new Promise(resolve => window.setTimeout(resolve, 500));
+        result = await authRequest({action:'login',societyCode:code,loginId:id,password},{timeoutMs:30000});
+      }
       if(!result.token||!result.user)throw new Error('The server did not return a valid login session. Please try again.');
       const session={token:result.token,expiresAt:Date.now()+(result.expiresIn||21600)*1000,user:result.user,societyName:result.user.societyName,societyAddress:result.user.societyAddress,societyCode:result.user.societyCode};
       localStorage.setItem('abasSathiSession',JSON.stringify(session));

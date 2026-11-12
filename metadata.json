@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.4 — bilingual apartment management with optimized secure quick login, idempotent live writes, Google Apps Script, Sheets and private Drive integration.",
+  "description": "ABAS SATHI Version 5.4.1 — mobile login transport fix, corrected Apps Script endpoint migration, and single-request live dashboard bootstrap.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -15,6 +15,9 @@
     "Quick Login with remembered non-secret identifiers",
     "Backend-validated session restore and sliding session expiry",
     "Idempotent retry for eligible live write operations",
-    "Batch Central Master lookup and Drive upload pre-validation"
+    "Batch Central Master lookup and Drive upload pre-validation",
+    "Mobile-safe CORS POST transport with bounded retry and diagnostics",
+    "Corrected default Apps Script deployment URL migration",
+    "Single-request dashboard data bootstrap to reduce mobile round trips"
   ]
 }

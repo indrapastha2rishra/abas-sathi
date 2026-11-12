@@ -73,6 +73,7 @@ function doPost(e) {
       case "getModuleData": return getModuleData_(session, body);
       case "getModuleSchema": return getModuleSchema_(session, body);
       case "getDashboardSummary": return getDashboardSummary_(session);
+      case "getDashboardData": return getDashboardData_(session);
       case "getReports": return getReports_(session, body);
       case "createReportSnapshot": return createReportSnapshot_(session, body);
       case "approveReportSnapshot": return approveReportSnapshot_(session, body);
@@ -474,6 +475,44 @@ function ensureInternalSheet_(ss,name,headers) {
   if(!sh){sh=ss.insertSheet(name);sh.getRange(1,1,1,headers.length).setValues([headers]);sh.hideSheet();}
   else if(sh.getLastRow()===0){sh.getRange(1,1,1,headers.length).setValues([headers]);}
   return sh;
+}
+
+/**
+ * Dashboard bootstrap: return all dashboard-required datasets in one authenticated
+ * request. This avoids 8-12 separate mobile round trips and repeated Central Master
+ * permission checks after login. Sensitive modules remain role-filtered server-side.
+ */
+function getDashboardData_(session) {
+  const ss = SpreadsheetApp.openById(session.databaseId);
+  const role = String(session.role || "Resident");
+  const keys = role === "Resident"
+    ? ["properties","owners","ownershipHistory","invoices","receipts","activityRequests","notices","gallery"]
+    : ["properties","invoices","receipts",...(role === "Admin" || role === "Committee" ? ["activityRequests"] : []),
+       "notices","gallery","preventiveMaintenance",
+       ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts","auditLogs"] : [])];
+  const data = {};
+  keys.forEach(function(key) {
+    authorizeModuleRead_(session, key);
+    const sheetName = MODULE_SHEETS[key];
+    const aliases = key === "invoices" ? ["Invoice_Register","Invoice Register"] : [sheetName];
+    let sh = null;
+    for (let i = 0; i < aliases.length; i++) {
+      sh = ss.getSheetByName(aliases[i]);
+      if (sh) break;
+    }
+    if (!sh) { data[key] = []; return; }
+    const rows = role === "Resident"
+      ? residentModuleRecords_(session, key, ss, sh)
+      : sheetObjects_(sh);
+    data[key] = rows;
+  });
+  return json_({
+    status:"success",
+    data:data,
+    generatedAt:new Date().toISOString(),
+    source:"live-google-sheets",
+    cache:"bypass"
+  });
 }
 
 function getDashboardSummary_(session) {

@@ -189,15 +189,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const defaults: GoogleBackendConfig = {
       spreadsheetId: '',
       driveFolderId: '',
-      //appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
-      appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
+      //appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbxxlu1phgG2mxJE-atFXlwEqixpVUHHaSUWndNgvDhRTPPU8X7vSORZnvxKvYCZ6Jvj0w/exec',
+      appsScriptWebAppUrl: 'https://script.google.com/macros/s/AKfycbxxlu1phgG2mxJE-atFXlwEqixpVUHHaSUWndNgvDhRTPPU8X7vSORZnvxKvYCZ6Jvj0w/exec',
     };
     try {
       if (typeof window === 'undefined') return defaults;
       const saved = window.localStorage.getItem('abasSathiGoogleConfig');
       if (!saved) return defaults;
       const parsed = JSON.parse(saved);
-      const sanitized = { ...defaults, ...parsed, spreadsheetId: '', driveFolderId: '' };
+      const legacyUrl = 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec';
+      const configuredUrl = String(parsed.appsScriptWebAppUrl || '').trim();
+      const sanitized = {
+        ...defaults, ...parsed,
+        appsScriptWebAppUrl: (!configuredUrl || configuredUrl === legacyUrl) ? defaults.appsScriptWebAppUrl : configuredUrl,
+        spreadsheetId: '', driveFolderId: ''
+      };
       window.localStorage.setItem('abasSathiGoogleConfig', JSON.stringify(sanitized));
       return sanitized;
     } catch {
@@ -360,7 +366,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } while (page <= pages);
           return all;
         };
-        const loaded = await Promise.all(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const));
+        const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'
+          ? Object.entries((await apiCall<any>('getDashboardData')).data || {}).map(([key, value]) => [key, normalizeRows(value as any[])] as const)
+          : await Promise.all(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const));
         if (cancelled) return;
         const data: Record<string, any[]> = Object.fromEntries(loaded);
         const rows = (key: string) => data[key] || [];
