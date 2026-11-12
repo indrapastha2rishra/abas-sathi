@@ -25,7 +25,7 @@ export const DocumentCenter: React.FC = () => {
   });
   const refresh=async()=>{setBusy(true);try{setRows(await listPrivateFiles());}catch(e:any){setMessage(e?.message||'Could not load documents.');}finally{setBusy(false);}};
   useEffect(()=>{void refresh();const loadOptions=async()=>{try{const session=JSON.parse(localStorage.getItem('abasSathiSession')||'{}');const [p,o]=await Promise.all([authRequest<any>({action:'getModuleData',token:session.token,module:'properties',page:1,limit:100}),authRequest<any>({action:'getModuleData',token:session.token,module:'owners',page:1,limit:200})]);setPropertyOptions(p.data||[]);setOwnerOptions(o.data||[]);}catch{/* optional selectors remain empty if this role cannot read them */}};void loadOptions();},[]);
-  const upload=async(e:React.FormEvent)=>{e.preventDefault();if(!file){setMessage('Choose a file first.');return;}setBusy(true);setMessage('');
+  const upload=async(e:React.FormEvent)=>{e.preventDefault();if(!file){setMessage('Choose a file first.');return;}setBusy(true);setMessage('Uploading to the society’s private Drive folder and linking the selected record…');
     try{const result=await uploadPrivateFile(file,category,propertyId||undefined,ownerId||undefined,relatedModule||undefined,relatedRecordId||undefined);setMessage(`Uploaded: ${result.fileName}`);setFile(null);await refresh();}
     catch(err:any){setMessage(err?.message||'Upload failed.');}finally{setBusy(false);}
   };
@@ -43,7 +43,7 @@ export const DocumentCenter: React.FC = () => {
         <label className="text-xs font-semibold">Linked Record ID (optional)<input value={relatedRecordId} onChange={e=>setRelatedRecordId(e.target.value)} className="mt-1 w-full border rounded-lg p-2"/></label>
         <label className="text-xs font-semibold">Select File<input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={e=>setFile(e.target.files?.[0]||null)} className="mt-1 w-full border rounded-lg p-2"/></label>
       </div>
-      <button disabled={busy||!file} className="rounded-lg bg-[#536B4D] text-white px-4 py-2 text-xs font-bold disabled:opacity-50">{busy?'Please wait…':'Upload to Private Drive'}</button>
+      <button disabled={busy||!file} className="rounded-lg bg-[#536B4D] text-white px-4 py-2 text-xs font-bold disabled:opacity-50">{busy?'Uploading / saving…':'Upload to Private Drive'}</button>
       {message&&<p className="text-xs text-[#536B4D]">{message}</p>}
     </form>
     <div className="rounded-xl border border-[#E8E1D4] bg-white overflow-hidden">

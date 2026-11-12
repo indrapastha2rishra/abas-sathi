@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { backendUrl } from '../../utils/authClient';
 import {
   Menu,
   Languages,
@@ -37,15 +38,16 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
   });
   const signOut = () => {
     const session = (() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch { return {}; } })();
-    localStorage.removeItem('abasSathiSession');
-    window.location.replace(window.location.pathname);
-    const cfg = (() => { try { return JSON.parse(localStorage.getItem('abasSathiGoogleConfig') || '{}'); } catch { return {}; } })();
-    if (cfg.appsScriptWebAppUrl && session.token) {
-      void fetch(cfg.appsScriptWebAppUrl, {
+    // Start server-side token revocation before navigating away. keepalive allows
+    // the small logout request to finish after the current page is unloaded.
+    if (session.token) {
+      void fetch(backendUrl(), {
         method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'logout', token: session.token }), keepalive: true,
       }).catch(() => undefined);
     }
+    localStorage.removeItem('abasSathiSession');
+    window.location.replace(window.location.pathname);
   };
 
   const pendingRequestsCount = activityRequests.filter((r) => r.Request_Status === 'Pending').length;

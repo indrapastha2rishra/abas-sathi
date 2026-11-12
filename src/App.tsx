@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { LoaderCircle } from 'lucide-react';
+import { authRequest } from './utils/authClient';
 import { Login } from './components/auth/Login';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
@@ -152,9 +154,53 @@ export default function App() {
       if (saved && saved.token && saved.expiresAt > Date.now()) return saved;
       localStorage.removeItem('abasSathiSession');
       return null;
-    } catch { return null; }
+    } catch { localStorage.removeItem('abasSathiSession'); return null; }
   });
+  const [validatingSession, setValidatingSession] = useState<boolean>(() => Boolean(session));
+  const restoreCheckStarted = useRef(false);
 
+  // A persisted token is never trusted only because it exists in localStorage.
+  // Validate it with the backend before mounting protected application screens.
+  useEffect(() => {
+    if (!session || restoreCheckStarted.current) return;
+    restoreCheckStarted.current = true;
+    let active = true;
+    authRequest<any>({ action: 'getMyProfile', token: session.token }, { timeoutMs: 30000 })
+      .then(result => {
+        if (!active) return;
+        const profile = result.profile || {};
+        const refreshed = {
+          ...session,
+          expiresAt: Date.now() + 21600 * 1000,
+          user: {
+            ...session.user,
+            userId: profile.UserID || session.user?.userId,
+            fullName: profile.Full_Name || session.user?.fullName,
+            email: profile.Email_ID || session.user?.email,
+            mobile: profile.Mobile_No || session.user?.mobile,
+            role: profile.Role || session.user?.role,
+            propertyId: profile.PropertyID || session.user?.propertyId,
+          }
+        };
+        localStorage.setItem('abasSathiSession', JSON.stringify(refreshed));
+        setSession(refreshed);
+        setValidatingSession(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        localStorage.removeItem('abasSathiSession');
+        setSession(null);
+        setValidatingSession(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  if (validatingSession) return (
+    <div className="min-h-screen bg-[#F7F4EC] flex flex-col items-center justify-center gap-3 text-[#536B4D]">
+      <LoaderCircle className="animate-spin" size={30}/>
+      <p className="text-sm font-semibold">Restoring your secure session…</p>
+    </div>
+  );
   if (!session) return <Login onLogin={setSession} />;
 
   return (

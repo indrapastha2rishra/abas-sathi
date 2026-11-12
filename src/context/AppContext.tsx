@@ -29,7 +29,7 @@ import {
 } from '../types/database';
 
 import { Language, translations } from '../utils/i18n';
-import { authRequest } from '../utils/authClient';
+import { authRequest, BackendRequestError } from '../utils/authClient';
 
 export interface GoogleBackendConfig {
   spreadsheetId: string;
@@ -233,12 +233,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const requestId = suppliedId || pendingRequestIds.current.get(fingerprint) || newRequestId();
     pendingRequestIds.current.set(fingerprint, requestId);
     if (pendingRequestIds.current.size > 100) pendingRequestIds.current.delete(pendingRequestIds.current.keys().next().value as string);
+    const request = { action, token: saved.token, ...requestPayload, requestId };
+    // Only retry writes whose backend handlers persist requestId in the operation
+    // ledger. Reusing the same ID makes an ambiguous network retry idempotent.
+    const idempotentActions = new Set([
+      'createRecord','updateRecord','cancelRecord','generateInvoice','cancelInvoice',
+      'submitPayment','confirmPayment','rejectPayment','allocatePayment','createExpense',
+      'approveExpense','markExpensePaid','cancelExpense','uploadPrivateFile',
+      'postOpeningBalances'
+    ]);
     try {
-      const result = await authRequest<T>({ action, token: saved.token, ...requestPayload, requestId });
+      let result: T;
+      try {
+        result = await authRequest<T>(request);
+      } catch (error) {
+        if (!(error instanceof BackendRequestError) || !error.retryable || !idempotentActions.has(action)) throw error;
+        await new Promise(resolve => window.setTimeout(resolve, 350));
+        result = await authRequest<T>(request);
+      }
       pendingRequestIds.current.delete(fingerprint);
+      // Mirror the backend's sliding six-hour session TTL so an actively used
+      // session is not discarded by an old client-side expiry timestamp.
+      try {
+        const latest = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
+        if (latest.token === saved.token) {
+          latest.expiresAt = Date.now() + 21600 * 1000;
+          localStorage.setItem('abasSathiSession', JSON.stringify(latest));
+        }
+      } catch {}
       return result;
     } catch (error) {
-      // Keep the same requestId for an exact retry after a timeout/network error.
+      // Keep the same requestId for a deliberate retry after an ambiguous network failure.
       throw error;
     }
   };

@@ -1033,6 +1033,33 @@ function uploadPrivateFile_(session,body){
   if(propertyId&&!sheetObjects_(societySheet_(session,"Property Master").sh).some(x=>String(x.PropertyID)===propertyId))throw new Error("Selected property does not exist in this society.");
   if(ownerId&&!sheetObjects_(societySheet_(session,"Owner Master").sh).some(x=>String(x.OwnerID)===ownerId))throw new Error("Selected owner does not exist in this society.");
   if(session.role==="Resident")assertPropertyAccess_(session,propertyId);
+  const linkMap={
+    "owner document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
+    "ownership document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
+    "property document":{module:"properties",sheet:"Property Master",id:"PropertyID",fields:["Property_Document","Document_File_ID"]},
+    "expense voucher":{module:"expenses",sheet:"Expense Register",id:"Expense_ID",fields:["Supporting_Document","File_Reference","Voucher_File_ID"]},
+    "gallery photo":{module:"gallery",sheet:"Gallery Master",id:"Gallery_ID",fields:["Photo_File_Reference","Photo_File_ID","Image_File_ID","File_Reference"]},
+    "notice attachment":{module:"notices",sheet:"Notice Master",id:"Notice_ID",fields:["Attachment_File_ID","File_Reference","Attachment"]},
+    "activity request attachment":{module:"activityRequests",sheet:"Activity Request Register",id:"Request_ID",fields:["Attachment","Attachment_File_ID"]},
+    "payment proof":{module:"receipts",sheet:"Fund Inflow Register",id:"Transaction_ID",fields:["File_Reference","Payment_Proof_File_ID"]},
+    "invoice pdf":{module:"invoices",sheet:"Invoice_Register",id:"InvoiceID",fields:["File_Reference","Invoice_PDF_File_ID"]}
+  };
+  let relatedTarget=null,relatedRecord=null,targetField="";
+  if(relatedModule||relatedRecordId){
+    const cfg=linkMap[lower];
+    if(!cfg||cfg.module!==relatedModule||!relatedRecordId)throw new Error("The selected module does not match this document category.");
+    const target=societySheet_(session,cfg.sheet);
+    relatedTarget={cfg,sh:target.sh};
+    const found=rowById_(target.sh,cfg.id,relatedRecordId);
+    if(!found)throw new Error("Related record was not found.");
+    relatedRecord=objectFromRow_(found.headers,found.values);
+    if(relatedRecord.PropertyID)assertPropertyAccess_(session,relatedRecord.PropertyID);
+    if(session.role==="Resident"&&lower==="activity request attachment"&&String(relatedRecord.Requested_By)!==String(session.userId))throw new Error("You may attach files only to your own activity requests.");
+    if(propertyId&&relatedRecord.PropertyID&&String(propertyId)!==String(relatedRecord.PropertyID))throw new Error("Document property does not match the related record.");
+    if(ownerId&&relatedRecord.OwnerID&&String(ownerId)!==String(relatedRecord.OwnerID))throw new Error("Document owner does not match the related ownership record.");
+    targetField=cfg.fields.find(f=>found.headers.indexOf(f)>=0);
+    if(!targetField)throw new Error("The related sheet has no document reference column. Add one of: "+cfg.fields.join(", "));
+  }
   const lock=LockService.getScriptLock();lock.waitLock(15000);
   try{
     const ss=SpreadsheetApp.openById(session.databaseId),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);
@@ -1046,30 +1073,14 @@ function uploadPrivateFile_(session,body){
     ensureHeaders_(reg,["File_ID","PropertyID","OwnerID","Category","Uploaded_By","Created_At","Related_Module","Related_Record_ID","File_Name","Mime_Type"]);
     appendByHeaders_(reg,{File_ID:file.getId(),PropertyID:propertyId,OwnerID:ownerId,Category:category,Uploaded_By:session.userId,Created_At:new Date(),Related_Module:relatedModule,Related_Record_ID:relatedRecordId,File_Name:file.getName(),Mime_Type:mime});
     let linked=false;
-    if(relatedModule&&relatedRecordId){
-      const linkMap={
-        "owner document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
-        "ownership document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
-        "property document":{module:"properties",sheet:"Property Master",id:"PropertyID",fields:["Property_Document","Document_File_ID"]},
-        "expense voucher":{module:"expenses",sheet:"Expense Register",id:"Expense_ID",fields:["Supporting_Document","File_Reference","Voucher_File_ID"]},
-        "gallery photo":{module:"gallery",sheet:"Gallery Master",id:"Gallery_ID",fields:["Photo_File_Reference","Photo_File_ID","Image_File_ID","File_Reference"]},
-        "notice attachment":{module:"notices",sheet:"Notice Master",id:"Notice_ID",fields:["Attachment_File_ID","File_Reference","Attachment"]},
-        "activity request attachment":{module:"activityRequests",sheet:"Activity Request Register",id:"Request_ID",fields:["Attachment","Attachment_File_ID"]},
-        "payment proof":{module:"receipts",sheet:"Fund Inflow Register",id:"Transaction_ID",fields:["File_Reference","Payment_Proof_File_ID"]},
-        "invoice pdf":{module:"invoices",sheet:"Invoice_Register",id:"InvoiceID",fields:["File_Reference","Invoice_PDF_File_ID"]}
-      };
-      const cfg=linkMap[lower];if(!cfg||cfg.module!==relatedModule)throw new Error("The selected module does not match this document category.");
-      const {sh}=societySheet_(session,cfg.sheet),found=rowById_(sh,cfg.id,relatedRecordId);if(!found)throw new Error("Related record was not found.");
-      const rec=objectFromRow_(found.headers,found.values);
+    if(relatedTarget&&relatedRecord){
+      const found=rowById_(relatedTarget.sh,relatedTarget.cfg.id,relatedRecordId);
+      if(!found)throw new Error("Related record was removed before the upload completed.");
       const regFile=rowById_(reg,"File_ID",file.getId());
-      if(regFile)updateByHeaders_(reg,regFile.row,{PropertyID:propertyId||String(rec.PropertyID||""),OwnerID:ownerId||String(rec.OwnerID||"")},["File_ID"]);
-      if(rec.PropertyID)assertPropertyAccess_(session,rec.PropertyID);
-      if(session.role==="Resident"&&lower==="activity request attachment"&&String(rec.Requested_By)!==String(session.userId))throw new Error("You may attach files only to your own activity requests.");
-      if(propertyId&&rec.PropertyID&&String(propertyId)!==String(rec.PropertyID))throw new Error("Document property does not match the related record.");
-      if(ownerId&&rec.OwnerID&&String(ownerId)!==String(rec.OwnerID))throw new Error("Document owner does not match the related ownership record.");
-      const targetField=cfg.fields.find(f=>found.headers.indexOf(f)>=0);if(!targetField)throw new Error("The related sheet has no document reference column. Add one of: "+cfg.fields.join(", "));
-      const patch={};patch[targetField]=file.getId();updateByHeaders_(sh,found.row,patch,[cfg.id,"Created_By","Created_At"]);
-      auditEvent_(session,"UPDATE",cfg.sheet,relatedRecordId,"Private document linked: "+category,rec,patch);linked=true;
+      if(regFile)updateByHeaders_(reg,regFile.row,{PropertyID:propertyId||String(relatedRecord.PropertyID||""),OwnerID:ownerId||String(relatedRecord.OwnerID||"")},["File_ID"]);
+      const patch={};patch[targetField]=file.getId();
+      updateByHeaders_(relatedTarget.sh,found.row,patch,[relatedTarget.cfg.id,"Created_By","Created_At"]);
+      auditEvent_(session,"UPDATE",relatedTarget.cfg.sheet,relatedRecordId,"Private document linked: "+category,relatedRecord,patch);linked=true;
     }
     const data={fileId:file.getId(),fileName:file.getName(),mimeType:mime,linked};
     writeOperation_(ledger,op,"uploadPrivateFile",file.getId(),"DONE",data);
@@ -1194,9 +1205,19 @@ function auditEvent_(session,action,module,recordId,remarks,oldValue,newValue){c
 function getConfigValue_(key){const value=PropertiesService.getScriptProperties().getProperty(key)||CONFIG[key];if(!value)throw new Error("Missing Apps Script Project Property: "+key);return String(value);}
 
 function findRowsByHeaderValue_(sh,header,value){
-  if(!sh||sh.getLastRow()<2)return[];const headers=headerMap_(sh),col=headers.indexOf(header);if(col<0)throw new Error("Missing required column: "+header);
-  const matches=sh.getRange(2,col+1,sh.getLastRow()-1,1).getDisplayValues(),out=[];
-  for(let i=0;i<matches.length;i++){if(String(matches[i][0]).trim().toUpperCase()===String(value).trim().toUpperCase()){const row=i+2,values=sh.getRange(row,1,1,headers.length).getValues()[0],obj=objectFromRow_(headers,values);obj.__row=row;out.push(obj);}}
+  if(!sh||sh.getLastRow()<2)return[];
+  const headers=headerMap_(sh),col=headers.indexOf(header);
+  if(col<0)throw new Error("Missing required column: "+header);
+  // Read the data block once. The former implementation issued one extra
+  // Spreadsheet service call for every matching row, slowing every login
+  // and every authenticated API request that revalidates the user.
+  const rowCount=sh.getLastRow()-1,range=sh.getRange(2,1,rowCount,headers.length);
+  const display=range.getDisplayValues(),values=range.getValues();
+  const target=String(value).trim().toUpperCase(),out=[];
+  for(let i=0;i<values.length;i++){
+    if(String(display[i][col]||"").trim().toUpperCase()!==target)continue;
+    const obj=objectFromRow_(headers,values[i]);obj.__row=i+2;out.push(obj);
+  }
   return out;
 }
 function societyAndUsers_(code) {
@@ -1237,6 +1258,9 @@ function requireSession_(token) {
   session.fullName=String(user.Full_Name||session.fullName);
   session.email=String(user.Email_ID||session.email);
   session.mobile=String(user.Mobile_No||session.mobile);
+  // Sliding expiry: an active user remains signed in while using the app,
+  // but an idle session still expires after the configured TTL.
+  CacheService.getScriptCache().put("SESSION_"+token,JSON.stringify(session),CONFIG.SESSION_TTL_SECONDS);
   return session;
 }
 function requireRole_(session,roles) {if(!roles.includes(session.role)) throw new Error("Permission denied.");}
@@ -1276,7 +1300,9 @@ function normalizeSociety_(v){return String(v||"").trim().toUpperCase();}
 function ensureHeaders_(sh,headers){
   const last=sh.getLastColumn(), existing=last?sh.getRange(1,1,1,last).getValues()[0].map(String):[];
   if(!last){sh.getRange(1,1,1,headers.length).setValues([headers]);return;}
-  headers.forEach(h=>{if(existing.indexOf(h)<0){existing.push(h);sh.getRange(1,existing.length).setValue(h);}});
+  let changed=false;
+  headers.forEach(h=>{if(existing.indexOf(h)<0){existing.push(h);changed=true;}});
+  if(changed)sh.getRange(1,1,1,existing.length).setValues([existing]);
 }
 function setCell_(sh,row,header,value){
   const headers=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);

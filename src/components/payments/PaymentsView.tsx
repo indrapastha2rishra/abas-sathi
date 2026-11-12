@@ -76,21 +76,32 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     );
   };
 
+  const [submittingPayment, setSubmittingPayment] = useState(false);
   const handleResidentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (payableTotal <= 0) return;
-
+    if (payableTotal <= 0 || submittingPayment) return;
+    setSubmittingPayment(true);
     try {
-    const receipt = await submitResidentPayment({
-      invoiceIds: selectedInvoiceIds, amount: payableTotal, mode: payMode, reference: payRef,
-      bankAccount: bankAccounts[0]?.BankAccount_ID || '', remarks: residentRemarks,
-      proofFileName: proofFile ? (await uploadPrivateFile(proofFile, 'Payment Proof', residentProperty?.PropertyID)).fileId : '',
-    });
-
-    setResidentSubmitSuccess(`Payment submitted for verification. Transaction ID: ${receipt.Transaction_ID}. An official receipt will be issued after confirmation.`);
-    setPayRef('');
-    setTimeout(() => setResidentSubmitSuccess(''), 3500);
-    } catch (error:any) { window.alert(error?.message || 'Payment could not be submitted. Please retry.'); }
+      const receipt = await submitResidentPayment({
+        invoiceIds: selectedInvoiceIds, amount: payableTotal, mode: payMode, reference: payRef,
+        bankAccount: bankAccounts[0]?.BankAccount_ID || '', remarks: residentRemarks,
+      });
+      let attachmentMessage = '';
+      if (proofFile) {
+        try {
+          await uploadPrivateFile(proofFile, 'Payment Proof', residentProperty?.PropertyID, undefined, 'receipts', receipt.Transaction_ID);
+          attachmentMessage = ' Payment proof uploaded.';
+        } catch (uploadError:any) {
+          attachmentMessage = ` Payment was saved, but proof upload failed: ${uploadError?.message || 'Please contact the Society Admin.'}`;
+        }
+      }
+      setResidentSubmitSuccess(`Payment submitted for verification. Transaction ID: ${receipt.Transaction_ID}.${attachmentMessage} An official receipt will be issued after confirmation.`);
+      setProofFile(null);
+      setPayRef('');
+      window.setTimeout(() => setResidentSubmitSuccess(''), 7000);
+    } catch (error:any) {
+      window.alert(error?.message || 'Payment could not be submitted. Please check the payment register before retrying.');
+    } finally { setSubmittingPayment(false); }
   };
 
   // Admin/Accountant confirmation modal state
@@ -341,10 +352,10 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
 
                 <button
                   type="submit"
-                  disabled={payableTotal <= 0 || !payRef}
+                  disabled={payableTotal <= 0 || !payRef || submittingPayment}
                   className="w-full rounded-xl bg-[#C97958] py-3 text-xs font-bold text-white shadow-xs hover:bg-[#A95D3E] disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer"
                 >
-                  Submit Payment For Verification
+                  {submittingPayment ? 'Saving payment & uploading proof…' : 'Submit Payment For Verification'}
                 </button>
               </form>
             </div>

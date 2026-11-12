@@ -42,6 +42,7 @@ export const ActivityRequestsView: React.FC = () => {
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<ActivityRequestRegister['Priority']>('Medium');
   const [attachmentFile, setAttachmentFile] = useState<File|null>(null);
+  const [savingRequest, setSavingRequest] = useState(false);
 
   // Editing Form
   const [statusUpdate, setStatusUpdate] = useState<ActivityRequestRegister['Request_Status']>('In Progress');
@@ -50,6 +51,8 @@ export const ActivityRequestsView: React.FC = () => {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingRequest) return;
+    setSavingRequest(true);
     try {
     const created = await createActivityRequest({ category, subject, description, priority });
     if (attachmentFile) {
@@ -61,6 +64,7 @@ export const ActivityRequestsView: React.FC = () => {
     setDescription('');
     setAttachmentFile(null);
     } catch (error:any) { window.alert(error?.message || 'Request could not be saved.'); }
+    finally { setSavingRequest(false); }
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
@@ -351,9 +355,10 @@ export const ActivityRequestsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A]"
+                  disabled={savingRequest}
+                  className="px-5 py-2 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A] disabled:opacity-50"
                 >
-                  Submit Ticket
+                  {savingRequest ? 'Saving request & attachment…' : 'Submit Ticket'}
                 </button>
               </div>
             </form>

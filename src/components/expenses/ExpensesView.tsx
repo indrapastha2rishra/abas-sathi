@@ -48,6 +48,7 @@ export const ExpensesView: React.FC = () => {
   const [remarks, setRemarks] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [voucherFile, setVoucherFile] = useState<File|null>(null);
+  const [savingExpense, setSavingExpense] = useState(false);
 
   useEffect(() => {
     if (bankAccounts.length && !bankAccounts.some(b => b.BankAccount_ID === bankAccount)) setBankAccount(bankAccounts[0].BankAccount_ID);
@@ -61,8 +62,8 @@ export const ExpensesView: React.FC = () => {
 
   const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!amount || Number(amount) <= 0) return;
-
+    if (!amount || Number(amount) <= 0 || savingExpense) return;
+    setSavingExpense(true);
     try {
     const newExp = await addExpense({
       Payment_Date: '',
@@ -91,6 +92,7 @@ export const ExpensesView: React.FC = () => {
       setActiveSubTab('register');
     }, 1200);
     } catch (error:any) { window.alert(error?.message || 'Expense could not be saved.'); }
+    finally { setSavingExpense(false); }
   };
 
   const filteredExpenses = expenses.filter((exp) => {
@@ -433,9 +435,10 @@ export const ExpensesView: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="px-6 py-2.5 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A] shadow-xs cursor-pointer"
+                disabled={savingExpense}
+                className="px-6 py-2.5 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A] shadow-xs cursor-pointer disabled:opacity-50"
               >
-                Create Voucher & Record
+                {savingExpense ? 'Saving expense & voucher…' : 'Create Voucher & Record'}
               </button>
             </div>
           </form>

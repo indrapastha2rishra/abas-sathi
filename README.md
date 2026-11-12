@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Project Overview — Version 5.3.3
+## 1. Project Overview — Version 5.4
 
 - **Website:** Responsive, bilingual (English & Bengali) React application with Admin, Committee, Accountant and Resident roles.
 - **Backend integration:** Google Apps Script Web App with selective Google Sheets reads, validated write workflows, private Drive file APIs, backup and server-side reports.
@@ -262,7 +262,7 @@ The backend creates these hidden tabs as needed:
 - Live Google Sheets/Drive tests and GitHub Pages deployment have not been performed in this environment.
 
 
-## Version 5.3.3 — UI and Reporting Corrections
+## Version 5.4 — UI and Reporting Corrections
 
 - Properties & Residents now display Carpet Area, Allocated Common Area, Structural Area and Super Built-up Area from their mapped database fields. The screen does not derive or calculate one area from another. Blank source cells display as a dash.
 - Legacy `Super Buildup Area` and the distinct `Super Built-up Area` headers are mapped separately to avoid displaying one database field as another.
@@ -270,6 +270,6 @@ The backend creates these hidden tabs as needed:
 - Outstanding Dues excludes cancelled and zero-due invoices and includes summary totals and overdue counts.
 - Invoice Register displays Ownership ID, Billing Date and the charge components (Basic Charge, Late Fee, Discount, Adjustment, Net Charge, Paid and Outstanding).
 - Financial Reports adds **Ownership-wise Outstanding**, grouped by `Ownership_ID` so different ownership periods for the same flat remain separate. Legacy invoices without an Ownership_ID are flagged for manual review.
-- See `V5.3.3_RELEASE_NOTES_BN.md`, `MIGRATION_V5.3.2_TO_V5.3.3_BN.md`, `V5.3.3_API_REFERENCE.md` and `V5.3.3_TEST_REPORT.md`.
+- See `V5.4_RELEASE_NOTES_BN.md`, `MIGRATION_V5.3.2_TO_V5.4_BN.md`, `V5.4_API_REFERENCE.md` and `V5.4_TEST_REPORT.md`.
 
-**Version 5.3.3 is a source update, not a live-service certification.** The Vite production build and live Apps Script/Sheets/Drive integration still require testing with the society owner's Google account.
+**Version 5.4 is a source update, not a live-service certification.** The Vite production build and live Apps Script/Sheets/Drive integration still require testing with the society owner's Google account.

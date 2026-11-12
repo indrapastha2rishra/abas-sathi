@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.3.3 — bilingual apartment management with Google Apps Script, Sheets and private Drive integration.",
+  "description": "ABAS SATHI Version 5.4 — bilingual apartment management with optimized secure quick login, idempotent live writes, Google Apps Script, Sheets and private Drive integration.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -11,6 +11,10 @@
     "Database-faithful property area display",
     "Lease period date formatting",
     "Enhanced invoice register and outstanding dues",
-    "Ownership-period-wise outstanding report"
+    "Ownership-period-wise outstanding report",
+    "Quick Login with remembered non-secret identifiers",
+    "Backend-validated session restore and sliding session expiry",
+    "Idempotent retry for eligible live write operations",
+    "Batch Central Master lookup and Drive upload pre-validation"
   ]
 }
