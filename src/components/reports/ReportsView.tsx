@@ -32,7 +32,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   } = useApp();
 
   const [activeReport, setActiveReport] = useState<
-    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'expense_summary' | 'balancesheet'
+    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'ownership_due' | 'expense_summary' | 'balancesheet'
   >(
     initialReport === 'reports_property_due'
       ? 'property_due'
@@ -40,6 +40,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       ? 'balancesheet'
       : initialReport === 'reports_fy'
       ? 'fy'
+      : initialReport === 'reports_ownership_due'
+      ? 'ownership_due'
       : 'monthly'
   );
 
@@ -56,6 +58,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
         let type='receiptPayment',filters:any={};
         if(activeReport==='property_due')type='outstanding';
         else if(activeReport==='owner_due')type='ownerOutstanding';
+        else if(activeReport==='ownership_due')type='ownershipOutstanding';
         else if(activeReport==='expense_summary') {
           type='expenseSummary';const [y,m]=selectedMonth.split('-').map(Number);const last=new Date(y,m,0).getDate();
           filters={fromDate:`${selectedMonth}-01`,toDate:`${selectedMonth}-${String(last).padStart(2,'0')}`};
@@ -88,8 +91,14 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
 
   // Property-wise Outstanding
   const propertyDues = properties.map((prop) => {
-    const propInvoices = invoices.filter((i) => i.PropertyID === prop.PropertyID);
-    const totalDue = propInvoices.reduce((sum, i) => sum + (i.Outstanding_Amount || 0), 0);
+    const propInvoices = invoices.filter((i) => i.PropertyID === prop.PropertyID && i.Invoice_Status !== 'Cancelled');
+    const totalDue = propInvoices.reduce((sum, i) => {
+      const rawDue = i.Outstanding_Amount as unknown;
+      const due = rawDue === '' || rawDue === null || rawDue === undefined
+        ? Number(i.Net_Charge_Amount || 0) - Number(i.Paid_Amount || 0)
+        : Number(rawDue || 0);
+      return sum + Math.max(0, Number.isFinite(due) ? due : 0);
+    }, 0);
     const ownerName = propInvoices[0]?.Owner_Name || 'Registered Owner';
     return {
       propertyId: prop.PropertyID,
@@ -184,6 +193,14 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
           Owner-wise Outstanding
         </button>
         <button
+          onClick={() => setActiveReport('ownership_due')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeReport === 'ownership_due' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Ownership-wise Outstanding
+        </button>
+        <button
           onClick={() => setActiveReport('balancesheet')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeReport === 'balancesheet' ? 'bg-white text-[#C97958] shadow-xs' : 'text-[#29352D]/70'
@@ -207,7 +224,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
               <div className="bg-[#F7F4EC] rounded-lg p-3">Receipts<strong className="block">₹{Number(serverReport?.data?.receipts||0).toLocaleString('en-IN')}</strong></div>
               <div className="bg-[#F7F4EC] rounded-lg p-3">Paid Expenses<strong className="block">₹{Number(serverReport?.data?.paidExpenses||0).toLocaleString('en-IN')}</strong></div>
               <div className="bg-[#F7F4EC] rounded-lg p-3">Outstanding<strong className="block">₹{Number(serverReport?.data?.outstanding||0).toLocaleString('en-IN')}</strong></div>
-            </div>:activeReport==='expense_summary'?<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">Expense Category</th><th className="p-2">Paid Vouchers</th><th className="p-2 text-right">Total Paid</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.Category} className="border-b"><td className="p-2">{r.Category}</td><td className="p-2">{r.Count}</td><td className="p-2 text-right">₹{Number(r.Total||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>:<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">ID</th><th className="p-2">Name / Flat</th><th className="p-2">Invoices</th><th className="p-2 text-right">Outstanding</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.PropertyID||r.OwnerID} className="border-b"><td className="p-2">{r.PropertyID||r.OwnerID}</td><td className="p-2">{r.Flat_No||r.Owner_Name}</td><td className="p-2">{r.Invoice_Count}</td><td className="p-2 text-right">₹{Number(r.Outstanding||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>
+            </div>:activeReport==='expense_summary'?<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">Expense Category</th><th className="p-2">Paid Vouchers</th><th className="p-2 text-right">Total Paid</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.Category} className="border-b"><td className="p-2">{r.Category}</td><td className="p-2">{r.Count}</td><td className="p-2 text-right">₹{Number(r.Total||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>:activeReport==='ownership_due'?<div className="space-y-3"><div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs"><div className="rounded-lg bg-[#F7F4EC] p-3">Ownership Records<strong className="block text-base">{Number(serverReport?.summary?.ownershipCount||0)}</strong></div><div className="rounded-lg bg-[#F7F4EC] p-3">Total Outstanding<strong className="block text-base text-red-700">₹{Number(serverReport?.summary?.totalOutstanding||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div className="rounded-lg bg-[#F7F4EC] p-3">Unlinked Legacy Invoices<strong className="block text-base">{Number(serverReport?.summary?.unlinkedInvoiceCount||0)}</strong></div></div><div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">Ownership ID</th><th className="p-2">Flat</th><th className="p-2">Owner</th><th className="p-2">Ownership Period</th><th className="p-2">Status</th><th className="p-2 text-right">Invoices</th><th className="p-2 text-right">Billed</th><th className="p-2 text-right">Paid</th><th className="p-2 text-right">Outstanding</th><th className="p-2">Link</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any,i:number)=><tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="border-b"><td className="p-2 font-mono">{r.Ownership_ID}</td><td className="p-2">{r.Flat_No||r.PropertyID}</td><td className="p-2">{r.Owner_Name||r.OwnerID||'—'}</td><td className="p-2 whitespace-nowrap">{r.Ownership_Start_Date||'—'} to {r.Ownership_End_Date||'Current'}</td><td className="p-2">{r.Ownership_Status}</td><td className="p-2 text-right">{r.Invoice_Count}</td><td className="p-2 text-right">₹{Number(r.Total_Billed||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 text-right">₹{Number(r.Total_Paid||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2 text-right font-semibold text-red-700">₹{Number(r.Outstanding||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td className="p-2">{r.Data_Link_Status}</td></tr>)}</tbody></table></div><p className="text-[11px] text-amber-700">{serverReport?.note||'Ownership grouping uses the Ownership_ID saved on each invoice.'}</p></div>:<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">ID</th><th className="p-2">Name / Flat</th><th className="p-2">Invoices</th><th className="p-2 text-right">Outstanding</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.PropertyID||r.OwnerID} className="border-b"><td className="p-2">{r.PropertyID||r.OwnerID}</td><td className="p-2">{r.Flat_No||r.Owner_Name}</td><td className="p-2">{r.Invoice_Count}</td><td className="p-2 text-right">₹{Number(r.Outstanding||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>
           )}
         </div>
       )}
@@ -361,7 +378,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {propertyDues.slice(0, 20).map((item) => (
+                {propertyDues.map((item) => (
                   <tr key={item.propertyId} className="hover:bg-neutral-50 transition-colors">
                     <td className="px-4 py-3 font-bold text-sm text-[#29352D]">{item.flatNo}</td>
                     <td className="px-4 py-3 font-medium text-[#536B4D]">{item.tower}</td>

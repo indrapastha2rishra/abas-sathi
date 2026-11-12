@@ -260,6 +260,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const out: Record<string, any> = {};
       Object.keys(row || {}).forEach((key) => {
         let normalized = keyOf(key);
+        // The legacy header "Super Buildup Area" maps to Structural_Area,
+        // while the distinct header "Super Built-up Area" maps to Super_Built_up_Area.
+        // keyOf removes punctuation, so preserve this important distinction before aliasing.
+        const rawHeader = String(key).trim().toLowerCase().replace(/\s+/g, '_');
+        if (rawHeader === 'super_built-up_area') normalized = 'Super_Built_up_Area';
         // Preserve the exact TypeScript field names expected by existing screens.
         const aliases: Record<string,string> = {
           Flat_No:'Flat_No', Flat_No_:'Flat_No', Floor_No:'Floor_No',
@@ -287,7 +292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
           value = basisAliases[basis] || value;
         }
-        if (typeof value === 'string' && value.trim() !== '' && /^-?\\d+(\\.\\d+)?$/.test(value.trim())) {
+        if (typeof value === 'string' && value.trim() !== '' && /^-?\d+(\\.\d+)?$/.test(value.trim())) {
           value = Number(value);
         }
         out[normalized] = value;
@@ -309,7 +314,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],
-      reports_property_due: ['invoices','properties','owners'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'],
+      reports_property_due: ['invoices','properties','owners'], reports_ownership_due: ['invoices','properties','owners','ownershipHistory'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'],
       resident_notices: ['notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
     const load = async () => {
@@ -336,8 +341,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const rows = (key: string) => data[key] || [];
         if (requested.includes('properties')) setProperties(rows('properties').map((r:any) => ({...r,
           PropertyID:String(r.PropertyID||''), Flat_No:String(r.Flat_No||''), Block_Tower:String(r.Block_Tower||''),
-          Floor_No:Number(r.Floor_No||0), Carpet_Area:Number(r.Carpet_Area||0), Allocated_Common_Area:Number(r.Allocated_Common_Area||0),
-          Structural_Area:Number(r.Structural_Area||0), Super_Built_up_Area:Number(r.Super_Built_up_Area||0),
+          Floor_No:Number(r.Floor_No||0),
+          Carpet_Area:r.Carpet_Area === '' || r.Carpet_Area == null ? null : Number(r.Carpet_Area),
+          Allocated_Common_Area:r.Allocated_Common_Area === '' || r.Allocated_Common_Area == null ? null : Number(r.Allocated_Common_Area),
+          Structural_Area:r.Structural_Area === '' || r.Structural_Area == null ? null : Number(r.Structural_Area),
+          Super_Built_up_Area:r.Super_Built_up_Area === '' || r.Super_Built_up_Area == null ? null : Number(r.Super_Built_up_Area),
           Occupancy_Status:r.Occupancy_Status==='Occupied'?'Self Occupied':(r.Occupancy_Status||'Vacant'), Property_Status:r.Property_Status||'Active'
         })) as PropertyMaster[]);
         if (requested.includes('owners')) setOwners(rows('owners') as OwnerMaster[]);

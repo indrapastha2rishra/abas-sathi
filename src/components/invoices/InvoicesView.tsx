@@ -18,10 +18,20 @@ import {
   Calculator,
 } from 'lucide-react';
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
+import type { InvoiceRegister } from '../../types/database';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
 }
+
+const getInvoiceOutstanding = (invoice: InvoiceRegister): number => {
+  const rawDue = invoice.Outstanding_Amount as unknown;
+  if (rawDue === '' || rawDue === null || rawDue === undefined) {
+    return Math.max(0, Number(invoice.Net_Charge_Amount || 0) - Number(invoice.Paid_Amount || 0));
+  }
+  const amount = Number(rawDue);
+  return Number.isFinite(amount) ? Math.max(0, amount) : 0;
+};
 
 export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   const {
@@ -91,17 +101,16 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   // Filtered invoices
   const filteredInvoices = invoices.filter((inv) => {
     const matchesSearch =
-      inv.Invoice_Number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      inv.Flat_Number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      inv.Owner_Name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      inv.Purpose.toLowerCase().includes(searchTerm.toLowerCase());
+      String(inv.Invoice_Number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(inv.Flat_Number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(inv.Owner_Name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(inv.Purpose || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const matchesStatus =
-      statusFilter === 'All'
-        ? activeSubTab === 'outstanding'
-          ? inv.Outstanding_Amount > 0
-          : true
-        : inv.Invoice_Status === statusFilter;
+    const outstandingAmount = getInvoiceOutstanding(inv);
+    const isOutstanding = inv.Invoice_Status !== 'Cancelled' && outstandingAmount > 0;
+    const matchesStatus = activeSubTab === 'outstanding'
+      ? isOutstanding && (statusFilter === 'All' || inv.Invoice_Status === statusFilter)
+      : (statusFilter === 'All' || inv.Invoice_Status === statusFilter);
 
     return matchesSearch && matchesStatus;
   });
@@ -167,6 +176,22 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
         </div>
       </div>
 
+      {activeSubTab === 'outstanding' && (() => {
+        const activeOutstanding = invoices.filter((inv) => {
+          const due = getInvoiceOutstanding(inv);
+          return inv.Invoice_Status !== 'Cancelled' && due > 0;
+        });
+        const totalDue = activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv), 0);
+        const overdueCount = activeOutstanding.filter((inv) => inv.Invoice_Status === 'Overdue').length;
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-red-100 bg-white p-4"><p className="text-xs text-gray-500">Total Outstanding</p><p className="mt-1 text-xl font-bold text-red-700">₹{totalDue.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</p></div>
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4"><p className="text-xs text-gray-500">Outstanding Invoices</p><p className="mt-1 text-xl font-bold text-[#29352D]">{activeOutstanding.length}</p></div>
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4"><p className="text-xs text-gray-500">Overdue Invoices</p><p className="mt-1 text-xl font-bold text-amber-700">{overdueCount}</p></div>
+          </div>
+        );
+      })()}
+
       {/* SUBTAB 1: INVOICE REGISTER & OUTSTANDING */}
       {(activeSubTab === 'register' || activeSubTab === 'outstanding') && (
         <div className="space-y-4">
@@ -209,9 +234,15 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                     <th className="px-4 py-3 font-semibold">Invoice No</th>
                     <th className="px-4 py-3 font-semibold">Flat No</th>
                     <th className="px-4 py-3 font-semibold">Owner Name</th>
+                    <th className="px-4 py-3 font-semibold">Ownership ID</th>
                     <th className="px-4 py-3 font-semibold">Purpose</th>
+                    <th className="px-4 py-3 font-semibold">Billing Date</th>
                     <th className="px-4 py-3 font-semibold">Billing Period</th>
                     <th className="px-4 py-3 font-semibold">Due Date</th>
+                    <th className="px-4 py-3 font-semibold text-right">Basic Charge</th>
+                    <th className="px-4 py-3 font-semibold text-right">Late Fee</th>
+                    <th className="px-4 py-3 font-semibold text-right">Discount</th>
+                    <th className="px-4 py-3 font-semibold text-right">Adjustment</th>
                     <th className="px-4 py-3 font-semibold text-right">Net Charge</th>
                     <th className="px-4 py-3 font-semibold text-right">Paid</th>
                     <th className="px-4 py-3 font-semibold text-right">Due</th>
@@ -224,21 +255,19 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                     <tr key={inv.InvoiceID} className="hover:bg-neutral-50 transition-colors">
                       <td className="px-4 py-3 font-bold text-[#29352D]">{inv.Invoice_Number}</td>
                       <td className="px-4 py-3 font-bold text-[#536B4D]">{inv.Flat_Number}</td>
-                      <td className="px-4 py-3 font-medium">{inv.Owner_Name}</td>
+                      <td className="px-4 py-3 font-medium">{inv.Owner_Name || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-gray-500">{inv.Ownership_ID || '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{inv.Purpose}</td>
-                      <td className="px-4 py-3 text-gray-500">
-                        {inv.Bill_Period_From} to {inv.Bill_Period_To}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">{inv.Due_Date}</td>
-                      <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                        ₹{inv.Net_Charge_Amount.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-emerald-700 font-medium">
-                        ₹{inv.Paid_Amount.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-bold text-red-700">
-                        ₹{inv.Outstanding_Amount.toFixed(2)}
-                      </td>
+                      <td className="px-4 py-3 text-gray-500">{inv.Billing_Date || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500">{inv.Bill_Period_From || '—'} to {inv.Bill_Period_To || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500">{inv.Due_Date || '—'}</td>
+                      <td className="px-4 py-3 text-right">₹{Number(inv.Charge_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{Number(inv.Late_Fee || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{Number(inv.Discount_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{Number(inv.Adjustment_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-[#29352D]">₹{Number(inv.Net_Charge_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right text-emerald-700 font-medium">₹{Number(inv.Paid_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-red-700">₹{getInvoiceOutstanding(inv).toFixed(2)}</td>
                       <td className="px-4 py-3 text-center">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -266,7 +295,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                   ))}
                   {filteredInvoices.length === 0 && (
                     <tr>
-                      <td colSpan={11} className="p-8 text-center text-gray-500 italic">
+                      <td colSpan={17} className="p-8 text-center text-gray-500 italic">
                         No invoices found matching criteria.
                       </td>
                     </tr>

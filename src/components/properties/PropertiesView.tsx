@@ -18,6 +18,29 @@ import {
   Home,
 } from 'lucide-react';
 
+const formatAreaFromDatabase = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '—';
+  const numeric = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : String(value);
+};
+
+const formatLeaseDate = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') return '';
+  const raw = String(value).trim();
+  // Keep date-only values timezone-neutral (Google Sheets may serialize them as ISO strings).
+  const match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  let date: Date;
+  if (match) {
+    date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  } else {
+    date = new Date(raw);
+  }
+  if (Number.isNaN(date.getTime())) return raw;
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric'
+  }).format(date).replace(/ /g, '-');
+};
+
 export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'properties_all' }) => {
   const { properties, owners, ownerships, tenants, t } = useApp();
 
@@ -166,25 +189,25 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                   <th className="px-4 py-3 font-semibold">Floor</th>
                   <th className="px-4 py-3 font-semibold">Type</th>
                   <th className="px-4 py-3 font-semibold text-right">Carpet Area</th>
-                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
                   <th className="px-4 py-3 font-semibold text-right">Allocated Common Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
                   <th className="px-4 py-3 font-semibold text-right">Super Built-up Area</th>
                   <th className="px-4 py-3 font-semibold text-center">Occupancy Status</th>
                   <th className="px-4 py-3 font-semibold text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {filteredProperties.slice(0, 20).map((prop) => (
+                {filteredProperties.map((prop) => (
                   <tr key={prop.PropertyID} className="hover:bg-neutral-50 transition-colors">
                     <td className="px-4 py-3 font-mono font-medium text-gray-500">{prop.PropertyID}</td>
                     <td className="px-4 py-3 font-bold text-[#29352D] text-sm">{prop.Flat_No}</td>
                     <td className="px-4 py-3 font-medium text-[#536B4D]">{prop.Block_Tower}</td>
                     <td className="px-4 py-3">Floor {prop.Floor_No}</td>
                     <td className="px-4 py-3 font-semibold">{prop.Property_Type}</td>
-                    <td className="px-4 py-3 text-right">{prop.Carpet_Area} sq.ft</td>
-                    <td className="px-4 py-3 text-right">{prop.Structural_Area} sq.ft</td>
-                    <td className="px-4 py-3 text-right">{prop.Allocated_Common_Area} sq.ft</td>
-                    <td className="px-4 py-3 text-right font-bold text-[#536B4D]">{prop.Super_Built_up_Area} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{formatAreaFromDatabase(prop.Carpet_Area)} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{formatAreaFromDatabase(prop.Allocated_Common_Area)} sq.ft</td>
+                    <td className="px-4 py-3 text-right">{formatAreaFromDatabase(prop.Structural_Area)} sq.ft</td>
+                    <td className="px-4 py-3 text-right font-bold text-[#536B4D]">{formatAreaFromDatabase(prop.Super_Built_up_Area)} sq.ft</td>
                     <td className="px-4 py-3 text-center">
                       <span
                         className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -209,7 +232,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
             </table>
           </div>
           <div className="p-4 border-t border-[#E8E1D4] text-xs text-gray-500 flex justify-between items-center">
-            <span>Showing {Math.min(20, filteredProperties.length)} of {filteredProperties.length} total properties</span>
+            <span>Showing {filteredProperties.length} of {properties.length} total properties</span>
             <span className="font-semibold text-[#536B4D]">KMC Ward 93 Registered Records</span>
           </div>
         </div>
@@ -260,8 +283,8 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                   <th className="px-4 py-3 font-semibold">Floor No.</th>
                   <th className="px-4 py-3 font-semibold">Property Type</th>
                   <th className="px-4 py-3 font-semibold text-right">Carpet Area</th>
-                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
                   <th className="px-4 py-3 font-semibold text-right">Allocated Common Area</th>
+                  <th className="px-4 py-3 font-semibold text-right">Structural Area</th>
                   <th className="px-4 py-3 font-semibold text-right">Super Built-up Area</th>
                   <th className="px-4 py-3 font-semibold">Deed Number</th>
                   <th className="px-4 py-3 font-semibold">KMC Assessee No</th>
@@ -272,7 +295,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {ownerships.slice(0, 20).map((osh) => {
+                {ownerships.map((osh) => {
                   const property = properties.find((p) => p.PropertyID === osh.PropertyID);
                   const owner = owners.find((o) => o.OwnerID === osh.OwnerID);
                   return (
@@ -282,10 +305,10 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                       <td className="px-4 py-3 font-bold text-[#536B4D]">{property?.Flat_No || '—'}</td>
                       <td className="px-4 py-3">{property?.Floor_No ?? '—'}</td>
                       <td className="px-4 py-3">{property?.Property_Type || '—'}</td>
-                      <td className="px-4 py-3 text-right">{property?.Carpet_Area ?? '—'}</td>
-                      <td className="px-4 py-3 text-right">{property?.Structural_Area ?? '—'}</td>
-                      <td className="px-4 py-3 text-right">{property?.Allocated_Common_Area ?? '—'}</td>
-                      <td className="px-4 py-3 text-right font-semibold">{property?.Super_Built_up_Area ?? '—'}</td>
+                      <td className="px-4 py-3 text-right">{formatAreaFromDatabase(property?.Carpet_Area)}</td>
+                      <td className="px-4 py-3 text-right">{formatAreaFromDatabase(property?.Allocated_Common_Area)}</td>
+                      <td className="px-4 py-3 text-right">{formatAreaFromDatabase(property?.Structural_Area)}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{formatAreaFromDatabase(property?.Super_Built_up_Area)}</td>
                       <td className="px-4 py-3 font-mono text-[#C97958] font-semibold">{osh.Deed_No || '—'}</td>
                       <td className="px-4 py-3 font-mono">{osh.Municipality_Assessee_No || '—'}</td>
                       <td className="px-4 py-3 font-mono">{osh.Municipality_Holding_No || '—'}</td>
@@ -325,7 +348,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                     <td className="px-4 py-3 font-bold text-[#29352D] text-sm">{ten.Tenant_Name}</td>
                     <td className="px-4 py-3 font-mono">{ten.Mobile_No}</td>
                     <td className="px-4 py-3 text-gray-600">
-                      {ten.Occupancy_Start_Date} to {ten.Occupancy_End_Date || 'Ongoing'}
+                      {formatLeaseDate(ten.Occupancy_Start_Date) || '—'} to {formatLeaseDate(ten.Occupancy_End_Date) || 'Ongoing'}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-[#536B4D] underline">
                       {ten.Tenant_Document}

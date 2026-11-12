@@ -5,11 +5,11 @@
 
 ---
 
-## 1. Project Overview — Version 5.3.2
+## 1. Project Overview — Version 5.3.3
 
-- **Website foundation:** Responsive, bilingual (English & Bengali) React application. Includes all 4 roles (Admin, Committee, Accountant, Resident), 21 Google Sheets database models, rate calculations, payment workflows, print/save PDF modals, and Google Apps Script integration architecture.
-- **Phase 2 (Next):** Live Google Sheets & Google Drive API backend synchronization.
-- **Phase 3:** Website stabilization and production deployment on GitHub Pages.
+- **Website:** Responsive, bilingual (English & Bengali) React application with Admin, Committee, Accountant and Resident roles.
+- **Backend integration:** Google Apps Script Web App with selective Google Sheets reads, validated write workflows, private Drive file APIs, backup and server-side reports.
+- **Next release gate:** Complete live Google account authorization, staging tests, financial reconciliation and production deployment validation before launch.
 - **Phase 4:** Android packaging via Capacitor / Trusted Web Activity (PWA-ready).
 
 ---
@@ -229,7 +229,7 @@ The React app now requests only modules needed by the active navigation screen u
 No live Google account, deployed Apps Script endpoint, Drive folder, or GitHub repository was available in this development session. `npm install` timed out, so semantic TypeScript checking and Vite build were blocked. Do not treat this ZIP as a production-ready accounting ledger until the owner completes the live tests and deployment checklist in the Bengali release notes.
 
 
-## Version 5.3.2 — New Modules
+## Version 5.3.2 — Features carried forward
 
 ### Master Data CRUD
 Open **Settings → Master Data CRUD**. Admin, Committee and Accountant see only modules allowed to their server-side role. Create/Edit/Archive requests are saved through authenticated Apps Script APIs. Ownership History is preserved; it is not physically archived.
@@ -260,3 +260,16 @@ The backend creates these hidden tabs as needed:
 - Restore replaces sheets present in the backup but may preserve newer internal tabs not present in the backup. Compare the restored workbook against the backup after any restore.
 - Automated backup retention/rotation is not configured; monitor Drive storage and remove old backups only after confirming a newer verified copy.
 - Live Google Sheets/Drive tests and GitHub Pages deployment have not been performed in this environment.
+
+
+## Version 5.3.3 — UI and Reporting Corrections
+
+- Properties & Residents now display Carpet Area, Allocated Common Area, Structural Area and Super Built-up Area from their mapped database fields. The screen does not derive or calculate one area from another. Blank source cells display as a dash.
+- Legacy `Super Buildup Area` and the distinct `Super Built-up Area` headers are mapped separately to avoid displaying one database field as another.
+- Tenant lease periods display as `dd-MMM-yyyy to dd-MMM-yyyy`; blank end dates display as `Ongoing`.
+- Outstanding Dues excludes cancelled and zero-due invoices and includes summary totals and overdue counts.
+- Invoice Register displays Ownership ID, Billing Date and the charge components (Basic Charge, Late Fee, Discount, Adjustment, Net Charge, Paid and Outstanding).
+- Financial Reports adds **Ownership-wise Outstanding**, grouped by `Ownership_ID` so different ownership periods for the same flat remain separate. Legacy invoices without an Ownership_ID are flagged for manual review.
+- See `V5.3.3_RELEASE_NOTES_BN.md`, `MIGRATION_V5.3.2_TO_V5.3.3_BN.md`, `V5.3.3_API_REFERENCE.md` and `V5.3.3_TEST_REPORT.md`.
+
+**Version 5.3.3 is a source update, not a live-service certification.** The Vite production build and live Apps Script/Sheets/Drive integration still require testing with the society owner's Google account.

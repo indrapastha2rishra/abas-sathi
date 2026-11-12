@@ -214,14 +214,91 @@ function postOpeningBalances_(session,body){
   }finally{lock.releaseLock();}
 }
 
+/**
+ * Pure report builder: one row per Ownership_ID, not one row per OwnerID.
+ * This preserves historical liability when a flat changes ownership.
+ */
+function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows) {
+  const ownershipById = {};
+  (ownershipRows || []).forEach(x => { if (x.Ownership_ID) ownershipById[String(x.Ownership_ID)] = x; });
+  const propertyById = {};
+  (propertyRows || []).forEach(x => { if (x.PropertyID) propertyById[String(x.PropertyID)] = x; });
+  const ownerById = {};
+  (ownerRows || []).forEach(x => { if (x.OwnerID) ownerById[String(x.OwnerID)] = x; });
+  const grouped = {};
+  let unlinkedInvoiceCount = 0;
+  (invoiceRows || []).forEach(inv => {
+    if (String(inv.Invoice_Status || "") === "Cancelled") return;
+    const net = Number(inv.Net_Charge_Amount || 0);
+    const paid = Number(inv.Paid_Amount || 0);
+    const rawDue = inv.Outstanding_Amount;
+    const dueValue = rawDue === "" || rawDue === null || rawDue === undefined
+      ? Math.max(0, net - paid)
+      : Math.max(0, Number(rawDue || 0));
+    if (!(dueValue > 0)) return;
+    const ownershipId = String(inv.Ownership_ID || "");
+    const propertyId = String(inv.PropertyID || "");
+    const ownerId = String(inv.OwnerID || "");
+    const key = ownershipId || ("UNLINKED:" + propertyId + ":" + ownerId);
+    if (!ownershipId) unlinkedInvoiceCount++;
+    const history = ownershipById[ownershipId] || {};
+    const property = propertyById[propertyId] || {};
+    const owner = ownerById[ownerId] || {};
+    if (!grouped[key]) {
+      grouped[key] = {
+        Ownership_ID: ownershipId || "Not linked",
+        PropertyID: propertyId,
+        Flat_No: String(inv.Flat_Number || inv.Flat_No || property.Flat_No || property["Flat No."] || ""),
+        OwnerID: ownerId,
+        Owner_Name: String(inv.Owner_Name || owner.Owner_Name || ""),
+        Ownership_Start_Date: history.Ownership_Start_Date || "",
+        Ownership_End_Date: history.Ownership_End_Date || "",
+        Ownership_Status: history.Ownership_Status || "Historical record not found",
+        Invoice_Count: 0,
+        Total_Billed: 0,
+        Total_Paid: 0,
+        Outstanding: 0,
+        Data_Link_Status: ownershipId && history.Ownership_ID ? "Linked" : "Needs review"
+      };
+    }
+    grouped[key].Invoice_Count++;
+    grouped[key].Total_Billed += net;
+    grouped[key].Total_Paid += paid;
+    grouped[key].Outstanding += dueValue;
+  });
+  const data = Object.values(grouped).sort((a,b) => b.Outstanding - a.Outstanding);
+  const totalOutstanding = data.reduce((sum,x) => sum + x.Outstanding, 0);
+  return {
+    data,
+    summary: {
+      ownershipCount: data.length,
+      totalOutstanding,
+      unlinkedInvoiceCount
+    }
+  };
+}
+
 function getReports_(session, body) {
   const type=String(body.reportType||"");
   if(["Admin","Accountant","Committee"].indexOf(session.role)<0) throw new Error("Permission denied.");
   if(type==="outstanding") {
-    const rows=sheetObjects_(societySheet_(session,"Invoice_Register").sh).filter(x=>!["Cancelled","Paid"].includes(String(x.Invoice_Status))&&Number(x.Outstanding_Amount||0)>0);
+    const invoiceRows=sheetObjects_(societySheet_(session,"Invoice_Register").sh);
     const grouped={};
-    rows.forEach(x=>{const k=String(x.PropertyID||"");if(!grouped[k])grouped[k]={PropertyID:k,Flat_No:x.Flat_Number||x.Flat_No||"",Owner_Name:x.Owner_Name||"",Invoice_Count:0,Outstanding:0};grouped[k].Invoice_Count++;grouped[k].Outstanding+=Number(x.Outstanding_Amount||0);});
-    return json_({status:"success",reportType:type,data:Object.values(grouped),generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    invoiceRows.forEach(x=>{
+      if(String(x.Invoice_Status||"")==="Cancelled")return;
+      const net=Number(x.Net_Charge_Amount||0),paid=Number(x.Paid_Amount||0);
+      const rawDue=x.Outstanding_Amount;
+      const due=rawDue===""||rawDue===null||rawDue===undefined?Math.max(0,net-paid):Math.max(0,Number(rawDue||0));
+      if(!(due>0))return;
+      const k=String(x.PropertyID||"");
+      if(!grouped[k])grouped[k]={PropertyID:k,Flat_No:x.Flat_Number||x.Flat_No||"",Owner_Name:x.Owner_Name||"",Invoice_Count:0,Total_Billed:0,Total_Paid:0,Outstanding:0};
+      grouped[k].Invoice_Count++;
+      grouped[k].Total_Billed+=net;
+      grouped[k].Total_Paid+=paid;
+      grouped[k].Outstanding+=due;
+    });
+    const data=Object.values(grouped).sort((a,b)=>b.Outstanding-a.Outstanding);
+    return json_({status:"success",reportType:type,data,summary:{propertyCount:data.length,totalOutstanding:data.reduce((a,x)=>a+x.Outstanding,0)},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="receiptPayment") {
     const from=String(body.fromDate||"0000-01-01"),to=String(body.toDate||"9999-12-31");
@@ -235,6 +312,22 @@ function getReports_(session, body) {
     const rows=sheetObjects_(societySheet_(session,"Invoice_Register").sh).filter(x=>!["Cancelled","Paid"].includes(String(x.Invoice_Status))&&Number(x.Outstanding_Amount||0)>0);
     const grouped={};rows.forEach(x=>{const k=String(x.OwnerID||"");if(!grouped[k])grouped[k]={OwnerID:k,Owner_Name:x.Owner_Name||"",Property_Count:0,Outstanding:0,Invoice_Count:0};grouped[k].Outstanding+=Number(x.Outstanding_Amount||0);grouped[k].Invoice_Count++;});
     return json_({status:"success",reportType:type,data:Object.values(grouped),generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+  }
+  if(type==="ownershipOutstanding") {
+    const invoiceRows = sheetObjects_(societySheet_(session,"Invoice_Register").sh);
+    const ownershipRows = sheetObjects_(societySheet_(session,"Ownership History").sh);
+    const propertyRows = sheetObjects_(societySheet_(session,"Property Master").sh);
+    const ownerRows = sheetObjects_(societySheet_(session,"Owner Master").sh);
+    const result = buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows);
+    return json_({
+      status:"success",
+      reportType:type,
+      data:result.data,
+      summary:result.summary,
+      generatedAt:new Date().toISOString(),
+      auditStatus:"system-generated",
+      note:"Outstanding is grouped by the Ownership_ID stored on each invoice. Unlinked legacy invoices are shown separately and require manual ownership verification."
+    });
   }
   if(type==="expenseSummary") {
     const from=String(body.fromDate||"0000-01-01"),to=String(body.toDate||"9999-12-31");

@@ -14,10 +14,10 @@ export interface PropertyMaster {
   Block_Tower: string;
   Floor_No: number;
   Property_Type: '2BHK' | '3BHK' | '4BHK' | 'Penthouse' | 'Studio';
-  Carpet_Area: number; // sq ft
-  Allocated_Common_Area: number;
-  Structural_Area: number;
-  Super_Built_up_Area: number;
+  Carpet_Area: number | null; // sq ft; null means blank in the source sheet
+  Allocated_Common_Area: number | null;
+  Structural_Area: number | null;
+  Super_Built_up_Area: number | null;
   Occupancy_Status: OccupancyStatus;
   Property_Status: PropertyStatus;
   Remarks: string;
