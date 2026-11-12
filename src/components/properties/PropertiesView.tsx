@@ -65,7 +65,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
             {t.navPropertiesResidents} / সম্পত্তি ও বাসিন্দা
           </h1>
           <p className="text-xs text-gray-500">
-            50 residential flats across Block A & Block B with complete ownership deeds
+            Property records, owner details and ownership history
           </p>
         </div>
 

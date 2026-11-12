@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Receipt,
@@ -29,6 +29,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     properties,
     rates,
     generateInvoice,
+    cancelInvoice,
     setPreviewInvoice,
     activeRole,
     t,
@@ -41,14 +42,19 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   // Generator form state
   const [selectedPropertyId, setSelectedPropertyId] = useState(properties[0]?.PropertyID || '');
   const [selectedRateId, setSelectedRateId] = useState(rates[0]?.RateID || '');
-  const [billPeriodFrom, setBillPeriodFrom] = useState('2026-06-01');
-  const [billPeriodTo, setBillPeriodTo] = useState('2026-06-30');
-  const [dueDate, setDueDate] = useState('2026-06-15');
+  const [billPeriodFrom, setBillPeriodFrom] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`; });
+  const [billPeriodTo, setBillPeriodTo] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(new Date(d.getFullYear(),d.getMonth()+1,0).getDate()).padStart(2,'0')}`; });
+  const [dueDate, setDueDate] = useState(() => { const d = new Date(); d.setDate(d.getDate()+30); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; });
   const [lateFee, setLateFee] = useState(0);
   const [discount, setDiscount] = useState(0);
   const [adjustment, setAdjustment] = useState(0);
   const [remarks, setRemarks] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+
+  useEffect(() => {
+    if (!selectedPropertyId && properties.length) setSelectedPropertyId(properties[0].PropertyID);
+    if (!selectedRateId && rates.length) setSelectedRateId(rates[0].RateID);
+  }, [properties, rates, selectedPropertyId, selectedRateId]);
 
   // Selected property & rate for calculation preview
   const currentProperty = properties.find((p) => p.PropertyID === selectedPropertyId) || properties[0];
@@ -65,18 +71,12 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
 
   const netCharge = calculateNetChargeAmount(baseCharge, lateFee, discount, adjustment);
 
-  const handleCreateInvoice = (e: React.FormEvent) => {
+  const handleCreateInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newInv = generateInvoice({
-      propertyId: selectedPropertyId,
-      rateId: selectedRateId,
-      billPeriodFrom,
-      billPeriodTo,
-      dueDate,
-      lateFee: Number(lateFee),
-      discount: Number(discount),
-      adjustment: Number(adjustment),
-      remarks,
+    try {
+    const newInv = await generateInvoice({
+      propertyId: selectedPropertyId, rateId: selectedRateId, billPeriodFrom, billPeriodTo, dueDate,
+      lateFee: Number(lateFee), discount: Number(discount), adjustment: Number(adjustment), remarks,
     });
 
     setSuccessMessage(`Invoice ${newInv.Invoice_Number} generated successfully for Flat ${newInv.Flat_Number}!`);
@@ -85,6 +85,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       setPreviewInvoice(newInv);
       setActiveSubTab('register');
     }, 1200);
+    } catch (error:any) { window.alert(error?.message || 'Invoice could not be saved. Please retry.'); }
   };
 
   // Filtered invoices
@@ -254,13 +255,12 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => setPreviewInvoice(inv)}
-                          className="flex items-center gap-1 ml-auto text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                        >
-                          <Printer className="h-3.5 w-3.5" />
-                          <span>View</span>
-                        </button>
+                        <div className="flex items-center justify-end gap-3">
+                          <button onClick={() => setPreviewInvoice(inv)} className="flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">
+                            <Printer className="h-3.5 w-3.5" /><span>View</span>
+                          </button>
+                          {activeRole==='Admin'&&inv.Invoice_Status!=='Cancelled'&&Number(inv.Paid_Amount||0)===0&&<button onClick={async()=>{const reason=window.prompt('Invoice cancellation reason:');if(!reason?.trim())return;try{await cancelInvoice(inv.InvoiceID,reason);}catch(e:any){window.alert(e?.message||'Invoice cancellation failed.');}}} className="text-xs font-semibold text-red-700 hover:underline">Cancel</button>}
+                        </div>
                       </td>
                     </tr>
                   ))}

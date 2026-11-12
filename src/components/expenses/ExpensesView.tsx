@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   TrendingDown,
@@ -25,6 +25,8 @@ export const ExpensesView: React.FC = () => {
     bankAccounts,
     addExpense,
     approveExpense,
+    markExpensePaid,
+    uploadPrivateFile,
     setPreviewVoucher,
     activeRole,
     t,
@@ -43,16 +45,27 @@ export const ExpensesView: React.FC = () => {
   const [mode, setMode] = useState<PaymentMode>('NEFT');
   const [reference, setReference] = useState('');
   const [bankAccount, setBankAccount] = useState(bankAccounts[0]?.BankAccount_ID || 'BANK-SBI-01');
-  const [status, setStatus] = useState<ExpenseRegister['Expense_Status']>('Paid');
   const [remarks, setRemarks] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
+  const [voucherFile, setVoucherFile] = useState<File|null>(null);
 
-  const handleCreateExpense = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (bankAccounts.length && !bankAccounts.some(b => b.BankAccount_ID === bankAccount)) setBankAccount(bankAccounts[0].BankAccount_ID);
+  }, [bankAccounts, bankAccount]);
+  useEffect(() => {
+    if (expenseCategories.length && !expenseCategories.some(c => c.Category_Name === category)) {
+      setCategory(expenseCategories[0].Category_Name);
+      setSubcategory(expenseCategories[0].Subcategory_Name || '');
+    }
+  }, [expenseCategories, category]);
+
+  const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amount || Number(amount) <= 0) return;
 
-    const newExp = addExpense({
-      Payment_Date: new Date().toISOString().split('T')[0],
+    try {
+    const newExp = await addExpense({
+      Payment_Date: '',
       Expense_Category: category,
       Expense_Subcategory: subcategory,
       Payee_Name: payee,
@@ -63,9 +76,13 @@ export const ExpensesView: React.FC = () => {
       Bank_Account: bankAccount,
       PropertyID: 'Common',
       Remarks: remarks,
-      File_Reference: `Voucher_${payee.replace(/\s+/g, '_')}.pdf`,
-      Expense_Status: status,
+      File_Reference: '',
+      Expense_Status: 'Pending Approval',
     });
+    if (voucherFile) {
+      try { await uploadPrivateFile(voucherFile, 'Expense Voucher', undefined, undefined, 'expenses', newExp.Expense_ID); }
+      catch (uploadError:any) { window.alert(`Expense ${newExp.Voucher_No} was saved, but voucher upload failed: ${uploadError?.message||'Unknown error'}. Retry from Settings → Documents.`); }
+    }
 
     setFormSuccess(`Voucher ${newExp.Voucher_No} created successfully!`);
     setTimeout(() => {
@@ -73,6 +90,7 @@ export const ExpensesView: React.FC = () => {
       setPreviewVoucher(newExp);
       setActiveSubTab('register');
     }, 1200);
+    } catch (error:any) { window.alert(error?.message || 'Expense could not be saved.'); }
   };
 
   const filteredExpenses = expenses.filter((exp) => {
@@ -224,12 +242,19 @@ export const ExpensesView: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
-                        {exp.Expense_Status === 'Pending Approval' ? (
+                        {exp.Expense_Status === 'Pending Approval' && activeRole === 'Admin' ? (
                           <button
-                            onClick={() => approveExpense(exp.Expense_ID)}
+                            onClick={async () => { try { await approveExpense(exp.Expense_ID); } catch (error:any) { window.alert(error?.message || 'Expense approval failed.'); } }}
                             className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-bold text-[11px] hover:bg-emerald-800 cursor-pointer shadow-2xs"
                           >
-                            Approve & Pay
+                            Approve
+                          </button>
+                        ) : exp.Expense_Status === 'Approved' && ['Admin','Accountant'].includes(activeRole) ? (
+                          <button
+                            onClick={async () => { try { await markExpensePaid(exp.Expense_ID); } catch (error:any) { window.alert(error?.message || 'Expense payment failed.'); } }}
+                            className="px-2.5 py-1 rounded-lg bg-[#536B4D] text-white font-bold text-[11px] hover:bg-[#3F523A] cursor-pointer shadow-2xs"
+                          >
+                            Mark Paid
                           </button>
                         ) : (
                           <button
@@ -331,6 +356,12 @@ export const ExpensesView: React.FC = () => {
               ></textarea>
             </div>
 
+            <div>
+              <label className="block font-semibold mb-1">Supporting Voucher / Invoice (Optional):</label>
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={(e)=>setVoucherFile(e.target.files?.[0]||null)} className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"/>
+              <p className="text-[10px] text-gray-500 mt-1">Private Drive upload, PDF/JPG/PNG up to 5 MB.</p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label className="block font-semibold mb-1">Amount (₹) / টাকার অঙ্ক:</label>
@@ -387,17 +418,8 @@ export const ExpensesView: React.FC = () => {
                 </select>
               </div>
 
-              <div>
-                <label className="block font-semibold mb-1">Approval Status:</label>
-                <select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as any)}
-                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"
-                >
-                  <option value="Paid">Paid (Already Disbursed)</option>
-                  <option value="Pending Approval">Pending Approval (Committee Review)</option>
-                  <option value="Draft">Draft</option>
-                </select>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                New expenses are always saved as <strong>Pending Approval</strong>. An authorized Admin/Accountant must approve and pay them after checking the supporting documents and available bank balance.
               </div>
             </div>
 

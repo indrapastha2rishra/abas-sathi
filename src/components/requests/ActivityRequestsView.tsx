@@ -27,6 +27,7 @@ export const ActivityRequestsView: React.FC = () => {
     activeRole,
     currentUser,
     residentProperty,
+    uploadPrivateFile,
     t,
   } = useApp();
 
@@ -40,38 +41,39 @@ export const ActivityRequestsView: React.FC = () => {
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<ActivityRequestRegister['Priority']>('Medium');
-  const [attachment, setAttachment] = useState('');
+  const [attachmentFile, setAttachmentFile] = useState<File|null>(null);
 
   // Editing Form
   const [statusUpdate, setStatusUpdate] = useState<ActivityRequestRegister['Request_Status']>('In Progress');
   const [assignedTo, setAssignedTo] = useState('');
   const [adminRemarks, setAdminRemarks] = useState('');
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    createActivityRequest({
-      category,
-      subject,
-      description,
-      priority,
-      attachment,
-    });
+    try {
+    const created = await createActivityRequest({ category, subject, description, priority });
+    if (attachmentFile) {
+      try { await uploadPrivateFile(attachmentFile, 'Activity Request Attachment', residentProperty?.PropertyID, undefined, 'activityRequests', created.Request_ID); }
+      catch (uploadError:any) { window.alert(`Request ${created.Request_Number} was saved, but its attachment upload failed: ${uploadError?.message||'Unknown error'}. You can retry from Settings → Documents.`); }
+    }
     setIsNewModalOpen(false);
     setSubject('');
     setDescription('');
+    setAttachmentFile(null);
+    } catch (error:any) { window.alert(error?.message || 'Request could not be saved.'); }
   };
 
-  const handleUpdate = (e: React.FormEvent) => {
+  const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingRequest) return;
-    updateActivityRequest(editingRequest.Request_ID, {
-      Request_Status: statusUpdate,
-      Assigned_To: assignedTo,
-      Admin_Remarks: adminRemarks,
+    try {
+    await updateActivityRequest(editingRequest.Request_ID, {
+      Request_Status: statusUpdate, Assigned_To: assignedTo, Admin_Remarks: adminRemarks,
       Completion_Date: statusUpdate === 'Completed' ? new Date().toISOString().split('T')[0] : null,
-      Completion_Proof: statusUpdate === 'Completed' ? 'Inspection_Passed.jpg' : null,
+      Completion_Proof: statusUpdate === 'Completed' ? null : null,
     });
     setEditingRequest(null);
+    } catch (error:any) { window.alert(error?.message || 'Request update failed.'); }
   };
 
   // Filter requests
@@ -331,13 +333,12 @@ export const ActivityRequestsView: React.FC = () => {
               <div>
                 <label className="block font-semibold mb-1">Photo Attachment (Optional):</label>
                 <input
-                  type="text"
-                  placeholder="e.g. Photo_Leakage_Shaft.jpg"
-                  value={attachment}
-                  onChange={(e) => setAttachment(e.target.value)}
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                  onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)}
                   className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"
                 />
-                <p className="text-[10px] text-gray-500 mt-1">Saved to Google Drive community attachments.</p>
+                <p className="text-[10px] text-gray-500 mt-1">PDF/JPG/PNG up to 5 MB. The file is uploaded privately after the request is saved.</p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-[#E8E1D4]">

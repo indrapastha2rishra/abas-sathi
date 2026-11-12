@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   UserRole,
   UserMaster,
@@ -29,12 +29,7 @@ import {
 } from '../types/database';
 
 import { Language, translations } from '../utils/i18n';
-import {
-  allocatePaymentToInvoice,
-  calculateChargeAmount,
-  calculateNetChargeAmount,
-  generateNextCode,
-} from '../utils/calculations';
+import { authRequest } from '../utils/authClient';
 
 export interface GoogleBackendConfig {
   spreadsheetId: string;
@@ -89,6 +84,7 @@ interface AppContextType {
   setPreviewVoucher: (exp: ExpenseRegister | null) => void;
 
   // Actions
+  cancelInvoice: (invoiceId: string, reason: string) => Promise<void>;
   generateInvoice: (params: {
     propertyId: string;
     rateId: string;
@@ -99,7 +95,7 @@ interface AppContextType {
     discount?: number;
     adjustment?: number;
     remarks?: string;
-  }) => InvoiceRegister;
+  }) => Promise<InvoiceRegister>;
 
   submitResidentPayment: (params: {
     invoiceIds: string[];
@@ -109,13 +105,14 @@ interface AppContextType {
     bankAccount: string;
     remarks?: string;
     proofFileName?: string;
-  }) => FundInflowRegister;
+  }) => Promise<FundInflowRegister>;
 
-  confirmAndAllocatePayment: (receiptId: string, customAllocations?: { invoiceId: string; amount: number }[]) => void;
+  confirmAndAllocatePayment: (receiptId: string, customAllocations?: { invoiceId: string; amount: number }[]) => Promise<FundInflowRegister>;
 
-  addExpense: (params: Omit<ExpenseRegister, 'Expense_ID' | 'Voucher_No' | 'Created_At' | 'Created_By' | 'Approved_At' | 'Approved_By' | 'Cancelled_At' | 'Cancelled_By' | 'Cancellation_Reason'>) => ExpenseRegister;
+  addExpense: (params: Omit<ExpenseRegister, 'Expense_ID' | 'Voucher_No' | 'Created_At' | 'Created_By' | 'Approved_At' | 'Approved_By' | 'Cancelled_At' | 'Cancelled_By' | 'Cancellation_Reason'>) => Promise<ExpenseRegister>;
 
-  approveExpense: (expenseId: string) => void;
+  approveExpense: (expenseId: string) => Promise<void>;
+  markExpensePaid: (expenseId: string) => Promise<void>;
 
   createActivityRequest: (params: {
     category: ActivityRequestRegister['Request_Category'];
@@ -123,18 +120,34 @@ interface AppContextType {
     description: string;
     priority: ActivityRequestRegister['Priority'];
     attachment?: string;
-  }) => ActivityRequestRegister;
+  }) => Promise<ActivityRequestRegister>;
 
   updateActivityRequest: (
     requestId: string,
     updates: Partial<Pick<ActivityRequestRegister, 'Request_Status' | 'Assigned_To' | 'Admin_Remarks' | 'Completion_Date' | 'Completion_Proof'>>
-  ) => void;
+  ) => Promise<void>;
 
-  createNotice: (notice: Omit<NoticeMaster, 'Notice_ID' | 'Notice_Number' | 'Created_At' | 'Created_By'>) => void;
+  createNotice: (notice: Omit<NoticeMaster, 'Notice_ID' | 'Notice_Number' | 'Created_At' | 'Created_By'>) => Promise<void>;
 
   // Backend settings
   googleConfig: GoogleBackendConfig;
   updateGoogleConfig: (config: Partial<GoogleBackendConfig>) => void;
+  uploadPrivateFile: (file: File, category: string, propertyId?: string, ownerId?: string, relatedModule?: string, relatedRecordId?: string) => Promise<{fileId:string;fileName:string;mimeType:string}>;
+  createModuleRecord: (module: string, record: Record<string, unknown>) => Promise<any>;
+  updateModuleRecord: (module: string, recordId: string, record: Record<string, unknown>) => Promise<any>;
+  cancelModuleRecord: (module: string, recordId: string, reason: string) => Promise<any>;
+  getPrivateFile: (fileId: string, propertyId?: string) => Promise<any>;
+  createSocietyBackup: () => Promise<any>;
+  configureAutomatedBackup: (enabled: boolean) => Promise<any>;
+  listSocietyBackups: () => Promise<any[]>;
+  listRecoveryOperations: () => Promise<any[]>;
+  restoreSocietyBackup: (backupFileId: string) => Promise<any>;
+  listPrivateFiles: (category?: string) => Promise<any[]>;
+  getReport: (reportType: string, filters?: Record<string, unknown>) => Promise<any>;
+  createReportSnapshot: (asOfDate: string, remarks?: string) => Promise<any>;
+  approveReportSnapshot: (snapshotId: string) => Promise<any>;
+  listReportSnapshots: () => Promise<any[]>;
+  postOpeningBalances: (entries: Array<{accountCode?:string;accountName:string;accountType:string;debit:number;credit:number}>, effectiveDate: string) => Promise<any>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -182,7 +195,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       if (typeof window === 'undefined') return defaults;
       const saved = window.localStorage.getItem('abasSathiGoogleConfig');
-      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+      if (!saved) return defaults;
+      const parsed = JSON.parse(saved);
+      const sanitized = { ...defaults, ...parsed, spreadsheetId: '', driveFolderId: '' };
+      window.localStorage.setItem('abasSathiGoogleConfig', JSON.stringify(sanitized));
+      return sanitized;
     } catch {
       return defaults;
     }
@@ -190,7 +207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateGoogleConfig = (cfg: Partial<GoogleBackendConfig>) => {
     setGoogleConfig((prev) => {
-      const next = { ...prev, ...cfg };
+      const next = { ...prev, ...cfg, spreadsheetId: '', driveFolderId: '' };
       try {
         if (typeof window !== 'undefined') {
           window.localStorage.setItem('abasSathiGoogleConfig', JSON.stringify(next));
@@ -203,8 +220,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const t = translations[language];
+  const newRequestId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+    ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const pendingRequestIds = useRef(new Map<string,string>());
+  const apiCall = async <T = any,>(action: string, payload: Record<string, unknown> = {}): Promise<T> => {
+    let saved: any = {};
+    try { saved = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
+    if (!saved.token) throw new Error('Your login session has expired. Please sign in again.');
+    const suppliedId = typeof payload.requestId === 'string' ? payload.requestId : '';
+    const requestPayload = { ...payload }; delete requestPayload.requestId;
+    const fingerprint = action + '|' + JSON.stringify(requestPayload);
+    const requestId = suppliedId || pendingRequestIds.current.get(fingerprint) || newRequestId();
+    pendingRequestIds.current.set(fingerprint, requestId);
+    if (pendingRequestIds.current.size > 100) pendingRequestIds.current.delete(pendingRequestIds.current.keys().next().value as string);
+    try {
+      const result = await authRequest<T>({ action, token: saved.token, ...requestPayload, requestId });
+      pendingRequestIds.current.delete(fingerprint);
+      return result;
+    } catch (error) {
+      // Keep the same requestId for an exact retry after a timeout/network error.
+      throw error;
+    }
+  };
 
-  // Load all 21 society database tabs after authenticated login.
+  // Load only the modules required by the active screen.
   useEffect(() => {
     const baseUrl = googleConfig.appsScriptWebAppUrl.trim();
     let session: any = {};
@@ -256,59 +295,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return out;
     });
 
+    const modulePlan: Record<string, string[]> = {
+      dashboard: ['properties','owners','ownershipHistory','invoices','receipts','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance','auditLogs'],
+      properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
+      properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
+      invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],
+      invoices_register: ['invoices','properties','owners','rates','ratePropertyMapping','ownershipHistory'], invoices_rates: ['rates','ratePropertyMapping','properties'],
+      invoices_outstanding: ['invoices','properties','owners','rates'],
+      payments_record: ['receipts','invoices','properties','owners','ownershipHistory','bankAccounts','billWiseDetails'],
+      payments_receipts: ['receipts','invoices','properties','billWiseDetails'], payments_allocation: ['receipts','invoices','billWiseDetails','properties','owners','ownershipHistory'],
+      payments_advances: ['receipts','invoices','billWiseDetails','properties'], resident_flat: ['properties','owners','ownershipHistory','propertyUtilityDetails','tenants'],
+      resident_bills: ['invoices'], resident_pay: ['invoices','properties','owners','ownershipHistory'], resident_history: ['receipts','billWiseDetails'],
+      resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
+      expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
+      expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],
+      reports_property_due: ['invoices','properties','owners'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'],
+      resident_notices: ['notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
+    };
     const load = async () => {
       try {
-        const response = await fetch(`${baseUrl}?action=getSocietyData&token=${encodeURIComponent(session.token)}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json();
-        if (result.status !== 'success') throw new Error(result.message || 'Database read failed');
-        const d = result.data || {};
-        const rows = (name: string) => normalizeRows(d[name] || []);
-        const propertyRows = rows('Property Master').map((r:any) => ({
-          ...r,
-          PropertyID:String(r.PropertyID || ''),
-          Flat_No:String(r.Flat_No || ''),
-          Block_Tower:String(r.Block_Tower || ''),
-          Floor_No:Number(r.Floor_No || 0),
-          Carpet_Area:Number(r.Carpet_Area || 0),
-          Allocated_Common_Area:Number(r.Allocated_Common_Area || 0),
-          Structural_Area:Number(r.Structural_Area || 0),
-          Super_Built_up_Area:Number(r.Super_Built_up_Area || 0),
-          Occupancy_Status:r.Occupancy_Status === 'Occupied' ? 'Self Occupied' : (r.Occupancy_Status || 'Vacant'),
-          Property_Status:r.Property_Status || 'Active'
-        }));
+        const requested = Array.from(new Set(modulePlan[activeTab] || [])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(session.user?.role || '')) && (key !== 'expenses' || session.user?.role !== 'Resident'));
+        const permittedRequested = requested.filter(key => key !== 'auditLogs' || ['Admin','Accountant'].includes(session.user?.role || ''));
+        const loadOne = async (module: string) => {
+          const all: any[] = []; let page = 1; let pages = 1;
+          do {
+            const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+              body: JSON.stringify({action:'getModuleData', token:session.token, module, page, limit:200}) });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const result = await response.json();
+            if (result.status !== 'success') throw new Error(result.message || `Could not load ${module}`);
+            all.push(...(Array.isArray(result.data) ? result.data : []));
+            pages = Number(result.pagination?.totalPages || 1); page += 1;
+            if (page > 100) throw new Error(`Safety limit reached while loading ${module}`);
+          } while (page <= pages);
+          return all;
+        };
+        const loaded = await Promise.all(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const));
         if (cancelled) return;
-        setProperties(propertyRows as PropertyMaster[]);
-        setOwners(rows('Owner Master') as OwnerMaster[]);
-        setOwnerships(rows('Ownership History') as OwnershipHistory[]);
-        setTenants(rows('Tenant Master') as TenantMaster[]);
-        setRates(rows('Rate Master') as RateMaster[]);
-        setInvoices(rows('Invoice_Register') as InvoiceRegister[]);
-        setReceipts(rows('Fund Inflow Register') as FundInflowRegister[]);
-        setBillAllocations(rows('Bill Wise Details') as BillWiseDetails[]);
-        setExpenses(rows('Expense Register') as ExpenseRegister[]);
-        setExpenseCategories(rows('Expense Category Master') as ExpenseCategoryMaster[]);
-        setBankAccounts(rows('Bank Account Master') as BankAccountMaster[]);
-        setUsers(rows('User Master & Role Management') as UserMaster[]);
-        setActivityRequests(rows('Activity Request Register') as ActivityRequestRegister[]);
-        setNotices(rows('Notice Master') as NoticeMaster[]);
-        setGallery(rows('Gallery Master') as GalleryMaster[]);
-        setPreventiveMaintenance(rows('Preventive Maintenance Master') as PreventiveMaintenanceMaster[]);
-        setAuditLogs(rows('Audit Log') as AuditLog[]);
-        setFinancialYears(rows('Financial Year Master') as FinancialYearMaster[]);
-        setAccountHeads(rows('Account Head Master') as AccountHeadMaster[]);
-        console.info('ABAS SATHI: Loaded society database sheets from Google Sheets.');
+        const data: Record<string, any[]> = Object.fromEntries(loaded);
+        const rows = (key: string) => data[key] || [];
+        if (requested.includes('properties')) setProperties(rows('properties').map((r:any) => ({...r,
+          PropertyID:String(r.PropertyID||''), Flat_No:String(r.Flat_No||''), Block_Tower:String(r.Block_Tower||''),
+          Floor_No:Number(r.Floor_No||0), Carpet_Area:Number(r.Carpet_Area||0), Allocated_Common_Area:Number(r.Allocated_Common_Area||0),
+          Structural_Area:Number(r.Structural_Area||0), Super_Built_up_Area:Number(r.Super_Built_up_Area||0),
+          Occupancy_Status:r.Occupancy_Status==='Occupied'?'Self Occupied':(r.Occupancy_Status||'Vacant'), Property_Status:r.Property_Status||'Active'
+        })) as PropertyMaster[]);
+        if (requested.includes('owners')) setOwners(rows('owners') as OwnerMaster[]);
+        if (requested.includes('ownershipHistory')) setOwnerships(rows('ownershipHistory') as OwnershipHistory[]);
+        if (requested.includes('tenants')) setTenants(rows('tenants') as TenantMaster[]);
+        if (requested.includes('rates')) setRates(rows('rates') as RateMaster[]);
+        if (requested.includes('invoices')) setInvoices(rows('invoices') as InvoiceRegister[]);
+        if (requested.includes('receipts')) setReceipts(rows('receipts') as FundInflowRegister[]);
+        if (requested.includes('billWiseDetails')) setBillAllocations(rows('billWiseDetails') as BillWiseDetails[]);
+        if (requested.includes('expenses')) setExpenses(rows('expenses') as ExpenseRegister[]);
+        if (requested.includes('expenseCategories')) setExpenseCategories(rows('expenseCategories') as ExpenseCategoryMaster[]);
+        if (requested.includes('bankAccounts')) setBankAccounts(rows('bankAccounts') as BankAccountMaster[]);
+        if (requested.includes('activityRequests')) setActivityRequests(rows('activityRequests') as ActivityRequestRegister[]);
+        if (requested.includes('notices')) setNotices(rows('notices') as NoticeMaster[]);
+        if (requested.includes('gallery')) setGallery(rows('gallery') as GalleryMaster[]);
+        if (requested.includes('preventiveMaintenance')) setPreventiveMaintenance(rows('preventiveMaintenance') as PreventiveMaintenanceMaster[]);
+        if (requested.includes('financialYears')) setFinancialYears(rows('financialYears') as FinancialYearMaster[]);
+        if (requested.includes('accountHeads')) setAccountHeads(rows('accountHeads') as AccountHeadMaster[]);
+        if (permittedRequested.includes('auditLogs')) setAuditLogs(rows('auditLogs') as AuditLog[]);
+        console.info(`ABAS SATHI: selectively loaded ${permittedRequested.join(', ') || 'no modules'} for ${activeTab}.`);
       } catch (error:any) {
-        console.error('ABAS SATHI database load failed:', error);
+        console.error('ABAS SATHI selective database load failed:', error);
         if (String(error?.message || '').toLowerCase().includes('session')) {
-          localStorage.removeItem('abasSathiSession');
-          window.location.reload();
+          localStorage.removeItem('abasSathiSession'); window.location.reload();
         }
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [googleConfig.appsScriptWebAppUrl]);
+  }, [googleConfig.appsScriptWebAppUrl, activeTab]);
 
   // Helper to add audit log
   const logAction = (action: AuditLog['Action_Type'], module: string, recordId: string, oldVal: string, newVal: string, remarks: string) => {
@@ -352,385 +411,182 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('dashboard');
   };
 
-  // Generate an invoice
-  const generateInvoice = (params: {
-    propertyId: string;
-    rateId: string;
-    billPeriodFrom: string;
-    billPeriodTo: string;
-    dueDate: string;
-    lateFee?: number;
-    discount?: number;
-    adjustment?: number;
-    remarks?: string;
-  }): InvoiceRegister => {
-    const prop = properties.find((p) => p.PropertyID === params.propertyId) || properties[0];
-    const ownership = ownerships.find((o) => o.PropertyID === prop.PropertyID && o.Ownership_Status === 'Current') || ownerships[0];
-    const owner = owners.find((o) => o.OwnerID === ownership.OwnerID) || owners[0];
-    const rate = rates.find((r) => r.RateID === params.rateId) || rates[0];
-
-    const area = rate.Area_Basis === 'Structural_Area' ? prop.Structural_Area
-      : rate.Area_Basis === 'Carpet_Area' ? prop.Carpet_Area
-      : rate.Area_Basis === 'Allocated_Common_Area' ? prop.Allocated_Common_Area
-      : rate.Area_Basis === 'Super_Built-up_Area' ? prop.Super_Built_up_Area : 1;
-    const charge = calculateChargeAmount(rate.Calculation_Method, rate.Rate_Per_SqFt_Unit, area, 1);
-    const lateFee = params.lateFee || 0;
-    const discount = params.discount || 0;
-    const adjustment = params.adjustment || 0;
-    const netCharge = calculateNetChargeAmount(charge, lateFee, discount, adjustment);
-
-    const nextInvCode = generateNextCode('INV', invoices.length);
-    const today = new Date().toISOString().split('T')[0];
-
-    const newInvoice: InvoiceRegister = {
-      InvoiceID: `INV-ID-${Date.now()}`,
-      Invoice_Number: nextInvCode,
-      Billing_Date: today,
-      Bill_Period_From: params.billPeriodFrom,
-      Bill_Period_To: params.billPeriodTo,
-      Due_Date: params.dueDate,
-      Ownership_ID: ownership.Ownership_ID,
-      PropertyID: prop.PropertyID,
-      OwnerID: owner.OwnerID,
-      Purpose: rate.Purpose,
-      Flat_Number: prop.Flat_No,
-      Owner_Name: owner.Owner_Name,
-      RateID: rate.RateID,
-      Rate_Per_SqFt_Unit: rate.Rate_Per_SqFt_Unit,
-      Area_Basis: rate.Area_Basis,
-      Area_SqFt: area,
-      Quantity: 1,
-      Unit_Of_Measure: rate.Calculation_Method === 'Area × Rate' ? 'Sq.Ft.' : 'Unit',
-      Charge_Amount: charge,
-      Late_Fee: lateFee,
-      Discount_Amount: discount,
-      Adjustment_Amount: adjustment,
-      Net_Charge_Amount: netCharge,
-      Paid_Amount: 0,
-      Outstanding_Amount: netCharge,
-      Calculation_Method: rate.Calculation_Method,
-      Invoice_Description: `${rate.Purpose} for Flat ${prop.Flat_No} (${params.billPeriodFrom} to ${params.billPeriodTo})`,
-      Remarks: params.remarks || '',
-      File_Reference: `${nextInvCode}.pdf`,
-      Invoice_Status: 'Unpaid',
-      Created_By: currentUser.Full_Name,
-      Created_At: new Date().toISOString(),
-      Approved_By: currentUser.Full_Name,
-      Approved_At: new Date().toISOString(),
-      Cancelled_At: null,
-      Cancelled_By: null,
-      Cancellation_Reason: null,
-      Rate_Effective_Date: rate.Effective_From,
-    };
-
-    setInvoices((prev) => [newInvoice, ...prev]);
-    logAction('CREATE', 'Invoice Register', nextInvCode, 'None', `Net ₹${netCharge} for Flat ${prop.Flat_No}`, 'Generated new society invoice');
-
-    return newInvoice;
+  const uploadPrivateFile = async (file: File, category: string, propertyId?: string, ownerId?: string, relatedModule?: string, relatedRecordId?: string): Promise<{fileId:string;fileName:string;mimeType:string}> => {
+    if (file.size > 5 * 1024 * 1024) throw new Error('File size must not exceed 5 MB.');
+    if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) throw new Error('Only PDF, JPG and PNG files are accepted.');
+    const base64 = await new Promise<string>((resolve,reject) => {
+      const reader = new FileReader(); reader.onerror = () => reject(new Error('Could not read the selected file.'));
+      reader.onload = () => { const value = String(reader.result || ''); resolve(value.includes(',') ? value.split(',')[1] : value); };
+      reader.readAsDataURL(file);
+    });
+    const result: any = await apiCall('uploadPrivateFile', { fileName:file.name, mimeType:file.type, base64, category, propertyId:propertyId || '', ownerId:ownerId || '', relatedModule:relatedModule||'', relatedRecordId:relatedRecordId||'' });
+    if (!result.data?.fileId) throw new Error('Drive upload did not return a file reference.');
+    return result.data;
   };
 
-  // Submit payment from resident (status: Pending Verification)
-  const submitResidentPayment = (params: {
-    invoiceIds: string[];
-    amount: number;
-    mode: PaymentMode;
-    reference: string;
-    bankAccount: string;
-    remarks?: string;
-    proofFileName?: string;
-  }): FundInflowRegister => {
+  const createModuleRecord = (module: string, record: Record<string, unknown>) =>
+    apiCall('createRecord', { module, record });
+  const updateModuleRecord = (module: string, recordId: string, record: Record<string, unknown>) =>
+    apiCall('updateRecord', { module, recordId, record });
+  const cancelModuleRecord = (module: string, recordId: string, reason: string) =>
+    apiCall('cancelRecord', { module, recordId, reason });
+  const getPrivateFile = (fileId: string, propertyId?: string) =>
+    apiCall('getPrivateFile', { fileId, propertyId: propertyId || '' });
+  const createSocietyBackup = () => apiCall('createSocietyBackup');
+  const configureAutomatedBackup = (enabled: boolean) => apiCall('configureAutomatedBackup', { enabled });
+  const restoreSocietyBackup = (backupFileId: string) => apiCall('restoreSocietyBackup', { backupFileId });
+  const listSocietyBackups = async () => { const result:any=await apiCall('listSocietyBackups'); return Array.isArray(result.data)?result.data:[]; };
+  const listRecoveryOperations = async () => { const result:any=await apiCall('listRecoveryOperations'); return Array.isArray(result.data)?result.data:[]; };
+  const listPrivateFiles = async (category?: string) => {
+    const result: any = await apiCall('listPrivateFiles', { category: category || '', limit: 200 });
+    return Array.isArray(result.data) ? result.data : [];
+  };
+  const getReport = (reportType: string, filters: Record<string, unknown> = {}) =>
+    apiCall('getReports', { reportType, ...filters });
+  const createReportSnapshot = (asOfDate: string, remarks = '') =>
+    apiCall('createReportSnapshot', { reportType: 'Balance Sheet', asOfDate, remarks });
+  const approveReportSnapshot = (snapshotId: string) =>
+    apiCall('approveReportSnapshot', { snapshotId });
+  const listReportSnapshots = async () => { const result:any=await apiCall('listReportSnapshots'); return Array.isArray(result.data)?result.data:[]; };
+  const postOpeningBalances = (entries: Array<{accountCode?:string;accountName:string;accountType:string;debit:number;credit:number}>, effectiveDate: string) =>
+    apiCall('postOpeningBalances', { entries, effectiveDate });
+
+  const cancelInvoice = async (invoiceId: string, reason: string): Promise<void> => {
+    await apiCall('cancelInvoice', { invoiceId, reason });
+    setInvoices(prev=>prev.map(x=>x.InvoiceID===invoiceId?{...x,Invoice_Status:'Cancelled',Cancellation_Reason:reason}:x));
+  };
+
+  // Generate invoice on the server; UI state changes only after server confirmation.
+  const generateInvoice = async (params: {
+    propertyId: string; rateId: string; billPeriodFrom: string; billPeriodTo: string; dueDate: string;
+    lateFee?: number; discount?: number; adjustment?: number; remarks?: string;
+  }): Promise<InvoiceRegister> => {
+    const result: any = await apiCall('generateInvoice', { ...params });
+    const invoice = result.data?.invoice as InvoiceRegister | undefined;
+    if (!invoice) throw new Error('The server did not return the generated invoice. Refresh the invoice register before retrying.');
+    setInvoices(prev => [invoice, ...prev.filter(x => x.InvoiceID !== invoice.InvoiceID)]);
+    return invoice;
+  };
+
+  // Submit resident payment to the server. No local receipt is created before confirmation.
+  const submitResidentPayment = async (params: {
+    invoiceIds: string[]; amount: number; mode: PaymentMode; reference: string; bankAccount: string;
+    remarks?: string; proofFileName?: string;
+  }): Promise<FundInflowRegister> => {
     const prop = residentProperty || properties[0];
-    const ownership = ownerships.find((o) => o.PropertyID === prop.PropertyID) || ownerships[0];
-    const owner = owners.find((o) => o.OwnerID === ownership.OwnerID) || owners[0];
+    if (!prop) throw new Error('No property is linked to this account.');
+    const ownership = ownerships.find(o => o.PropertyID === prop.PropertyID && o.Ownership_Status === 'Current');
+    if (!ownership) throw new Error('Current ownership record is not available.');
+    const result: any = await apiCall('submitPayment', {
+      propertyId: prop.PropertyID, ownershipId: ownership.Ownership_ID,
+      ownerId: ownership.OwnerID, amount: params.amount, mode: params.mode, reference: params.reference,
+      bankAccount: params.bankAccount, remarks: params.remarks || `Submitted against invoices: ${params.invoiceIds.join(', ')}`,
+      fileReference: params.proofFileName || '', invoiceIds: params.invoiceIds,
+    });
+    const receipt = result.data?.receipt as FundInflowRegister | undefined;
+    if (!receipt) throw new Error('The server did not return the payment receipt. Check the payment register before retrying.');
+    setReceipts(prev => [receipt, ...prev.filter(x => x.Transaction_ID !== receipt.Transaction_ID)]);
+    return receipt;
+  };
 
-    const nextRecCode = generateNextCode('REC', receipts.length);
-    const today = new Date().toISOString().split('T')[0];
+  // Payment confirmation and bill allocation are committed by the backend.
+  const confirmAndAllocatePayment = async (
+    receiptId: string, customAllocations?: { invoiceId: string; amount: number }[]
+  ): Promise<FundInflowRegister> => {
+    const receipt = receipts.find(r => r.Transaction_ID === receiptId || r.Receipt_Number === receiptId);
+    if (!receipt) throw new Error('Payment record not found. Refresh the payment register.');
+    let allocations = customAllocations || [];
+    if (!customAllocations) {
+      let remaining = Number(receipt.Received_Amount || 0);
+      allocations = invoices.filter(i => i.PropertyID === receipt.PropertyID && i.Ownership_ID === receipt.Ownership_ID && i.Outstanding_Amount > 0)
+        .sort((a,b) => String(a.Due_Date).localeCompare(String(b.Due_Date)))
+        .map(i => { const amount = Math.min(remaining, Number(i.Outstanding_Amount || 0)); remaining -= amount; return { invoiceId: i.InvoiceID, amount }; })
+        .filter(x => x.amount > 0);
+    }
+    const result: any = await apiCall('confirmPayment', { transactionId: receipt.Transaction_ID, allocations });
+    const allocated = Number(result.data?.allocated || 0), unallocated = Number(result.data?.unallocated || 0);
+    const allocMap = new Map(allocations.map(x => [x.invoiceId, x.amount]));
+    const confirmedReceipt: FundInflowRegister = { ...receipt, Receipt_Status: 'Confirmed', Unallocated_Amount: unallocated, Receipt_Number: result.data?.receiptNo || '', Bank_Account: result.data?.bankAccount || receipt.Bank_Account };
+    setReceipts(prev => prev.map(r => r.Transaction_ID === receipt.Transaction_ID ? confirmedReceipt : r));
+    setInvoices(prev => prev.map(inv => {
+      const amount = Number(allocMap.get(inv.InvoiceID) || 0); if (!amount) return inv;
+      const outstanding = Math.max(0, Number(inv.Outstanding_Amount || 0) - amount);
+      return { ...inv, Paid_Amount: Number(inv.Paid_Amount || 0) + amount, Outstanding_Amount: outstanding, Invoice_Status: outstanding <= 0 ? 'Paid' : 'Partially Paid' };
+    }));
+    setBillAllocations(prev => [...(result.data?.allocationRows || []), ...prev]);
+    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === receipt.Bank_Account ? { ...b, Current_Balance: Number(b.Current_Balance || 0) + Number(receipt.Received_Amount || 0) } : b));
+    void allocated;
+    return confirmedReceipt;
+  };
 
-    const newReceipt: FundInflowRegister = {
-      Transaction_ID: `TXN-ID-${Date.now()}`,
-      Receipt_Number: nextRecCode,
-      Date_Of_Received: today,
-      PropertyID: prop.PropertyID,
-      Ownership_ID: ownership.Ownership_ID,
-      OwnerID: owner.OwnerID,
-      Flat_No: prop.Flat_No,
-      Owner_Name: owner.Owner_Name,
-      Received_Amount: params.amount,
-      Received_Mode: params.mode,
-      Received_Reference: params.reference,
-      Bank_Account: params.bankAccount,
-      Unallocated_Amount: params.amount,
-      Remarks: params.remarks || `Submitted against invoices: ${params.invoiceIds.join(', ')}`,
-      File_Reference: params.proofFileName || `${nextRecCode}_proof.pdf`,
-      Created_By: currentUser.Full_Name,
-      Created_At: new Date().toISOString(),
-      Receipt_Status: 'Pending Verification',
+  // Create expense in the server ledger. Expenses always begin Pending Approval.
+  const addExpense = async (params: Omit<ExpenseRegister,
+    'Expense_ID' | 'Voucher_No' | 'Created_At' | 'Created_By' | 'Approved_At' | 'Approved_By' | 'Cancelled_At' | 'Cancelled_By' | 'Cancellation_Reason'
+  >): Promise<ExpenseRegister> => {
+    const result: any = await apiCall('createExpense', { record: params });
+    const server = result.data?.expense || {};
+    const created: ExpenseRegister = {
+      ...params, ...server, Expense_ID: result.data?.expenseId || server.Expense_ID,
+      Voucher_No: result.data?.voucherNo || server.Voucher_No, Expense_Status: 'Pending Approval',
+      Created_By: currentUser.Full_Name, Created_At: new Date().toISOString(), Approved_By: '', Approved_At: '',
+      Cancelled_By: null, Cancelled_At: null, Cancellation_Reason: null,
     };
-
-    setReceipts((prev) => [newReceipt, ...prev]);
-
-    // Update target invoices to 'Pending Verification' so resident knows it is in review
-    setInvoices((prev) =>
-      prev.map((inv) =>
-        params.invoiceIds.includes(inv.InvoiceID)
-          ? { ...inv, Invoice_Status: 'Pending Verification' as const }
-          : inv
-      )
-    );
-
-    logAction(
-      'CREATE',
-      'Fund Inflow Register',
-      nextRecCode,
-      'Pending',
-      `₹${params.amount} via ${params.mode} (Ref: ${params.reference})`,
-      'Resident submitted payment for verification'
-    );
-
-    return newReceipt;
+    setExpenses(prev => [created, ...prev]);
+    return created;
   };
 
-  // Admin/Accountant confirms payment & allocates
-  const confirmAndAllocatePayment = (
-    receiptId: string,
-    customAllocations?: { invoiceId: string; amount: number }[]
-  ) => {
-    const receipt = receipts.find((r) => r.Transaction_ID === receiptId || r.Receipt_Number === receiptId);
-    if (!receipt) return;
-
-    let currentReceipt: FundInflowRegister = { ...receipt, Receipt_Status: 'Confirmed' };
-    const newBillAllocations: BillWiseDetails[] = [];
-    let updatedInvoicesMap = new Map<string, InvoiceRegister>();
-
-    // If custom allocations provided, use them; otherwise auto-allocate to property's unpaid invoices
-    if (customAllocations && customAllocations.length > 0) {
-      for (const alloc of customAllocations) {
-        const inv = updatedInvoicesMap.get(alloc.invoiceId) || invoices.find((i) => i.InvoiceID === alloc.invoiceId);
-        if (!inv) continue;
-
-        const res = allocatePaymentToInvoice({
-          receipt: currentReceipt,
-          invoice: inv,
-          requestedAmount: alloc.amount,
-          userId: currentUser.Full_Name,
-          remarks: `Confirmed & allocated against ${receipt.Receipt_Number}`,
-        });
-
-        if (res.success && res.billDetail && res.updatedReceipt && res.updatedInvoice) {
-          currentReceipt = res.updatedReceipt;
-          newBillAllocations.push(res.billDetail);
-          updatedInvoicesMap.set(res.updatedInvoice.InvoiceID, res.updatedInvoice);
-        }
-      }
-    } else {
-      // Auto-allocate against unpaid/pending invoices for this flat
-      const flatInvoices = invoices.filter(
-        (i) => i.PropertyID === receipt.PropertyID && i.Outstanding_Amount > 0
-      );
-
-      for (const inv of flatInvoices) {
-        if (currentReceipt.Unallocated_Amount <= 0) break;
-        const targetInv = updatedInvoicesMap.get(inv.InvoiceID) || inv;
-
-        const res = allocatePaymentToInvoice({
-          receipt: currentReceipt,
-          invoice: targetInv,
-          userId: currentUser.Full_Name,
-          remarks: `Auto-allocated against ${receipt.Receipt_Number}`,
-        });
-
-        if (res.success && res.billDetail && res.updatedReceipt && res.updatedInvoice) {
-          currentReceipt = res.updatedReceipt;
-          newBillAllocations.push(res.billDetail);
-          updatedInvoicesMap.set(res.updatedInvoice.InvoiceID, res.updatedInvoice);
-        }
-      }
-    }
-
-    // Update state
-    setReceipts((prev) => prev.map((r) => (r.Transaction_ID === currentReceipt.Transaction_ID ? currentReceipt : r)));
-    if (newBillAllocations.length > 0) {
-      setBillAllocations((prev) => [...newBillAllocations, ...prev]);
-    }
-    if (updatedInvoicesMap.size > 0) {
-      setInvoices((prev) =>
-        prev.map((i) => (updatedInvoicesMap.has(i.InvoiceID) ? updatedInvoicesMap.get(i.InvoiceID)! : i))
-      );
-    }
-
-    // Update bank account balance
-    setBankAccounts((prev) =>
-      prev.map((b) =>
-        b.BankAccount_ID === currentReceipt.Bank_Account
-          ? { ...b, Current_Balance: b.Current_Balance + currentReceipt.Received_Amount }
-          : b
-      )
-    );
-
-    logAction(
-      'ALLOCATE',
-      'Bill Wise Details',
-      receipt.Receipt_Number,
-      'Unallocated',
-      `Allocated ₹${receipt.Received_Amount - currentReceipt.Unallocated_Amount} (Advance remaining: ₹${currentReceipt.Unallocated_Amount})`,
-      'Accountant confirmed and completed bill allocation'
-    );
+  // Existing UI action is labelled "Approve & Pay"; backend performs the guarded
+  // approval/payment transition and bank balance update under one lock.
+  const approveExpense = async (expenseId: string): Promise<void> => {
+    await apiCall('approveExpense', { expenseId });
+    const now = new Date().toISOString();
+    setExpenses(prev => prev.map(e => e.Expense_ID === expenseId ? { ...e, Expense_Status: 'Approved', Approved_By: currentUser.Full_Name, Approved_At: now } : e));
   };
 
-  // Add Expense
-  const addExpense = (
-    params: Omit<
-      ExpenseRegister,
-      | 'Expense_ID'
-      | 'Voucher_No'
-      | 'Created_At'
-      | 'Created_By'
-      | 'Approved_At'
-      | 'Approved_By'
-      | 'Cancelled_At'
-      | 'Cancelled_By'
-      | 'Cancellation_Reason'
-    >
-  ): ExpenseRegister => {
-    const nextVouCode = generateNextCode('VOU', expenses.length);
-    const newExp: ExpenseRegister = {
-      ...params,
-      Expense_ID: `EXP-${Date.now()}`,
-      Voucher_No: nextVouCode,
-      Created_By: currentUser.Full_Name,
-      Created_At: new Date().toISOString(),
-      Approved_By: params.Expense_Status === 'Paid' ? currentUser.Full_Name : '',
-      Approved_At: params.Expense_Status === 'Paid' ? new Date().toISOString() : '',
-      Cancelled_By: null,
-      Cancelled_At: null,
-      Cancellation_Reason: null,
-    };
-
-    setExpenses((prev) => [newExp, ...prev]);
-
-    if (newExp.Expense_Status === 'Paid') {
-      setBankAccounts((prev) =>
-        prev.map((b) =>
-          b.BankAccount_ID === newExp.Bank_Account
-            ? { ...b, Current_Balance: b.Current_Balance - newExp.Payment_Amount }
-            : b
-        )
-      );
-    }
-
-    logAction('CREATE', 'Expense Register', nextVouCode, 'None', `₹${newExp.Payment_Amount} for ${newExp.Expense_Category}`, 'New society expenditure voucher');
-
-    return newExp;
+  const markExpensePaid = async (expenseId: string): Promise<void> => {
+    const expense = expenses.find(e => e.Expense_ID === expenseId);
+    if (!expense) throw new Error('Expense record not found.');
+    if (expense.Expense_Status !== 'Approved') throw new Error('Expense must be approved before payment.');
+    await apiCall('markExpensePaid', { expenseId });
+    const now = new Date().toISOString();
+    setExpenses(prev => prev.map(e => e.Expense_ID === expenseId ? { ...e, Expense_Status: 'Paid', Payment_Date: now.slice(0,10) } : e));
+    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === expense.Bank_Account ? { ...b, Current_Balance: Number(b.Current_Balance || 0) - Number(expense.Payment_Amount || 0) } : b));
   };
 
-  // Approve Expense
-  const approveExpense = (expenseId: string) => {
-    setExpenses((prev) =>
-      prev.map((exp) => {
-        if (exp.Expense_ID === expenseId) {
-          const updated: ExpenseRegister = {
-            ...exp,
-            Expense_Status: 'Paid',
-            Approved_By: currentUser.Full_Name,
-            Approved_At: new Date().toISOString(),
-          };
-
-          // Deduct from bank account
-          setBankAccounts((prevBanks) =>
-            prevBanks.map((b) =>
-              b.BankAccount_ID === exp.Bank_Account
-                ? { ...b, Current_Balance: b.Current_Balance - exp.Payment_Amount }
-                : b
-            )
-          );
-
-          logAction('APPROVE', 'Expense Register', exp.Voucher_No, exp.Expense_Status, 'Paid', `Approved and disbursed ₹${exp.Payment_Amount}`);
-          return updated;
-        }
-        return exp;
-      })
-    );
-  };
-
-  // Activity Requests
-  const createActivityRequest = (params: {
-    category: ActivityRequestRegister['Request_Category'];
-    subject: string;
-    description: string;
-    priority: ActivityRequestRegister['Priority'];
-    attachment?: string;
-  }): ActivityRequestRegister => {
+  // Activity Requests — server-persisted.
+  const createActivityRequest = async (params: {
+    category: ActivityRequestRegister['Request_Category']; subject: string; description: string;
+    priority: ActivityRequestRegister['Priority']; attachment?: string;
+  }): Promise<ActivityRequestRegister> => {
     const prop = residentProperty || properties[0];
-    const ownership = ownerships.find((o) => o.PropertyID === prop.PropertyID) || ownerships[0];
-    const nextReqCode = generateNextCode('REQ', activityRequests.length);
-    const today = new Date().toISOString().split('T')[0];
-
-    const newReq: ActivityRequestRegister = {
-      Request_ID: `REQ-ID-${Date.now()}`,
-      Request_Number: nextReqCode,
-      PropertyID: prop.PropertyID,
-      Ownership_ID: ownership.Ownership_ID,
-      Requested_By: currentUser.Full_Name,
-      Request_Date: today,
-      Request_Category: params.category,
-      Subject: params.subject,
-      Description: params.description,
-      Priority: params.priority,
-      Attachment: params.attachment || '',
-      Assigned_To: 'Pending Assignment',
-      Request_Status: 'Pending',
-      Admin_Remarks: '',
-      Completion_Date: null,
-      Completion_Proof: null,
-      Created_At: new Date().toISOString(),
-      Updated_At: new Date().toISOString(),
-    };
-
-    setActivityRequests((prev) => [newReq, ...prev]);
-    logAction('CREATE', 'Activity Request Register', nextReqCode, 'None', `${params.category}: ${params.subject}`, 'Resident raised service request');
-
-    return newReq;
+    if (!prop) throw new Error('No property is linked to this account.');
+    const own = ownerships.find(o => o.PropertyID === prop.PropertyID && o.Ownership_Status === 'Current');
+    if (!own) throw new Error('Current ownership record not found.');
+    const record = { PropertyID: prop.PropertyID, Ownership_ID: own.Ownership_ID,
+      Requested_By: currentUser.UserID, Request_Date: new Date().toISOString().slice(0,10),
+      Request_Category: params.category, Subject: params.subject, Description: params.description,
+      Priority: params.priority, Attachment: params.attachment || '', Assigned_To: 'Pending Assignment',
+      Request_Status: 'Pending', Admin_Remarks: '' };
+    const result: any = await apiCall('createRecord', { module: 'activityRequests', record });
+    const created: ActivityRequestRegister = { ...record, Request_ID: result.data?.recordId || `REQ-${Date.now()}`, 
+      Request_Number: result.data?.data?.Request_Number || `REQ-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}` } as ActivityRequestRegister;
+    setActivityRequests(prev => [created, ...prev]);
+    return created;
   };
 
-  const updateActivityRequest = (
-    requestId: string,
+  const updateActivityRequest = async (requestId: string,
     updates: Partial<Pick<ActivityRequestRegister, 'Request_Status' | 'Assigned_To' | 'Admin_Remarks' | 'Completion_Date' | 'Completion_Proof'>>
-  ) => {
-    setActivityRequests((prev) =>
-      prev.map((req) => {
-        if (req.Request_ID === requestId) {
-          const updated = {
-            ...req,
-            ...updates,
-            Updated_At: new Date().toISOString(),
-          };
-          logAction(
-            'UPDATE',
-            'Activity Request Register',
-            req.Request_Number,
-            req.Request_Status,
-            updates.Request_Status || req.Request_Status,
-            updates.Admin_Remarks || 'Updated activity request status/assignment'
-          );
-          return updated;
-        }
-        return req;
-      })
-    );
+  ): Promise<void> => {
+    await apiCall('updateRecord', { module: 'activityRequests', recordId: requestId, record: updates });
+    setActivityRequests(prev => prev.map(req => req.Request_ID === requestId ? { ...req, ...updates, Updated_At: new Date().toISOString() } : req));
   };
 
-  // Create Notice
-  const createNotice = (notice: Omit<NoticeMaster, 'Notice_ID' | 'Notice_Number' | 'Created_At' | 'Created_By'>) => {
-    const nextNum = `NOT-2026-${String(notices.length + 1).padStart(3, '0')}`;
-    const newNotice: NoticeMaster = {
-      ...notice,
-      Notice_ID: `NOT-${Date.now()}`,
-      Notice_Number: nextNum,
-      Created_By: currentUser.Full_Name,
-      Created_At: new Date().toISOString(),
-    };
-    setNotices((prev) => [newNotice, ...prev]);
-    logAction('CREATE', 'Notice Master', nextNum, 'None', notice.Notice_Title, 'Published society notice');
+  const createNotice = async (notice: Omit<NoticeMaster, 'Notice_ID' | 'Notice_Number' | 'Created_At' | 'Created_By'>): Promise<void> => {
+    const result: any = await apiCall('createRecord', { module: 'notices', record: notice });
+    const created = { ...notice, Notice_ID: result.data?.recordId || `NOT-${Date.now()}`,
+      Notice_Number: result.data?.data?.Notice_Number || `NOT-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
+      Created_By: currentUser.Full_Name, Created_At: new Date().toISOString() } as NoticeMaster;
+    setNotices(prev => [created, ...prev]);
   };
 
   return (
@@ -773,15 +629,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         previewVoucher,
         setPreviewVoucher,
         generateInvoice,
+        cancelInvoice,
         submitResidentPayment,
         confirmAndAllocatePayment,
         addExpense,
         approveExpense,
+        markExpensePaid,
         createActivityRequest,
         updateActivityRequest,
         createNotice,
         googleConfig,
         updateGoogleConfig,
+        uploadPrivateFile,
+        createModuleRecord,
+        updateModuleRecord,
+        cancelModuleRecord,
+        getPrivateFile,
+        createSocietyBackup,
+        configureAutomatedBackup,
+        restoreSocietyBackup,
+        listSocietyBackups,
+        listRecoveryOperations,
+        listPrivateFiles,
+        getReport,
+        createReportSnapshot,
+        approveReportSnapshot,
+        listReportSnapshots,
+        postOpeningBalances,
       }}
     >
       {children}

@@ -4,6 +4,9 @@
  */
 
 import React, { useState } from 'react';
+import { MasterDataManager } from './MasterDataManager';
+import { DocumentCenter } from './DocumentCenter';
+import { BackupManager } from './BackupManager';
 import { useApp } from '../../context/AppContext';
 import {
   Settings,
@@ -24,6 +27,7 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
   const {
     googleConfig,
     updateGoogleConfig,
+    currentUser,
     users,
     auditLogs,
     preventiveMaintenance,
@@ -31,7 +35,7 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
     t,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'google' | 'users' | 'apartment' | 'maintenance' | 'audit'>(
+  const [activeTab, setActiveTab] = useState<'google' | 'users' | 'apartment' | 'maintenance' | 'audit' | 'master' | 'documents' | 'backup'>( 
     initialSubTab === 'settings_users'
       ? 'users'
       : initialSubTab === 'settings_maintenance'
@@ -42,21 +46,14 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
   );
 
   // Google config local edit state
-  const [spreadsheetId, setSpreadsheetId] = useState(googleConfig.spreadsheetId);
-  const [driveFolderId, setDriveFolderId] = useState(googleConfig.driveFolderId);
   const [webAppUrl, setWebAppUrl] = useState(googleConfig.appsScriptWebAppUrl);
   const [saveNotice, setSaveNotice] = useState('');
   const [copiedScript, setCopiedScript] = useState(false);
 
   const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
-    updateGoogleConfig({
-      spreadsheetId,
-      driveFolderId,
-      appsScriptWebAppUrl: webAppUrl,
-      mode: 'live',
-    });
-    setSaveNotice('Settings saved. Live Google Sheets read is now enabled for Property Master.');
+    updateGoogleConfig({ appsScriptWebAppUrl: webAppUrl });
+    setSaveNotice('Apps Script endpoint saved in this browser. Verify the deployment before using live data.');
     setTimeout(() => setSaveNotice(''), 3000);
   };
 
@@ -111,6 +108,9 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
         >
           Audit Log ({auditLogs.length})
         </button>
+        {currentUser.Role !== 'Resident' && <button onClick={() => setActiveTab('master')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='master'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Master Data CRUD</button>}
+        <button onClick={() => setActiveTab('documents')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='documents'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Documents</button>
+        {currentUser.Role === 'Admin' && <button onClick={() => setActiveTab('backup')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='backup'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Backup & Restore</button>}
       </div>
 
       {/* TAB 1: GOOGLE CLOUD, SHEETS & APPS SCRIPT SETUP (SECTION 2, 14, 15) */}
@@ -145,29 +145,9 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
               )}
 
               <div className="space-y-3">
-                <div>
-                  <label className="block font-semibold mb-1">
-                    Google Spreadsheet ID: <span className="font-mono text-gray-500">[ADD_SPREADSHEET_ID]</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={spreadsheetId}
-                    onChange={(e) => setSpreadsheetId(e.target.value)}
-                    className="w-full rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 font-mono text-[#29352D]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold mb-1">
-                    Google Drive Folder ID: <span className="font-mono text-gray-500">[ADD_DRIVE_FOLDER_ID]</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={driveFolderId}
-                    onChange={(e) => setDriveFolderId(e.target.value)}
-                    className="w-full rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 font-mono text-[#29352D]"
-                  />
-                </div>
+                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  Central Master Spreadsheet ID and Drive Folder ID must be configured by the Apps Script owner in Project Settings → Script Properties. They are intentionally not requested or stored in this browser.
+                </p>
 
                 <div>
                   <label className="block font-semibold mb-1">
@@ -184,7 +164,7 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
 
               <div className="flex justify-between items-center pt-2">
                 <span className="text-[11px] text-gray-500 italic">
-                  Note: Placeholders are preserved to prevent pretending connectivity works before credentials exist.
+                  Only the public Apps Script Web App endpoint is stored here. Private spreadsheet and Drive IDs remain server-side.
                 </span>
                 <button
                   type="submit"
@@ -426,6 +406,9 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
           </div>
         </div>
       )}
+      {activeTab === 'master' && currentUser.Role !== 'Resident' && <MasterDataManager />}
+      {activeTab === 'documents' && <DocumentCenter />}
+      {activeTab === 'backup' && currentUser.Role === 'Admin' && <BackupManager />}
     </div>
   );
 };

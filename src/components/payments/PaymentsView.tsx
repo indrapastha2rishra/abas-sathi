@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   CreditCard,
@@ -34,6 +34,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     billAllocations,
     bankAccounts,
     submitResidentPayment,
+    uploadPrivateFile,
     confirmAndAllocatePayment,
     setPreviewReceipt,
     t,
@@ -53,9 +54,16 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
   );
   const [payMode, setPayMode] = useState<PaymentMode>('UPI');
   const [payRef, setPayRef] = useState('');
-  const [proofFile, setProofFile] = useState('UPI_Payment_Screenshot.jpg');
+  const [proofFile, setProofFile] = useState<File | null>(null);
   const [residentRemarks, setResidentRemarks] = useState('');
   const [residentSubmitSuccess, setResidentSubmitSuccess] = useState('');
+  const invoiceSelectionInitialized = useRef(false);
+  useEffect(() => {
+    if (!invoiceSelectionInitialized.current && myInvoices.length) {
+      setSelectedInvoiceIds(myInvoices.map(i => i.InvoiceID));
+      invoiceSelectionInitialized.current = true;
+    }
+  }, [myInvoices]);
 
   // Selected invoices total sum
   const payableTotal = myInvoices
@@ -68,34 +76,29 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     );
   };
 
-  const handleResidentSubmit = (e: React.FormEvent) => {
+  const handleResidentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (payableTotal <= 0) return;
 
-    const receipt = submitResidentPayment({
-      invoiceIds: selectedInvoiceIds,
-      amount: payableTotal,
-      mode: payMode,
-      reference: payRef,
-      bankAccount: bankAccounts[0]?.BankAccount_ID || 'BANK-SBI-01',
-      remarks: residentRemarks,
-      proofFileName: proofFile,
+    try {
+    const receipt = await submitResidentPayment({
+      invoiceIds: selectedInvoiceIds, amount: payableTotal, mode: payMode, reference: payRef,
+      bankAccount: bankAccounts[0]?.BankAccount_ID || '', remarks: residentRemarks,
+      proofFileName: proofFile ? (await uploadPrivateFile(proofFile, 'Payment Proof', residentProperty?.PropertyID)).fileId : '',
     });
 
-    setResidentSubmitSuccess(`Payment reference submitted successfully! Receipt code: ${receipt.Receipt_Number}`);
+    setResidentSubmitSuccess(`Payment submitted for verification. Transaction ID: ${receipt.Transaction_ID}. An official receipt will be issued after confirmation.`);
     setPayRef('');
-    setTimeout(() => {
-      setResidentSubmitSuccess('');
-      setPreviewReceipt(receipt);
-    }, 1500);
+    setTimeout(() => setResidentSubmitSuccess(''), 3500);
+    } catch (error:any) { window.alert(error?.message || 'Payment could not be submitted. Please retry.'); }
   };
 
   // Admin/Accountant confirmation modal state
   const [confirmingReceipt, setConfirmingReceipt] = useState<FundInflowRegister | null>(null);
 
-  const handleConfirmReceipt = (receipt: FundInflowRegister) => {
-    confirmAndAllocatePayment(receipt.Transaction_ID);
-    setConfirmingReceipt(null);
+  const handleConfirmReceipt = async (receipt: FundInflowRegister) => {
+    try { const confirmed = await confirmAndAllocatePayment(receipt.Transaction_ID); setConfirmingReceipt(null); setPreviewReceipt(confirmed); }
+    catch (error:any) { window.alert(error?.message || 'Payment confirmation failed.'); }
   };
 
   return (
@@ -178,46 +181,17 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Bank / UPI Instructions & Invoice Selection */}
           <div className="lg:col-span-7 space-y-6">
-            {/* Apartment UPI & Bank Box */}
+            {/* Society payment instructions — private bank details are not embedded in frontend source. */}
             <div className="rounded-2xl border-2 border-[#536B4D] bg-white p-6 shadow-xs">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#536B4D]/10 text-[#536B4D] uppercase">
-                    Official Society Payment Channel
-                  </span>
-                  <h3 className="text-lg font-bold text-[#29352D] mt-1.5">
-                    Abas Sathi Housing Society RWA
-                  </h3>
-                  <p className="text-xs text-gray-600">
-                    Direct bank transfer & UPI (Zero transaction charges)
-                  </p>
-                </div>
-                {/* Simulated QR Code box */}
-                <div className="flex flex-col items-center bg-[#F7F4EC] p-3 rounded-xl border border-[#E8E1D4] text-center">
-                  <div className="w-20 h-20 bg-white border border-[#536B4D] rounded-lg p-1 flex items-center justify-center">
-                    <QrCode className="h-16 w-16 text-[#29352D]" />
-                  </div>
-                  <span className="text-[9px] font-bold text-[#536B4D] mt-1">Scan with any UPI</span>
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-[#F7F4EC] p-4 rounded-xl border border-[#E8E1D4]">
-                <div>
-                  <span className="text-gray-500 block">Bank Name:</span>
-                  <span className="font-bold text-[#29352D]">State Bank of India</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 block">Account Number:</span>
-                  <span className="font-mono font-bold text-[#29352D]">39482019482</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 block">IFSC Code:</span>
-                  <span className="font-mono font-bold text-[#536B4D]">SBIN0000093</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 block">Society UPI ID:</span>
-                  <span className="font-mono font-bold text-[#C97958]">abassathi@sbi</span>
-                </div>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#536B4D]/10 text-[#536B4D] uppercase">
+                Official Society Payment Channel
+              </span>
+              <h3 className="text-lg font-bold text-[#29352D] mt-1.5">Society Payment Instructions</h3>
+              <p className="text-xs text-gray-600 mt-1">
+                Please use only the verified bank or UPI details issued by your Society Admin/Committee. Private bank account information is not embedded in this public website.
+              </p>
+              <div className="mt-4 rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] p-4 text-xs text-[#29352D]">
+                Contact your Society Admin to obtain the current verified payment details before transferring funds. Do not send money to account details received from unofficial sources.
               </div>
 
               <div className="mt-3 flex items-center gap-1.5 text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
@@ -339,17 +313,13 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                   </label>
                   <div className="flex items-center gap-2">
                     <input
-                      type="text"
-                      value={proofFile}
-                      onChange={(e) => setProofFile(e.target.value)}
+                      type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                      onChange={(e) => setProofFile(e.target.files?.[0] || null)}
                       className="flex-1 rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"
                     />
-                    <span className="px-3 py-2 bg-neutral-100 rounded-xl text-[10px] text-gray-600 border border-[#E8E1D4]">
-                      Drive Ready
-                    </span>
                   </div>
                   <p className="text-[10px] text-gray-500 mt-1">
-                    Will be securely stored in Google Drive folder: [ADD_DRIVE_FOLDER_ID]
+                    {proofFile ? `${proofFile.name} · ${(proofFile.size / 1024).toFixed(0)} KB` : 'Optional · PDF, JPG or PNG · Maximum 5 MB. The file is uploaded privately to your society Drive folder.'}
                   </p>
                 </div>
 
@@ -411,7 +381,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
               <tbody className="divide-y divide-[#E8E1D4]">
                 {receipts.map((rec) => (
                   <tr key={rec.Transaction_ID} className="hover:bg-neutral-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number}</td>
+                    <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</td>
                     <td className="px-4 py-3 text-gray-500">{rec.Date_Of_Received}</td>
                     <td className="px-4 py-3 font-bold text-[#536B4D]">{rec.Flat_No}</td>
                     <td className="px-4 py-3 font-medium">{rec.Owner_Name}</td>
@@ -443,14 +413,9 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                         >
                           Verify & Allocate
                         </button>
-                      ) : (
-                        <button
-                          onClick={() => setPreviewReceipt(rec)}
-                          className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                        >
-                          View Receipt
-                        </button>
-                      )}
+                      ) : rec.Receipt_Status === 'Confirmed' ? (
+                        <button onClick={() => setPreviewReceipt(rec)} className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">View Receipt</button>
+                      ) : <span className="text-[10px] text-amber-700">Awaiting verification</span>}
                     </td>
                   </tr>
                 ))}
@@ -516,7 +481,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
           </div>
 
           <div className="p-6 space-y-4">
-            {receipts.filter((r) => r.Unallocated_Amount > 0).map((rec) => (
+            {receipts.filter((r) => r.Receipt_Status === 'Confirmed' && r.Unallocated_Amount > 0).map((rec) => (
               <div
                 key={rec.Transaction_ID}
                 className="flex items-center justify-between p-4 rounded-xl bg-amber-50/60 border border-amber-200 text-xs"

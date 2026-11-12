@@ -276,7 +276,7 @@ export const ResidentDashboard: React.FC = () => {
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-[#29352D]">{rec.Receipt_Number}</span>
+                    <span className="font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</span>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                       {rec.Receipt_Status}
                     </span>
@@ -290,12 +290,9 @@ export const ResidentDashboard: React.FC = () => {
                     ₹{rec.Received_Amount.toLocaleString('en-IN')}
                   </span>
                   <div className="mt-1">
-                    <button
-                      onClick={() => setPreviewReceipt(rec)}
-                      className="text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                    >
-                      View Receipt
-                    </button>
+                    {rec.Receipt_Status === 'Confirmed' && rec.Receipt_Number ? (
+                      <button onClick={() => setPreviewReceipt(rec)} className="text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer">View Receipt</button>
+                    ) : <span className="text-[11px] text-amber-700">Awaiting verification</span>}
                   </div>
                 </div>
               </div>

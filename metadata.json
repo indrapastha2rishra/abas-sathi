@@ -1,6 +1,12 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "Smart Living. Better Community. Comprehensive modern Bengali residential community apartment management platform for up to 50 flats with bilingual English/Bengali support.",
+  "description": "ABAS SATHI Version 5.3.2 — bilingual apartment management with Google Apps Script, Sheets and private Drive integration.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "Authenticated Google Sheets CRUD",
+    "Private Drive document management",
+    "Automated backup and guarded restore",
+    "Server-side financial reports and journal ledger",
+    "Role and society isolation"
+  ]
 }

@@ -65,25 +65,27 @@ export const AdminDashboard: React.FC = () => {
   // Flats with outstanding dues
   const overdueInvoices = invoices.filter((i) => i.Outstanding_Amount > 0);
 
-  // Six-month collection data (historical simulation)
-  const collectionTrend = [
-    { month: 'Dec 25', billed: 154000, collected: 148000, percent: 96 },
-    { month: 'Jan 26', billed: 154000, collected: 151000, percent: 98 },
-    { month: 'Feb 26', billed: 154000, collected: 142000, percent: 92 },
-    { month: 'Mar 26', billed: 154000, collected: 153000, percent: 99 },
-    { month: 'Apr 26', billed: 158000, collected: 145000, percent: 91 },
-    { month: 'May 26', billed: 158000, collected: 89000, percent: 56 },
-  ];
+  // Calculate the last six calendar months from actual invoice and confirmed receipt rows.
+  const now = new Date();
+  const collectionTrend = Array.from({ length: 6 }, (_, index) => {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+    const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).getTime();
+    const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1).getTime();
+    const inRange = (value: string) => { const time = new Date(value).getTime(); return Number.isFinite(time) && time >= start && time < end; };
+    const billed = invoices.filter(inv => inRange(inv.Billing_Date)).reduce((sum, inv) => sum + Number(inv.Net_Charge_Amount || 0), 0);
+    const collected = receipts.filter(rec => rec.Receipt_Status === 'Confirmed' && inRange(rec.Date_Of_Received)).reduce((sum, rec) => sum + Number(rec.Received_Amount || 0), 0);
+    return { month: monthDate.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }), billed, collected, percent: billed > 0 ? Math.min(100, Math.round((collected / billed) * 100)) : 0 };
+  });
+  const monthsWithBilling = collectionTrend.filter(item => item.billed > 0);
+  const averageCollectionRate = monthsWithBilling.length ? Math.round(monthsWithBilling.reduce((sum, item) => sum + item.percent, 0) / monthsWithBilling.length) : 0;
 
-  // Financial Year Fund Summary (Items 5 to 9)
+  // Current Indian financial year (1 April – 31 March).
+  const financialYearStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const financialYearLabel = `FY ${financialYearStart}-${financialYearStart + 1}`;
   const openingBalanceTotal = bankAccounts.reduce((sum, b) => sum + (b.Opening_Balance || 0), 0);
   const fundSummary = calculateFundSummary({
-    openingBalance: openingBalanceTotal,
-    receipts,
-    expenses,
-    invoices,
-    startDate: '2026-04-01',
-    endDate: '2027-03-31',
+    openingBalance: openingBalanceTotal, receipts, expenses, invoices,
+    startDate: `${financialYearStart}-04-01`, endDate: `${financialYearStart + 1}-03-31`,
   });
 
   return (
@@ -93,15 +95,15 @@ export const AdminDashboard: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white/20 text-white backdrop-blur-xs">
-              FY 2026-2027
+              {financialYearLabel}
             </span>
-            <span className="text-xs text-white/80">Kolkata Municipal Corp Ward 93</span>
+            <span className="text-xs text-white/80">Society Management Overview</span>
           </div>
           <h1 className="mt-2 text-2xl font-bold tracking-tight">
             {t.apartmentName}
           </h1>
           <p className="text-xs text-white/80 mt-0.5">
-            {t.tagline} • Managing 50 residential units across 2 blocks.
+            {t.tagline} • Live society overview.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -193,7 +195,7 @@ export const AdminDashboard: React.FC = () => {
                 {t.fundSummaryTitle}
               </h2>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#536B4D]/10 text-[#536B4D]">
-                FY 2026-2027
+                {financialYearLabel}
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5">
@@ -401,7 +403,7 @@ export const AdminDashboard: React.FC = () => {
               </h3>
               <p className="text-xs text-gray-500">Monthly billing vs actual realized collections</p>
             </div>
-            <span className="text-xs font-semibold text-[#536B4D]">Average 95.2%</span>
+            <span className="text-xs font-semibold text-[#536B4D]">Average {averageCollectionRate}%</span>
           </div>
 
           <div className="mt-4 flex items-end justify-between gap-3 pt-6 pb-2 h-48 border-b border-[#E8E1D4]">

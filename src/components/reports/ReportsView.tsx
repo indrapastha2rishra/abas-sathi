@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { BalanceSheetWorkflow } from './BalanceSheetWorkflow';
 import { useApp } from '../../context/AppContext';
 import {
   BarChart3,
@@ -26,11 +27,12 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     owners,
     bankAccounts,
     accountHeads,
+    getReport,
     t,
   } = useApp();
 
   const [activeReport, setActiveReport] = useState<
-    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'balancesheet'
+    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'expense_summary' | 'balancesheet'
   >(
     initialReport === 'reports_property_due'
       ? 'property_due'
@@ -41,7 +43,37 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       : 'monthly'
   );
 
-  const [selectedMonth, setSelectedMonth] = useState('2026-04');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0,7));
+  const [serverReport,setServerReport] = useState<any>(null);
+  const [serverReportError,setServerReportError] = useState('');
+  const [serverReportLoading,setServerReportLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled=false;
+    const load=async()=>{
+      setServerReportLoading(true);setServerReportError('');
+      try {
+        let type='receiptPayment',filters:any={};
+        if(activeReport==='property_due')type='outstanding';
+        else if(activeReport==='owner_due')type='ownerOutstanding';
+        else if(activeReport==='expense_summary') {
+          type='expenseSummary';const [y,m]=selectedMonth.split('-').map(Number);const last=new Date(y,m,0).getDate();
+          filters={fromDate:`${selectedMonth}-01`,toDate:`${selectedMonth}-${String(last).padStart(2,'0')}`};
+        }
+        else if(activeReport==='fy') {
+          type='financialYear';const year=Number(selectedMonth.slice(0,4));
+          const startMonth=Number(selectedMonth.slice(5,7));
+          const fyStart=startMonth>=4?year:year-1;
+          filters={fromDate:`${fyStart}-04-01`,toDate:`${fyStart+1}-03-31`};
+        } else if(activeReport==='balancesheet')type='balanceSheet';
+        else {const [y,m]=selectedMonth.split('-').map(Number);const last=new Date(y,m,0).getDate();filters={fromDate:`${selectedMonth}-01`,toDate:`${selectedMonth}-${String(last).padStart(2,'0')}`};}
+        const result:any=await getReport(type,filters);
+        if(!cancelled)setServerReport(result);
+      } catch(e:any){if(!cancelled)setServerReportError(e?.message||'Server report could not be loaded.');}
+      finally{if(!cancelled)setServerReportLoading(false);}
+    };
+    void load();return()=>{cancelled=true;};
+  },[activeReport,selectedMonth]);
 
   // Cash Inflows for the month
   const monthReceipts = receipts.filter((r) => r.Receipt_Status === 'Confirmed' && r.Date_Of_Received.startsWith(selectedMonth));
@@ -120,12 +152,36 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
           Monthly Receipt & Payment (Cash Basis)
         </button>
         <button
+          onClick={() => setActiveReport('fy')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeReport === 'fy' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Financial Year
+        </button>
+        <button
           onClick={() => setActiveReport('property_due')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeReport === 'property_due' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
           }`}
         >
           Property-wise Outstanding (50 Flats)
+        </button>
+        <button
+          onClick={() => setActiveReport('expense_summary')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeReport === 'expense_summary' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Expense Summary
+        </button>
+        <button
+          onClick={() => setActiveReport('owner_due')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeReport === 'owner_due' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Owner-wise Outstanding
         </button>
         <button
           onClick={() => setActiveReport('balancesheet')}
@@ -138,6 +194,24 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       </div>
 
       {/* REPORT 1: MONTHLY RECEIPT & PAYMENT STATEMENT */}
+      {activeReport !== 'balancesheet' && (
+        <div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-2">
+          <div className="flex items-center justify-between"><h3 className="font-bold text-sm">Server-side Report Results</h3><span className="text-[10px] text-gray-500">{serverReport?.generatedAt||''}</span></div>
+          {serverReportLoading?<p className="text-xs text-gray-500">Loading server report…</p>:serverReportError?<p className="text-xs text-red-700">{serverReportError}</p>:(
+            activeReport==='monthly'?<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div className="rounded-lg bg-[#F7F4EC] p-3">Confirmed Receipts<strong className="block text-base">₹{Number(serverReport?.data?.totalReceipts||0).toLocaleString('en-IN')}</strong></div>
+              <div className="rounded-lg bg-[#F7F4EC] p-3">Paid Expenses<strong className="block text-base">₹{Number(serverReport?.data?.totalPayments||0).toLocaleString('en-IN')}</strong></div>
+              <div className="rounded-lg bg-[#F7F4EC] p-3">Net Cash Movement<strong className="block text-base">₹{Number(serverReport?.data?.netCashMovement||0).toLocaleString('en-IN')}</strong></div>
+            </div>:activeReport==='fy'?<div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="bg-[#F7F4EC] rounded-lg p-3">Billed<strong className="block">₹{Number(serverReport?.data?.billed||0).toLocaleString('en-IN')}</strong></div>
+              <div className="bg-[#F7F4EC] rounded-lg p-3">Receipts<strong className="block">₹{Number(serverReport?.data?.receipts||0).toLocaleString('en-IN')}</strong></div>
+              <div className="bg-[#F7F4EC] rounded-lg p-3">Paid Expenses<strong className="block">₹{Number(serverReport?.data?.paidExpenses||0).toLocaleString('en-IN')}</strong></div>
+              <div className="bg-[#F7F4EC] rounded-lg p-3">Outstanding<strong className="block">₹{Number(serverReport?.data?.outstanding||0).toLocaleString('en-IN')}</strong></div>
+            </div>:activeReport==='expense_summary'?<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">Expense Category</th><th className="p-2">Paid Vouchers</th><th className="p-2 text-right">Total Paid</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.Category} className="border-b"><td className="p-2">{r.Category}</td><td className="p-2">{r.Count}</td><td className="p-2 text-right">₹{Number(r.Total||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>:<div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">ID</th><th className="p-2">Name / Flat</th><th className="p-2">Invoices</th><th className="p-2 text-right">Outstanding</th></tr></thead><tbody>{(Array.isArray(serverReport?.data)?serverReport.data:[]).map((r:any)=><tr key={r.PropertyID||r.OwnerID} className="border-b"><td className="p-2">{r.PropertyID||r.OwnerID}</td><td className="p-2">{r.Flat_No||r.Owner_Name}</td><td className="p-2">{r.Invoice_Count}</td><td className="p-2 text-right">₹{Number(r.Outstanding||0).toLocaleString('en-IN')}</td></tr>)}</tbody></table></div>
+          )}
+        </div>
+      )}
+
       {activeReport === 'monthly' && (
         <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs space-y-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-[#E8E1D4] pb-4">
@@ -348,10 +422,12 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
             </p>
           </div>
 
-          {/* Account Head Master Balances */}
+          <BalanceSheetWorkflow />
+
+          {/* Account Head Master Reference */}
           <div>
             <h3 className="font-bold text-sm text-[#29352D] mb-3">
-              Account Head Master Ledger Balances (Sheet U)
+              Account Head Master Opening Balance Reference (Sheet U)
             </h3>
             <div className="rounded-xl border border-[#E8E1D4] overflow-hidden">
               <table className="w-full text-left text-xs">

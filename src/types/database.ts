@@ -122,11 +122,11 @@ export interface InvoiceRegister {
 }
 
 export type PaymentMode = 'UPI' | 'NEFT' | 'IMPS' | 'Cheque' | 'Cash' | 'Card';
-export type ReceiptStatus = 'Confirmed' | 'Pending Verification' | 'Cancelled' | 'Bounced';
+export type ReceiptStatus = 'Confirmed' | 'Pending Verification' | 'Rejected' | 'Cancelled' | 'Bounced';
 
 export interface FundInflowRegister {
   Transaction_ID: string;
-  Receipt_Number: string; // REC-2026-XXXX
+  Receipt_Number: string; // RCT-YYYY-######; assigned only after confirmation
   Date_Of_Received: string;
   PropertyID: string;
   Ownership_ID: string;

@@ -163,8 +163,7 @@ export const InvoicePrintModal: React.FC = () => {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pt-4 border-t border-[#E8E1D4]">
             <div className="text-xs text-[#29352D]/80 max-w-md">
               <p className="font-semibold text-[#536B4D]">Payment Instructions / পেমেন্ট নির্দেশিকা:</p>
-              <p>• Bank: State Bank of India | A/c: 39482019482 | IFSC: SBIN0000093</p>
-              <p>• Society UPI ID: <strong>abassathi@sbi</strong></p>
+              <p>• Please obtain current verified bank/UPI details from your Society Admin.</p>
               <p>• Please quote Flat No & Invoice No in payment remarks.</p>
             </div>
             <div className="w-full md:w-64 bg-[#F7F4EC] p-4 rounded-xl border border-[#E8E1D4] text-right">

@@ -10,7 +10,7 @@ import { Printer, X, CheckCircle2 } from 'lucide-react';
 export const ReceiptPrintModal: React.FC = () => {
   const { previewReceipt, setPreviewReceipt, billAllocations, t } = useApp();
 
-  if (!previewReceipt) return null;
+  if (!previewReceipt || previewReceipt.Receipt_Status !== 'Confirmed' || !previewReceipt.Receipt_Number) return null;
 
   const allocations = billAllocations.filter((a) => a.Transaction_ID === previewReceipt.Transaction_ID);
 

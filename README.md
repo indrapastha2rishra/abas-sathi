@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Project Overview & Phase Roadmap
+## 1. Project Overview — Version 5.3.2
 
 - **Website foundation:** Responsive, bilingual (English & Bengali) React application. Includes all 4 roles (Admin, Committee, Accountant, Resident), 21 Google Sheets database models, rate calculations, payment workflows, print/save PDF modals, and Google Apps Script integration architecture.
 - **Phase 2 (Next):** Live Google Sheets & Google Drive API backend synchronization.
@@ -30,13 +30,12 @@ In accordance with strict budget guidelines:
 Users sign in with Society Code, Login ID and Password. Role and flat access are read from the Central Master Database.
 
 1. **Admin (সোসাইটি সভাপতি / প্রশাসক):**
-   - Full access across all 8 modules.
-   - Generates invoices, approves expenses, oversees preventive maintenance, and edits society profile.
+   - Society administration, user management, invoice generation, payment verification, expense approval, backup and report snapshot approval.
 2. **Committee Member (পরিচালনা কমিটি):**
    - View properties, bills, receipts, and financial reports.
    - Manages and resolves resident Activity Requests.
 3. **Accountant / Treasurer (হিসাবরক্ষক):**
-   - Full financial operations: Generate Invoices, Record Payments, Bill-wise Allocation, Expense Vouchers, and Monthly Receipt & Payment statements.
+   - Record and verify permitted financial entries, confirm payments, allocate receipts, mark Admin-approved expenses as Paid, manage bank records and prepare financial reports. Invoice generation remains Admin-only.
 4. **Resident (ফ্ল্যাট বাসিন্দা / মালিক):**
    - Isolated to own flat details (e.g. Flat 101 - Anirban Mukherjee).
    - Views personal bills, downloads invoices, submits bank/UPI payment references with payment proof, and tracks service requests.
@@ -54,7 +53,10 @@ npm install
 # 2. Run unit tests
 npm test
 
-# 3. Start development server
+# 3. TypeScript check
+npm run lint
+
+# 4. Start development server
 npm run dev
 ```
 
@@ -102,7 +104,7 @@ Copy your Spreadsheet ID from the URL:
 ### Step 2: Deploy Google Apps Script
 1. Inside your Google Sheet, click **Extensions -> Apps Script**.
 2. Replace `Code.gs` with the provided code in `/apps_script/Code.gs`.
-3. Insert your `SPREADSHEET_ID` and `DRIVE_FOLDER_ID`.
+3. In Apps Script → Project Settings → Script Properties, set `CENTRAL_MASTER_SPREADSHEET_ID` and `DEFAULT_DRIVE_FOLDER_ID` (see Version 5.3.1 release notes). Do not place these IDs in frontend code or public GitHub files.
 4. Click **Deploy -> New Deployment**.
 5. Select type: **Web App**.
    - Execute as: **Me**
@@ -110,11 +112,7 @@ Copy your Spreadsheet ID from the URL:
 6. Copy the generated Web App URL.
 
 ### Step 3: Configure ABAS SATHI Settings
-Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigation:
-- Paste `[ADD_SPREADSHEET_ID]`
-- Paste `[ADD_DRIVE_FOLDER_ID]`
-- Paste `[ADD_APPS_SCRIPT_WEB_APP_URL]`
-- Click **Save Config**.
+Navigate to **Settings -> Google Backend Setup Guide** in ABAS SATHI and configure the Apps Script Web App URL. Spreadsheet and Drive IDs are configured only in Apps Script Script Properties / Central Master; they are not required in the browser.
 
 ---
 
@@ -161,7 +159,7 @@ Navigate to **Settings -> Google Backend Setup Guide** in the ABAS SATHI navigat
 6. Deploy the Apps Script as a Web App and set its `/exec` URL in `Login.tsx` if the deployment URL differs.
 7. Push the complete updated repository to GitHub and allow the Actions deployment to finish.
 
-The website now starts at Login and does not initialize sample/demo records. After authentication it reads the society's 21 tabs through the backend. This codebase currently supports authenticated live reads and selected backend actions only. Several create/update workflows still update browser state rather than persisting to Google Sheets, and not every write action has server-side role authorization. It is therefore not yet production-ready for live financial/accounting operations. Complete and independently test every write API, server-side authorization rule, audit trail, concurrency control, backup/restore and Drive permission before real deployment.
+The website starts at Login and does not initialize sample/demo records. Version 5.3.1 requests modules selectively from the authenticated backend. Some financial workflows now persist server-side; however, not every module has a complete screen-level CRUD form or live-tested workflow. This codebase remains a staging/pilot build, not a certified production accounting system. Complete the owner live-test checklist before real deployment.
 
 
 ## Authentication, profile and KYC update
@@ -175,3 +173,90 @@ See `AUTH_KYC_SETUP_BN_EN.txt` for the complete setup and deployment guide. The 
 - Canonical Property Master fields are `Carpet_Area`, `Allocated_Common_Area`, `Structural_Area`, and `Super_Built_up_Area`. The frontend accepts legacy area headers on read for migration compatibility; new/updated sheets should use the canonical names.
 - Ownership History joins `Owner Master` and `Property Master` in the UI and no longer displays `PropertyID` as a column.
 - Sign-out clears the local session immediately; server token revocation is sent best-effort in the background.
+
+
+## Version 5.3 — selective read API foundation (12-Nov-2026)
+
+This update changes protected society-data reads to POST requests so session tokens are no longer sent in query strings. It adds the following server-side read actions: `getModuleData` (module key, pagination, search and common filters) and `getDashboardSummary`. The existing v5.2 UI still calls the compatibility `getSocietyData` bulk-read action; migrate screens module-by-module before relying on selective loading for performance.
+
+**Important release status:** Version 5.3 in this package is an incremental security/read-API foundation, not a completed production accounting release. Invoice generation, payment confirmation/allocation, expense approval, general CRUD, full Drive document workflows, backup/restore and complete server-side authorization for every action are not yet implemented. Do not use browser-only state updates as the official ledger. See `V5.3_IMPLEMENTATION_STATUS_BN.md` and `V5.3_API_REFERENCE.md`.
+
+### API request format
+
+Send JSON in a POST body with `Content-Type: text/plain;charset=utf-8` (to avoid an unnecessary CORS preflight for the Apps Script Web App):
+
+```json
+{
+  "action": "getModuleData",
+  "token": "<session-token>",
+  "module": "properties",
+  "page": 1,
+  "limit": 50
+}
+```
+
+Supported module keys and authorization notes are documented in `V5.3_API_REFERENCE.md`. Never place a session token in a URL or share it in screenshots/logs.
+
+---
+
+## Version 5.3.1 — Financial & Security Completion Work (12-Nov-2026)
+
+**Release status: STAGING / PILOT ONLY — NOT CERTIFIED PRODUCTION READY.** This update adds server-side invoice generation, payment submission/confirmation/allocation, expense creation/approval-payment, allowlisted generic CRUD actions, selective per-screen module reads, private file registry/download checks, operation idempotency records and backup helpers. Some frontend financial actions now wait for backend confirmation before updating UI state. See:
+
+- `V5.3.1_RELEASE_NOTES_BN.md` — Bengali changes, owner setup, known limits and rollback.
+- `V5.3.1_API_REFERENCE.md` — request/response actions and role notes.
+- `V5.3.1_TEST_REPORT.md` — actual checks run and blocked tests.
+
+### Required Apps Script Script Properties (do not paste IDs into source code)
+
+In Apps Script → Project Settings → Script Properties, add:
+
+- `CENTRAL_MASTER_SPREADSHEET_ID` = your Central Master spreadsheet ID.
+- `DEFAULT_DRIVE_FOLDER_ID` = private root Google Drive folder ID.
+
+The `Society Master` tab should include `Society_Code`, `Society_Status`, `Database_ID`, `Society_Name`, and preferably `Drive_Folder_ID`. Each society database must preserve the exact tabs and headers in the database roadmap. `Invoice_Register` and `Invoice Register` are both accepted by the new selective reader/financial API.
+
+### New internal tabs
+
+The backend creates hidden `_Operation Ledger` and `_File Registry` tabs as needed. Do not delete or edit these tabs manually. A `STARTED` operation may have partially written data; reconcile the linked register rows before retrying.
+
+### Selective loading
+
+The React app now requests only modules needed by the active navigation screen using `getModuleData`. The API pages unfiltered non-Resident reads in 200-row windows. Filtered and Resident queries may still scan a complete sheet to apply row-level filters. Not all screens have server pagination controls yet.
+
+### Live testing warning
+
+No live Google account, deployed Apps Script endpoint, Drive folder, or GitHub repository was available in this development session. `npm install` timed out, so semantic TypeScript checking and Vite build were blocked. Do not treat this ZIP as a production-ready accounting ledger until the owner completes the live tests and deployment checklist in the Bengali release notes.
+
+
+## Version 5.3.2 — New Modules
+
+### Master Data CRUD
+Open **Settings → Master Data CRUD**. Admin, Committee and Accountant see only modules allowed to their server-side role. Create/Edit/Archive requests are saved through authenticated Apps Script APIs. Ownership History is preserved; it is not physically archived.
+
+### Private Document Center
+Open **Settings → Documents**. Upload PDF/JPG/PNG files up to 5 MB. Files are private in the society's Drive folder. Categories include Owner Document, Expense Voucher, Gallery Photo, Notice Attachment, Activity Request Attachment, Payment Proof and Invoice PDF. Where a related module and record ID are supplied, the backend writes the file ID to the matching document-reference column. Downloads are authorized by the backend.
+
+### Backup and Restore
+Admin opens **Settings → Backup & Restore**. Manual backup copies the society spreadsheet. Daily automation copies Central Master and active society spreadsheets at approximately 02:00 in the Apps Script project timezone. Restore verifies that the backup is registered for the same society and creates a pre-restore copy before replacing sheets. The Apps Script owner must authorize Drive and trigger scopes. Test restore on a non-production copy first.
+
+### Reports and Balance Sheet
+`getReports` supports Receipt & Payment, Financial Year, Property Outstanding, Owner Outstanding, Expense Summary and Balance Sheet data. New invoice, confirmed payment, paid expense and invoice reversal transactions post double-entry rows to hidden `_Journal Ledger`. Admin can post one balanced opening-balance batch. Accountant can submit a Balance Sheet snapshot; a different Admin must verify its SHA-256 payload hash and approve it.
+
+**Important:** The Balance Sheet is an internal system-generated report, not an independent statutory audit. Pre-Version 5.3.2 historical transactions are not automatically journalized. Before go-live, reconcile historical bank balances, outstanding receivables, advances, liabilities and equity into the one-time opening journal batch with the society's accountant/auditor. Use consistent account names: `Accounts Receivable`, `Resident Advances`, `Bank: <Bank_Name>`, `Expense: <Expense_Category>` and `<Purpose> Income`. Fund balances are grouped with equity in the Balance Sheet report.
+
+### New internal tabs
+The backend creates these hidden tabs as needed:
+- `_Journal Ledger`
+- `_Backup Log`
+- `_Restore Log`
+- `Report Snapshot Register`
+- `_File Registry` (additional relationship and MIME metadata columns may be appended)
+- `_Operation Ledger` (already used for idempotency and recovery state)
+
+### Known limitations
+- Apps Script/Sheets do not provide multi-sheet ACID transactions. If an execution stops after some writes, an operation can remain `STARTED`; reconcile the Operation Ledger and related rows before retrying.
+- Drive upload uses Base64 request payloads and is limited to 5 MB. For larger documents, use a different authenticated upload architecture.
+- Restore replaces sheets present in the backup but may preserve newer internal tabs not present in the backup. Compare the restored workbook against the backup after any restore.
+- Automated backup retention/rotation is not configured; monitor Drive storage and remove old backups only after confirming a newer verified copy.
+- Live Google Sheets/Drive tests and GitHub Pages deployment have not been performed in this environment.

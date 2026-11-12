@@ -3,12 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Bell, Calendar, Image as ImageIcon, Download, Tag } from 'lucide-react';
 
 export const ResidentNoticesView: React.FC = () => {
-  const { notices, gallery, t } = useApp();
+  const { notices, gallery, getPrivateFile, t } = useApp();
+  const [imageSources,setImageSources] = useState<Record<string,string>>({});
+  useEffect(()=>{
+    let cancelled=false;
+    const load=async()=>{
+      const next:Record<string,string>={};
+      for(const item of gallery){
+        const ref=String(item.Photo_File_Reference||(item as any).Photo_File_ID||'');
+        if(!ref)continue;
+        if(/^https?:\/\//i.test(ref)){next[item.Gallery_ID]=ref;continue;}
+        try{const r:any=await getPrivateFile(ref);next[item.Gallery_ID]=`data:${r.data.mimeType};base64,${r.data.base64}`;}catch{/* keep unavailable image placeholder */}
+      }
+      if(!cancelled)setImageSources(next);
+    };
+    void load();return()=>{cancelled=true;};
+  },[gallery]);
+  const downloadAttachment=async(fileId:string,fileName:string)=>{
+    if(/^https?:\/\//i.test(fileId)){window.open(fileId,'_blank','noopener,noreferrer');return;}
+    try{const r:any=await getPrivateFile(fileId);const bytes=Uint8Array.from(atob(r.data.base64),(c)=>c.charCodeAt(0));const blob=new Blob([bytes],{type:r.data.mimeType});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fileName||r.data.fileName||'notice-attachment';a.click();URL.revokeObjectURL(url);}
+    catch(e:any){window.alert(e?.message||'Attachment download failed or access was denied.');}
+  };
 
   return (
     <div className="space-y-8">
@@ -48,10 +68,10 @@ export const ResidentNoticesView: React.FC = () => {
                   <Calendar className="h-3.5 w-3.5 text-[#536B4D]" />
                   Published: {notice.Publish_Date}
                 </span>
-                {notice.Attachment && (
-                  <span className="font-semibold text-[#536B4D] underline cursor-pointer">
-                    {notice.Attachment}
-                  </span>
+                {(notice.Attachment || (notice as any).Attachment_File_ID) && (
+                  <button onClick={()=>void downloadAttachment(String((notice as any).Attachment_File_ID||notice.Attachment),notice.Notice_Title||'notice-attachment')} className="font-semibold text-[#536B4D] underline cursor-pointer">
+                    Download Attachment
+                  </button>
                 )}
               </div>
             </div>
@@ -79,7 +99,7 @@ export const ResidentNoticesView: React.FC = () => {
             >
               <div className="h-44 overflow-hidden relative">
                 <img
-                  src={item.Photo_File_Reference}
+                  src={imageSources[item.Gallery_ID] || ''}
                   alt={item.Event_Name}
                   className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
