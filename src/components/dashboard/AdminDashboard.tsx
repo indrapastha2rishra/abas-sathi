@@ -33,7 +33,9 @@ export const AdminDashboard: React.FC = () => {
     receipts,
     expenses,
     bankAccounts,
-    auditLogs,
+    activityRequests,
+    billAllocations,
+    tenants,
     preventiveMaintenance,
     notices,
     gallery,
@@ -46,7 +48,17 @@ export const AdminDashboard: React.FC = () => {
   // Metrics
   const totalProperties = properties.length;
   const occupiedProperties = properties.filter((p) => p.Occupancy_Status !== 'Vacant').length;
-  const tenantProperties = properties.filter((p) => p.Occupancy_Status === 'Tenant Occupied').length;
+  const today = new Date();
+  const localDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const todayKey = localDateKey(today);
+  const isActiveTenant = (tenant: any) => {
+    if (String(tenant.Status || '').trim().toLowerCase() !== 'active') return false;
+    const start = String(tenant.Occupancy_Start_Date || '').slice(0, 10);
+    const end = String(tenant.Occupancy_End_Date || '').slice(0, 10);
+    return (!start || start <= todayKey) && (!end || end >= todayKey);
+  };
+  const tenantPropertyIds = new Set(tenants.filter(isActiveTenant).map((t: any) => String(t.PropertyID || '')).filter(Boolean));
+  const tenantProperties = tenantPropertyIds.size;
 
   const occupancyRate = totalProperties > 0 ? ((occupiedProperties / totalProperties) * 100).toFixed(1) : '0';
   const tenantRate = totalProperties > 0 ? ((tenantProperties / totalProperties) * 100).toFixed(1) : '0';
@@ -54,7 +66,6 @@ export const AdminDashboard: React.FC = () => {
   // Invoice breakdown
   const totalBilled = invoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0);
   const totalCollected = invoices.reduce((sum, inv) => sum + (inv.Paid_Amount || 0), 0);
-  const totalOutstanding = invoices.reduce((sum, inv) => sum + (inv.Outstanding_Amount || 0), 0);
   const collectionRate = totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0';
 
   const paidCount = invoices.filter((i) => i.Invoice_Status === 'Paid').length;
@@ -63,21 +74,24 @@ export const AdminDashboard: React.FC = () => {
   const overdueCount = invoices.filter((i) => i.Invoice_Status === 'Overdue').length;
 
   // Flats with outstanding dues
-  const overdueInvoices = invoices.filter((i) => i.Outstanding_Amount > 0);
 
-  // Calculate the last six calendar months from actual invoice and confirmed receipt rows.
+  // Last six calendar months: actual confirmed receipts only.
   const now = new Date();
   const collectionTrend = Array.from({ length: 6 }, (_, index) => {
     const monthDate = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
-    const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1).getTime();
-    const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1).getTime();
-    const inRange = (value: string) => { const time = new Date(value).getTime(); return Number.isFinite(time) && time >= start && time < end; };
-    const billed = invoices.filter(inv => inRange(inv.Billing_Date)).reduce((sum, inv) => sum + Number(inv.Net_Charge_Amount || 0), 0);
-    const collected = receipts.filter(rec => rec.Receipt_Status === 'Confirmed' && inRange(rec.Date_Of_Received)).reduce((sum, rec) => sum + Number(rec.Received_Amount || 0), 0);
-    return { month: monthDate.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }), billed, collected, percent: billed > 0 ? Math.min(100, Math.round((collected / billed) * 100)) : 0 };
+    const startKey = localDateKey(new Date(monthDate.getFullYear(), monthDate.getMonth(), 1));
+    const endKey = localDateKey(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1));
+    const inRange = (value: string) => {
+      const key = String(value || '').slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(key) && key >= startKey && key < endKey;
+    };
+    const collected = receipts
+      .filter(rec => String(rec.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && inRange(rec.Date_Of_Received))
+      .reduce((sum, rec) => sum + Number(rec.Received_Amount || 0), 0);
+    return { month: monthDate.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }), collected };
   });
-  const monthsWithBilling = collectionTrend.filter(item => item.billed > 0);
-  const averageCollectionRate = monthsWithBilling.length ? Math.round(monthsWithBilling.reduce((sum, item) => sum + item.percent, 0) / monthsWithBilling.length) : 0;
+  const maxMonthlyCollection = Math.max(1, ...collectionTrend.map(item => item.collected));
+  const averageMonthlyCollection = collectionTrend.reduce((sum, item) => sum + item.collected, 0) / collectionTrend.length;
 
   // Current Indian financial year (1 April – 31 March).
   const financialYearStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
@@ -87,6 +101,44 @@ export const AdminDashboard: React.FC = () => {
     openingBalance: openingBalanceTotal, receipts, expenses, invoices,
     startDate: `${financialYearStart}-04-01`, endDate: `${financialYearStart + 1}-03-31`,
   });
+
+  // Bill Wise Details is the allocation ledger. Only confirmed receipt allocations
+  // reduce invoice dues. Legacy invoices without allocation rows use Paid_Amount.
+  const confirmedTransactionIds = new Set(receipts
+    .filter(r => String(r.Receipt_Status || '').toLowerCase() === 'confirmed')
+    .map(r => String(r.Transaction_ID || '')));
+  const allocationsByInvoice = new Map<string, number>();
+  billAllocations.forEach(row => {
+    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
+    const key = String(row.InvoiceID || '');
+    if (key) allocationsByInvoice.set(key, (allocationsByInvoice.get(key) || 0) + Number(row.Allocated_Amount || 0));
+  });
+  const outstandingRows = invoices
+    .filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')))
+    .map(inv => {
+      const key = String(inv.InvoiceID || '');
+      const paid = allocationsByInvoice.has(key) ? (allocationsByInvoice.get(key) || 0) : Number(inv.Paid_Amount || 0);
+      return { ...inv, Paid_Amount: paid, Outstanding_Amount: Math.max(0, Number(inv.Net_Charge_Amount || 0) - paid) };
+    })
+    .filter(inv => inv.Outstanding_Amount > 0)
+    .sort((a, b) => String(a.Due_Date || '').localeCompare(String(b.Due_Date || '')));
+  const totalOutstanding = outstandingRows.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
+  fundSummary.outstandingCollection = totalOutstanding;
+  const recentRequests = [...activityRequests]
+    .sort((a, b) => String(b.Updated_At || b.Request_Date || b.Created_At || '').localeCompare(String(a.Updated_At || a.Request_Date || a.Created_At || '')))
+    .slice(0, 4);
+  const scheduledMaintenance = [...preventiveMaintenance]
+    .filter(item => !['Completed', 'Cancelled'].includes(String(item.Maintenance_Status || '')))
+    .sort((a, b) => String(a.Next_Service_Date || '').localeCompare(String(b.Next_Service_Date || '')))
+    .slice(0, 5);
+  const activeNotices = notices
+    .filter(notice => {
+      const status = String(notice.Notice_Status || '').trim().toLowerCase();
+      const publish = String(notice.Publish_Date || '').slice(0, 10);
+      const expiry = String(notice.Expiry_Date || '').slice(0, 10);
+      return status === 'published' && (!publish || publish <= todayKey) && (!expiry || expiry >= todayKey);
+    })
+    .sort((a, b) => String(b.Publish_Date || '').localeCompare(String(a.Publish_Date || '')));
 
   return (
     <div className="space-y-6">
@@ -136,9 +188,9 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <p className="text-2xl font-bold text-[#29352D] mt-2">{totalProperties}</p>
           <div className="flex items-center gap-1.5 text-xs text-[#29352D]/70 mt-1">
-            <span className="font-semibold text-[#536B4D]">Block A: 25</span>
+            <span className="font-semibold text-[#536B4D]">Blocks: {new Set(properties.map(p => p.Block_Tower).filter(Boolean)).size}</span>
             <span>•</span>
-            <span className="font-semibold text-[#536B4D]">Block B: 25</span>
+            <span className="font-semibold text-[#536B4D]">Active records: {properties.filter(p => p.Property_Status === 'Active').length}</span>
           </div>
         </div>
 
@@ -166,7 +218,7 @@ export const AdminDashboard: React.FC = () => {
           </div>
           <p className="text-2xl font-bold text-[#29352D] mt-2">{tenantRate}%</p>
           <p className="text-xs text-gray-500 mt-1">
-            {tenantProperties} rented flats (Police verified)
+            {tenantProperties} flats with active tenant records
           </p>
         </div>
 
@@ -205,7 +257,7 @@ export const AdminDashboard: React.FC = () => {
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#F7F4EC] border border-[#E8E1D4] font-medium text-[11px] text-[#29352D]">
               <Landmark className="h-3.5 w-3.5 text-[#536B4D]" />
-              SBI Op A/c & HDFC Sinking Fund
+              {bankAccounts.length} bank accounts
             </span>
           </div>
         </div>
@@ -226,7 +278,7 @@ export const AdminDashboard: React.FC = () => {
               <span>{t.statOpeningFundDesc}</span>
             </div>
             <p className="text-[10px] text-[#536B4D] font-medium mt-0.5">
-              SBI ₹4.85L + HDFC ₹12.50L
+              Opening balances from Bank Account Master
             </p>
           </div>
 
@@ -401,22 +453,22 @@ export const AdminDashboard: React.FC = () => {
               <h3 className="text-sm font-bold text-[#29352D]">
                 Collection Trend – Last 6 Months / বিগত ৬ মাসের আদায়
               </h3>
-              <p className="text-xs text-gray-500">Monthly billing vs actual realized collections</p>
+              <p className="text-xs text-gray-500">Confirmed receipts recorded in Fund Inflow Register</p>
             </div>
-            <span className="text-xs font-semibold text-[#536B4D]">Average {averageCollectionRate}%</span>
+            <span className="text-xs font-semibold text-[#536B4D]">6-month average ₹{Math.round(averageMonthlyCollection).toLocaleString('en-IN')}</span>
           </div>
 
           <div className="mt-4 flex items-end justify-between gap-3 pt-6 pb-2 h-48 border-b border-[#E8E1D4]">
             {collectionTrend.map((item) => (
               <div key={item.month} className="flex-1 flex flex-col items-center gap-2 group">
                 <span className="text-[10px] font-bold text-[#29352D] group-hover:text-[#536B4D] transition-colors">
-                  {item.percent}%
+                  ₹{Math.round(item.collected).toLocaleString('en-IN')}
                 </span>
                 <div className="w-full max-w-[36px] bg-[#E8E1D4] rounded-t-lg h-32 flex flex-col justify-end p-0.5">
                   <div
                     className="w-full bg-[#536B4D] rounded-t-md transition-all group-hover:bg-[#3F523A]"
-                    style={{ height: `${item.percent}%` }}
-                    title={`Realized: ₹${item.collected.toLocaleString('en-IN')} of ₹${item.billed.toLocaleString('en-IN')}`}
+                    style={{ height: `${item.collected > 0 ? Math.max(3, (item.collected / maxMonthlyCollection) * 100) : 0}%` }}
+                    title={`Confirmed receipts: ₹${item.collected.toLocaleString('en-IN')}`}
                   ></div>
                 </div>
                 <span className="text-[10px] font-medium text-[#29352D]/70">{item.month}</span>
@@ -426,10 +478,10 @@ export const AdminDashboard: React.FC = () => {
 
           <div className="mt-3 flex items-center justify-center gap-4 text-xs text-gray-500">
             <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm bg-[#536B4D]"></span> Realized Collection
+              <span className="h-2.5 w-2.5 rounded-sm bg-[#536B4D]"></span> Confirmed Collection
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm bg-[#E8E1D4]"></span> Total Billed
+              <span className="h-2.5 w-2.5 rounded-sm bg-[#E8E1D4]"></span> Monthly receipt amount
             </span>
           </div>
         </div>
@@ -444,7 +496,7 @@ export const AdminDashboard: React.FC = () => {
               7. Outstanding Charges / বকেয়া রক্ষণাবেক্ষণ বিবরণী
             </h3>
             <p className="text-xs text-gray-500">
-              Total Outstanding: <strong className="text-red-700">₹{totalOutstanding.toLocaleString('en-IN')}</strong> across {overdueInvoices.length} active invoices
+              Total Outstanding: <strong className="text-red-700">₹{totalOutstanding.toLocaleString('en-IN')}</strong> across {outstandingRows.length} active invoices
             </p>
           </div>
           <button
@@ -471,7 +523,7 @@ export const AdminDashboard: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E8E1D4]">
-              {overdueInvoices.slice(0, 5).map((inv) => (
+              {outstandingRows.slice(0, 5).map((inv) => (
                 <tr key={inv.InvoiceID} className="hover:bg-neutral-50 transition-colors">
                   <td className="px-3 py-2.5 font-medium">{inv.Invoice_Number}</td>
                   <td className="px-3 py-2.5 font-bold text-[#536B4D]">{inv.Flat_Number}</td>
@@ -516,17 +568,18 @@ export const AdminDashboard: React.FC = () => {
               Recent Society Activity / সাম্প্রতিক কার্যক্রম
             </h3>
             <button
-              onClick={() => setActiveTab('settings_audit')}
+              onClick={() => setActiveTab('requests_all')}
               className="text-xs text-[#536B4D] font-bold hover:underline"
             >
-              All Logs
+              All Requests
             </button>
           </div>
 
           <div className="space-y-3">
-            {auditLogs.slice(0, 4).map((log) => (
+            {recentRequests.length === 0 && <p className="text-xs text-gray-500">No society activity requests found.</p>}
+            {recentRequests.map((request) => (
               <div
-                key={log.Log_ID}
+                key={request.Request_ID}
                 className="flex items-start gap-3 p-3 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs"
               >
                 <div className="p-1.5 rounded-lg bg-white shrink-0 border border-[#E8E1D4]">
@@ -535,12 +588,12 @@ export const AdminDashboard: React.FC = () => {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-[#29352D]">
-                      {log.Action_Type} • {log.Module_Name}
+                      {request.Request_Number || request.Request_ID} • {request.Request_Category}
                     </span>
-                    <span className="text-[10px] text-gray-500">{log.Action_DateTime.split(' ')[0]}</span>
+                    <span className="text-[10px] text-gray-500">{String(request.Updated_At || request.Request_Date || '').slice(0, 10)}</span>
                   </div>
-                  <p className="text-[#29352D]/80 mt-0.5">{log.New_Value}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">By: {log.User_Name || log.UserID}</p>
+                  <p className="text-[#29352D]/80 mt-0.5">{request.Subject || request.Description}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">Status: {request.Request_Status || 'Pending'} • Priority: {request.Priority || 'Normal'}</p>
                 </div>
               </div>
             ))}
@@ -563,7 +616,8 @@ export const AdminDashboard: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {preventiveMaintenance.map((asset) => (
+            {scheduledMaintenance.length === 0 && <p className="text-xs text-gray-500">No upcoming preventive maintenance is scheduled.</p>}
+            {scheduledMaintenance.map((asset) => (
               <div
                 key={asset.Maintenance_ID}
                 className="p-3 rounded-xl border border-[#E8E1D4] hover:border-[#536B4D]/40 transition-colors"
@@ -601,11 +655,12 @@ export const AdminDashboard: React.FC = () => {
               <Calendar className="h-4 w-4 text-[#536B4D]" />
               Active Notices / বর্তমান নোটিশ
             </h3>
-            <span className="text-xs text-gray-500">{notices.length} Published</span>
+            <span className="text-xs text-gray-500">{activeNotices.length} Active</span>
           </div>
 
           <div className="space-y-3">
-            {notices.slice(0, 3).map((notice) => (
+            {activeNotices.length === 0 && <p className="text-xs text-gray-500">No active notices at present.</p>}
+            {activeNotices.slice(0, 3).map((notice) => (
               <div
                 key={notice.Notice_ID}
                 className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4]"

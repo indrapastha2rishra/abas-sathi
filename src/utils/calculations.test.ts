@@ -322,3 +322,29 @@ test('generateNextCode formats serial codes correctly', () => {
   assert.equal(generateNextCode('VOU', 99), 'VOU-2026-0100');
   assert.equal(generateNextCode('REQ', 3), 'REQ-2026-0004');
 });
+
+
+test('calculateFundSummary includes transactions on the financial-year end date when dates are ISO timestamps', () => {
+  const summary = calculateFundSummary({
+    openingBalance: 0,
+    receipts: [{
+      Transaction_ID: 'TXN-FY-END', Receipt_Number: 'RCT-FY-END',
+      Date_Of_Received: '2027-03-31T18:30:00.000Z',
+      PropertyID: 'P-1', Ownership_ID: 'O-1', OwnerID: 'OWN-1',
+      Flat_No: 'A-101', Owner_Name: 'Test', Received_Amount: 1250,
+      Received_Mode: 'UPI', Received_Reference: 'UTR-1', Bank_Account: '',
+      Unallocated_Amount: 0, Remarks: '', File_Reference: '', Created_By: 'Test',
+      Created_At: '2027-03-31T18:30:00.000Z', Receipt_Status: 'Confirmed'
+    }],
+    expenses: [{
+      Expense_Status: 'Paid', Payment_Amount: 450,
+      Payment_Date: '2027-03-31T18:30:00.000Z'
+    }],
+    invoices: [{ Outstanding_Amount: 800, Billing_Date: '2027-03-31T18:30:00.000Z' }],
+    startDate: '2026-04-01',
+    endDate: '2027-03-31'
+  });
+  assert.equal(summary.totalFundReceived, 1250);
+  assert.equal(summary.totalFundUtilized, 450);
+  assert.equal(summary.outstandingCollection, 800);
+});

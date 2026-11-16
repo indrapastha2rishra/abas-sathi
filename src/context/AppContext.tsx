@@ -332,7 +332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const modulePlan: Record<string, string[]> = {
-      dashboard: ['properties','owners','ownershipHistory','invoices','receipts','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance','auditLogs'],
+      dashboard: ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance','auditLogs'],
       properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
       properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
       invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],

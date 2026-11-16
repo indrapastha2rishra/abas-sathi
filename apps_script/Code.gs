@@ -487,7 +487,8 @@ function getDashboardData_(session) {
   const role = String(session.role || "Resident");
   const keys = role === "Resident"
     ? ["properties","owners","ownershipHistory","invoices","receipts","activityRequests","notices","gallery"]
-    : ["properties","invoices","receipts",...(role === "Admin" || role === "Committee" ? ["activityRequests"] : []),
+    : ["properties","tenants","invoices","receipts","billWiseDetails",
+       ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests"] : []),
        "notices","gallery","preventiveMaintenance",
        ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts","auditLogs"] : [])];
   const data = {};
@@ -542,7 +543,7 @@ function authorizeModuleRead_(session,key) {
     expenses:["Admin","Accountant"],
     expenseCategories:["Admin","Accountant"],
     bankAccounts:["Admin","Accountant"],
-    activityRequests:["Admin","Committee","Resident"],
+    activityRequests:["Admin","Committee","Accountant","Resident"],
     notices:["Admin","Committee","Accountant","Resident"],
     gallery:["Admin","Committee","Accountant","Resident"],
     preventiveMaintenance:["Admin","Committee","Accountant"],

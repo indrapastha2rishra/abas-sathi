@@ -242,8 +242,9 @@ export function calculateFundSummary(params: {
   // Filter confirmed receipts within FY if dates provided
   const fyReceipts = receipts.filter((r) => {
     if (r.Receipt_Status !== 'Confirmed') return false;
-    if (startDate && r.Date_Of_Received < startDate) return false;
-    if (endDate && r.Date_Of_Received > endDate) return false;
+    const receivedDate = String(r.Date_Of_Received || '').slice(0, 10);
+    if (startDate && receivedDate < startDate) return false;
+    if (endDate && receivedDate > endDate) return false;
     return true;
   });
   const totalFundReceived = fyReceipts.reduce((sum, r) => sum + (r.Received_Amount || 0), 0);
@@ -251,8 +252,9 @@ export function calculateFundSummary(params: {
   // Filter paid expenses within FY
   const fyExpenses = expenses.filter((e) => {
     if (e.Expense_Status !== 'Paid') return false;
-    if (startDate && e.Payment_Date < startDate) return false;
-    if (endDate && e.Payment_Date > endDate) return false;
+    const paymentDate = String(e.Payment_Date || '').slice(0, 10);
+    if (startDate && paymentDate < startDate) return false;
+    if (endDate && paymentDate > endDate) return false;
     return true;
   });
   const totalFundUtilized = fyExpenses.reduce((sum, e) => sum + (e.Payment_Amount || 0), 0);
@@ -262,8 +264,9 @@ export function calculateFundSummary(params: {
 
   // Outstanding Collection within FY
   const fyInvoices = invoices.filter((i) => {
-    if (startDate && i.Billing_Date < startDate) return false;
-    if (endDate && i.Billing_Date > endDate) return false;
+    const billingDate = String(i.Billing_Date || '').slice(0, 10);
+    if (startDate && billingDate < startDate) return false;
+    if (endDate && billingDate > endDate) return false;
     return true;
   });
   const outstandingCollection = fyInvoices.reduce((sum, i) => sum + (i.Outstanding_Amount || 0), 0);
