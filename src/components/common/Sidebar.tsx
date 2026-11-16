@@ -483,6 +483,14 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose }) => {
                       {t.navOwnershipOutstanding}
                     </button>
                     <button
+                      onClick={() => handleNav('reports_year_end')}
+                      className={`w-full text-left py-1.5 px-2 rounded-lg text-xs cursor-pointer ${
+                        activeTab === 'reports_year_end' ? 'text-[#536B4D] font-bold bg-[#536B4D]/10' : 'text-[#29352D]/80 hover:text-[#29352D]'
+                      }`}
+                    >
+                      Year-End Closing & Carry Forward
+                    </button>
+                    <button
                       onClick={() => handleNav('reports_balancesheet')}
                       className={`w-full text-left py-1.5 px-2 rounded-lg text-xs cursor-pointer ${
                         activeTab === 'reports_balancesheet' ? 'text-[#536B4D] font-bold bg-[#536B4D]/10' : 'text-[#29352D]/80 hover:text-[#29352D]'

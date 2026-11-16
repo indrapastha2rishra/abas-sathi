@@ -273,3 +273,7 @@ The backend creates these hidden tabs as needed:
 - See `V5.4_RELEASE_NOTES_BN.md`, `MIGRATION_V5.3.2_TO_V5.4_BN.md`, `V5.4_API_REFERENCE.md` and `V5.4_TEST_REPORT.md`.
 
 **Version 5.4.1 is a source update, not a live-service certification.** The Vite production build and live Apps Script/Sheets/Drive integration still require testing with the society owner's Google account.
+
+
+## Version 5.5.1 – Year-End Closing
+See `V5.5.1_YEAR_END_CLOSING_CHANGELOG_BN.md` for the new Admin Year-End Closing & Carry Forward workflow, Fund Balance Register and dashboard integration. Deploy the updated `apps_script/Code.gs` as a new Apps Script version before using the feature.

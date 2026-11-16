@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { BalanceSheetWorkflow } from './BalanceSheetWorkflow';
+import { YearEndClosingWorkflow } from './YearEndClosingWorkflow';
 import { useApp } from '../../context/AppContext';
 import {
   BarChart3,
@@ -32,7 +33,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   } = useApp();
 
   const [activeReport, setActiveReport] = useState<
-    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'ownership_due' | 'expense_summary' | 'balancesheet'
+    'monthly' | 'fy' | 'property_due' | 'owner_due' | 'ownership_due' | 'expense_summary' | 'balancesheet' | 'year_end'
   >(
     initialReport === 'reports_property_due'
       ? 'property_due'
@@ -42,6 +43,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       ? 'fy'
       : initialReport === 'reports_ownership_due'
       ? 'ownership_due'
+      : initialReport === 'reports_year_end'
+      ? 'year_end'
       : 'monthly'
   );
 
@@ -55,6 +58,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     const load=async()=>{
       setServerReportLoading(true);setServerReportError('');
       try {
+        if(activeReport==='year_end') { if(!cancelled)setServerReport(null); return; }
         let type='receiptPayment',filters:any={};
         if(activeReport==='property_due')type='outstanding';
         else if(activeReport==='owner_due')type='ownerOutstanding';
@@ -201,6 +205,14 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
           Ownership-wise Outstanding
         </button>
         <button
+          onClick={() => setActiveReport('year_end')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeReport === 'year_end' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Year-End Closing & Carry Forward
+        </button>
+        <button
           onClick={() => setActiveReport('balancesheet')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeReport === 'balancesheet' ? 'bg-white text-[#C97958] shadow-xs' : 'text-[#29352D]/70'
@@ -211,7 +223,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       </div>
 
       {/* REPORT 1: MONTHLY RECEIPT & PAYMENT STATEMENT */}
-      {activeReport !== 'balancesheet' && (
+      {activeReport !== 'balancesheet' && activeReport !== 'year_end' && (
         <div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-2">
           <div className="flex items-center justify-between"><h3 className="font-bold text-sm">Server-side Report Results</h3><span className="text-[10px] text-gray-500">{serverReport?.generatedAt||''}</span></div>
           {serverReportLoading?<p className="text-xs text-gray-500">Loading server report…</p>:serverReportError?<p className="text-xs text-red-700">{serverReportError}</p>:(
@@ -408,6 +420,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       )}
 
       {/* REPORT 3: ACCRUAL BALANCE SHEET DISCLOSURE (SECTION 5 NOTE & SECTION 13) */}
+      {activeReport === 'year_end' && <YearEndClosingWorkflow />}
+
       {activeReport === 'balancesheet' && (
         <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs space-y-6">
           <div className="border-b border-[#E8E1D4] pb-4">

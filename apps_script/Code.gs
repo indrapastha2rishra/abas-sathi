@@ -75,6 +75,9 @@ function doPost(e) {
       case "getDashboardSummary": return getDashboardSummary_(session);
       case "getDashboardData": return getDashboardData_(session);
       case "getReports": return getReports_(session, body);
+      case "getFundBalanceSummary": return getFundBalanceSummary_(session, body);
+      case "getYearEndClosingPreview": return getYearEndClosingPreview_(session, body);
+      case "finalizeYearEndClosing": return finalizeYearEndClosing_(session, body);
       case "createReportSnapshot": return createReportSnapshot_(session, body);
       case "approveReportSnapshot": return approveReportSnapshot_(session, body);
       case "listReportSnapshots": return listReportSnapshots_(session, body);
@@ -277,6 +280,134 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
       unlinkedInvoiceCount
     }
   };
+}
+
+
+const FUND_BALANCE_HEADERS_ = [
+  "Balance_ID","FY_ID","FY_Name","Balance_Type","Bank_Account_ID","Account_Display_Name",
+  "Opening_Balance","Total_Fund_Received","Total_Fund_Utilized","Other_Adjustment","Closing_Balance",
+  "Actual_Closing_Balance","Reconciliation_Difference","Reconciliation_Status","Finalization_Status",
+  "Prepared_By","Prepared_At","Reviewed_By","Reviewed_At","Finalized_By","Finalized_At","Remarks"
+];
+function fundBalanceSheet_(ss) {
+  let sh=ss.getSheetByName("Fund Balance Register");
+  if(!sh){sh=ss.insertSheet("Fund Balance Register");sh.getRange(1,1,1,FUND_BALANCE_HEADERS_.length).setValues([FUND_BALANCE_HEADERS_]);}
+  else ensureHeaders_(sh,FUND_BALANCE_HEADERS_);
+  return sh;
+}
+function fundDateKey_(v){return String(v||"").slice(0,10);}
+function fundTodayKey_(){try{return Utilities.formatDate(new Date(),Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");}catch(e){return new Date().toISOString().slice(0,10);}}
+function fundMoney_(v){const n=Number(v||0);return isFinite(n)?Math.round(n*100)/100:0;}
+function fundAccountKey_(value,accounts){
+  const raw=String(value||"").trim().toLowerCase();if(!raw)return "UNMAPPED";
+  for(let i=0;i<accounts.length;i++){
+    const a=accounts[i];
+    const candidates=[a.BankAccount_ID,a.Account_Name,a.Bank_Name,a.Account_Number,[a.Bank_Name,a.Account_Number].filter(Boolean).join(" ")]
+      .map(x=>String(x||"").trim().toLowerCase()).filter(Boolean);
+    if(candidates.includes(raw))return String(a.BankAccount_ID);
+  }
+  return "UNMAPPED";
+}
+function fundRowsForYear_(ss,fy,previousRows,initialCashOpening){
+  const start=fundDateKey_(fy.Start_Date),end=fundDateKey_(fy.End_Date);
+  const accounts=sheetObjects_(ss.getSheetByName("Bank Account Master"));
+  const receipts=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(r=>String(r.Receipt_Status||"").toLowerCase()==="confirmed"&&fundDateKey_(r.Date_Of_Received)>=start&&fundDateKey_(r.Date_Of_Received)<=end);
+  const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(e=>String(e.Expense_Status||"").toLowerCase()==="paid"&&fundDateKey_(e.Payment_Date)>=start&&fundDateKey_(e.Payment_Date)<=end);
+  const existingByKey={};(previousRows||[]).forEach(r=>{existingByKey[String(r.Balance_Type)+"|"+String(r.Bank_Account_ID||"")]=r;});
+  const receiptTotals={},expenseTotals={},unmapped={receipt:0,expense:0};
+  receipts.forEach(r=>{const mode=String(r.Received_Mode||"").toLowerCase();const key=mode==="cash"?"CASH":fundAccountKey_(r.Bank_Account,accounts);const amount=fundMoney_(r.Received_Amount);if(key==="UNMAPPED")unmapped.receipt+=amount;receiptTotals[key]=(receiptTotals[key]||0)+amount;});
+  expenses.forEach(e=>{const mode=String(e.Payment_Mode||"").toLowerCase();const key=mode==="cash"?"CASH":fundAccountKey_(e.Bank_Account,accounts);const amount=fundMoney_(e.Payment_Amount);if(key==="UNMAPPED")unmapped.expense+=amount;expenseTotals[key]=(expenseTotals[key]||0)+amount;});
+  const keys=[{key:"CASH",type:"Cash",id:"",name:"Cash in Hand",account:null},...accounts.map(a=>({key:String(a.BankAccount_ID),type:"Bank",id:String(a.BankAccount_ID),name:String(a.Account_Name||a.Bank_Name||a.BankAccount_ID),account:a}))];
+  if((receiptTotals.UNMAPPED||0)||(expenseTotals.UNMAPPED||0))keys.push({key:"UNMAPPED",type:"Unmapped",id:"",name:"Unmapped Bank Transactions",account:null});
+  return keys.map(k=>{
+    const prev=existingByKey[k.type+"|"+k.id]||existingByKey[(k.type==="Cash"?"Cash":"Bank")+"|"+k.id];
+    const opening=prev?fundMoney_(prev.Closing_Balance):(previousRows&&previousRows.length?0:(k.type==="Bank"?fundMoney_(k.account&&k.account.Opening_Balance):k.type==="Cash"?fundMoney_(initialCashOpening):0));
+    const received=fundMoney_(receiptTotals[k.key]||0),paid=fundMoney_(expenseTotals[k.key]||0),closing=fundMoney_(opening+received-paid);
+    return {Balance_Type:k.type,Bank_Account_ID:k.id,Account_Display_Name:k.name,Opening_Balance:opening,Total_Fund_Received:received,Total_Fund_Utilized:paid,Other_Adjustment:0,Closing_Balance:closing,Actual_Closing_Balance:"",Reconciliation_Difference:"",Reconciliation_Status:"Pending",Finalization_Status:"Draft",Unmapped_Receipt_Amount:k.key==="UNMAPPED"?unmapped.receipt:0,Unmapped_Expense_Amount:k.key==="UNMAPPED"?unmapped.expense:0};
+  });
+}
+function getYearEndContext_(ss,fyId){
+  const years=sheetObjects_(ss.getSheetByName("Financial Year Master")).sort((a,b)=>fundDateKey_(a.Start_Date).localeCompare(fundDateKey_(b.Start_Date)));
+  const fy=years.find(x=>String(x.FY_ID)===String(fyId));if(!fy)throw new Error("Selected Financial Year was not found.");
+  const previous=years.filter(x=>fundDateKey_(x.End_Date)<fundDateKey_(fy.Start_Date)).sort((a,b)=>fundDateKey_(b.End_Date).localeCompare(fundDateKey_(a.End_Date)))[0]||null;
+  const next=years.filter(x=>fundDateKey_(x.Start_Date)>fundDateKey_(fy.End_Date)).sort((a,b)=>fundDateKey_(a.Start_Date).localeCompare(fundDateKey_(b.Start_Date)))[0]||null;
+  const sh=fundBalanceSheet_(ss),all=sheetObjects_(sh),current=all.filter(x=>String(x.FY_ID)===String(fy.FY_ID));
+  const prevRows=previous?all.filter(x=>String(x.FY_ID)===String(previous.FY_ID)):[];
+  if(previous&&(!prevRows.length||prevRows.some(x=>String(x.Finalization_Status)!=="Finalized")))throw new Error("The previous Financial Year must be finalized before this year can be prepared.");
+  return {fy,previous,next,sh,all,current,prevRows,years};
+}
+function buildYearEndPreview_(ss,fyId,initialCashOpening){
+  const c=getYearEndContext_(ss,fyId);
+  if(c.current.length&&c.current.every(x=>String(x.Finalization_Status)==="Finalized"))return {fy:c.fy,previous:c.previous,next:c.next,rows:c.current,alreadyFinalized:true,canFinalize:false,unmappedTotal:0};
+  let rows=fundRowsForYear_(ss,c.fy,c.prevRows,initialCashOpening);
+  // If this FY already has a carried-forward opening, preserve it; never overwrite an approved opening.
+  const currentByKey={};c.current.forEach(x=>currentByKey[String(x.Balance_Type)+"|"+String(x.Bank_Account_ID||"")]=x);
+  rows=rows.map(r=>{const old=currentByKey[r.Balance_Type+"|"+r.Bank_Account_ID];return old?{...r,Opening_Balance:fundMoney_(old.Opening_Balance)}:r;});
+  const unmappedTotal=rows.filter(r=>r.Balance_Type==="Unmapped").reduce((a,r)=>a+Number(r.Total_Fund_Received||0)+Number(r.Total_Fund_Utilized||0),0);
+  return {fy:c.fy,previous:c.previous,next:c.next,rows,alreadyFinalized:false,canFinalize:fundDateKey_(c.fy.End_Date)<fundTodayKey_(),unmappedTotal};
+}
+function getYearEndClosingPreview_(session,body){
+  requireRole_(session,["Admin"]);const ss=SpreadsheetApp.openById(session.databaseId);
+  const preview=buildYearEndPreview_(ss,cleanText_(body.fyId,100),body.initialCashOpening);
+  return json_({status:"success",data:preview,generatedAt:new Date().toISOString(),source:"Fund Balance Register + Fund Inflow Register + Expense Register"});
+}
+function getFundBalanceSummary_(session,body){
+  requireRole_(session,["Admin","Accountant"]);const ss=SpreadsheetApp.openById(session.databaseId);
+  const years=sheetObjects_(ss.getSheetByName("Financial Year Master"));const today=fundTodayKey_();
+  const fy=years.find(x=>fundDateKey_(x.Start_Date)<=today&&fundDateKey_(x.End_Date)>=today)||years.find(x=>String(x.Is_Current).toLowerCase()==="true")||years.sort((a,b)=>fundDateKey_(b.Start_Date).localeCompare(fundDateKey_(a.Start_Date)))[0];
+  if(!fy)return json_({status:"success",data:{fy:null,openingFundBalance:0,totalFundReceived:0,totalFundUtilized:0,availableFund:0,sourceStatus:"No Financial Year configured"}});
+  const sh=fundBalanceSheet_(ss),rows=sheetObjects_(sh),current=rows.filter(x=>String(x.FY_ID)===String(fy.FY_ID));
+  const opening=current.length?current.reduce((a,x)=>a+fundMoney_(x.Opening_Balance),0):0;
+  const from=fundDateKey_(fy.Start_Date),to=fundDateKey_(fy.End_Date);
+  const received=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(x=>String(x.Receipt_Status||"").toLowerCase()==="confirmed"&&fundDateKey_(x.Date_Of_Received)>=from&&fundDateKey_(x.Date_Of_Received)<=today&&fundDateKey_(x.Date_Of_Received)<=to).reduce((a,x)=>a+fundMoney_(x.Received_Amount),0);
+  const paid=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||"").toLowerCase()==="paid"&&fundDateKey_(x.Payment_Date)>=from&&fundDateKey_(x.Payment_Date)<=today&&fundDateKey_(x.Payment_Date)<=to).reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0);
+  const prev=years.filter(x=>fundDateKey_(x.End_Date)<from).sort((a,b)=>fundDateKey_(b.End_Date).localeCompare(fundDateKey_(a.End_Date)))[0];
+  let effectiveOpening=opening,sourceStatus=current.length?"Fund Balance Register": "Opening balance not finalized";
+  if(!current.length&&prev){const prevRows=rows.filter(x=>String(x.FY_ID)===String(prev.FY_ID));if(prevRows.length&&prevRows.every(x=>String(x.Finalization_Status)==="Finalized")){effectiveOpening=prevRows.reduce((a,x)=>a+fundMoney_(x.Closing_Balance),0);sourceStatus="Previous FY finalized closing balance";}}
+  if(!current.length&&!prev){effectiveOpening=sheetObjects_(ss.getSheetByName("Bank Account Master")).reduce((a,x)=>a+fundMoney_(x.Opening_Balance),0);sourceStatus="Initial Bank Account Master opening balances; cash opening defaults to zero";}
+  return json_({status:"success",data:{fy,openingFundBalance:fundMoney_(effectiveOpening),totalFundReceived:fundMoney_(received),totalFundUtilized:fundMoney_(paid),availableFund:fundMoney_(effectiveOpening+received-paid),sourceStatus,generatedAt:new Date().toISOString()}});
+}
+function finalizeYearEndClosing_(session,body){
+  requireRole_(session,["Admin"]);const op=requireOperationId_(body),fyId=cleanText_(body.fyId,100),submitted=Array.isArray(body.rows)?body.rows:[];
+  if(!fyId||!submitted.length||submitted.length>100)throw new Error("Select a Financial Year and provide its reconciliation rows.");
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const ss=SpreadsheetApp.openById(session.databaseId),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);
+    if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});
+    if(prior)throw new Error("A previous closing operation is incomplete; contact Admin before retrying.");
+    const preview=buildYearEndPreview_(ss,fyId,body.initialCashOpening);if(preview.alreadyFinalized)throw new Error("This Financial Year has already been finalized.");
+    if(!preview.canFinalize)throw new Error("The Financial Year end date has not passed. Closing cannot be finalized early.");
+    const byKey={};submitted.forEach(r=>{byKey[String(r.Balance_Type)+"|"+String(r.Bank_Account_ID||"")]=r;});
+    const rows=preview.rows.map(p=>{
+      const r=byKey[p.Balance_Type+"|"+p.Bank_Account_ID];if(!r)throw new Error("Missing reconciliation for "+p.Account_Display_Name);
+      if(p.Balance_Type==="Unmapped"&&(p.Total_Fund_Received||p.Total_Fund_Utilized))throw new Error("Unmapped bank transactions must be corrected before finalization.");
+      const actual=Number(r.Actual_Closing_Balance);if(!isFinite(actual)||actual<0)throw new Error("Enter a valid actual closing balance for "+p.Account_Display_Name);
+      const diff=fundMoney_(actual-p.Closing_Balance);if(Math.abs(diff)>0.009)throw new Error("Reconciliation difference for "+p.Account_Display_Name+" is not zero. Correct source entries or reconcile before finalizing.");
+      return {...p,Actual_Closing_Balance:fundMoney_(actual),Reconciliation_Difference:diff,Reconciliation_Status:"Matched",Finalization_Status:"Finalized"};
+    });
+    const sh=fundBalanceSheet_(ss),existing=sheetObjects_(sh).filter(x=>String(x.FY_ID)===fyId);
+    existing.forEach(x=>{if(String(x.Finalization_Status)==="Finalized")throw new Error("A finalized balance row cannot be changed.");});
+    const nextExisting=preview.next?sheetObjects_(sh).filter(x=>String(x.FY_ID)===String(preview.next.FY_ID)):[];
+    if(nextExisting.some(x=>String(x.Finalization_Status)==="Finalized"))throw new Error("Next Financial Year is already finalized; carry-forward cannot be overwritten.");
+    writeOperation_(ledger,op,"finalizeYearEndClosing",fyId,"STARTED",{});
+    const preparedAt=new Date();
+    rows.forEach(r=>{
+      const record={...r,Balance_ID:"FBR-"+randomHex_(8).toUpperCase(),FY_ID:fyId,FY_Name:preview.fy.FY_Name,Prepared_By:session.userId,Prepared_At:preparedAt,Reviewed_By:session.userId,Reviewed_At:preparedAt,Finalized_By:session.userId,Finalized_At:preparedAt,Remarks:cleanText_(body.remarks,500)};
+      const old=existing.find(x=>String(x.Balance_Type)===String(r.Balance_Type)&&String(x.Bank_Account_ID||"")===String(r.Bank_Account_ID||""));
+      if(old)updateByHeaders_(sh,old.__row,record,["Balance_ID","FY_ID","FY_Name","Balance_Type","Bank_Account_ID","Opening_Balance"]);else appendByHeaders_(sh,record);
+    });
+    // Create next FY's carried-forward opening rows only; receipt/payment totals remain zero.
+    if(preview.next){
+      rows.forEach(r=>{
+        const old=nextExisting.find(x=>String(x.Balance_Type)===String(r.Balance_Type)&&String(x.Bank_Account_ID||"")===String(r.Bank_Account_ID||""));
+        const carry={Balance_ID:"FBR-"+randomHex_(8).toUpperCase(),FY_ID:preview.next.FY_ID,FY_Name:preview.next.FY_Name,Balance_Type:r.Balance_Type,Bank_Account_ID:r.Bank_Account_ID,Account_Display_Name:r.Account_Display_Name,Opening_Balance:r.Closing_Balance,Total_Fund_Received:0,Total_Fund_Utilized:0,Other_Adjustment:0,Closing_Balance:r.Closing_Balance,Actual_Closing_Balance:"",Reconciliation_Difference:"",Reconciliation_Status:"Pending",Finalization_Status:"Opening Carried Forward",Prepared_By:session.userId,Prepared_At:preparedAt,Remarks:"Auto-carried from "+preview.fy.FY_Name};
+        if(old)updateByHeaders_(sh,old.__row,carry,["Balance_ID","FY_ID","FY_Name","Balance_Type","Bank_Account_ID"]);else appendByHeaders_(sh,carry);
+      });
+    }
+    const result={fyId,fyName:preview.fy.FY_Name,rowCount:rows.length,closingBalance:fundMoney_(rows.reduce((a,x)=>a+x.Closing_Balance,0)),nextFY:preview.next?preview.next.FY_Name:null,status:"Finalized"};
+    writeOperation_(ledger,op,"finalizeYearEndClosing",fyId,"DONE",result);auditEvent_(session,"FINALIZE","Fund Balance Register",fyId,"Year-end closing finalized and next FY opening carried forward","",result);
+    return json_({status:"success",data:result});
+  }finally{lock.releaseLock();}
 }
 
 function getReports_(session, body) {

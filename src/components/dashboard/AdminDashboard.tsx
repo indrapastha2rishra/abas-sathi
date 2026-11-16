@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Building2,
@@ -29,6 +29,7 @@ import { calculateFundSummary } from '../../utils/calculations';
 export const AdminDashboard: React.FC = () => {
   const {
     properties,
+    currentUser,
     invoices,
     receipts,
     expenses,
@@ -43,7 +44,10 @@ export const AdminDashboard: React.FC = () => {
     setActiveTab,
     setPreviewInvoice,
     setPreviewReceipt,
+    getFundBalanceSummary,
   } = useApp();
+  const [fundBalanceSummary,setFundBalanceSummary]=useState<any>(null);
+  useEffect(()=>{if(!['Admin','Accountant'].includes(currentUser.Role))return;let live=true;getFundBalanceSummary().then((r:any)=>{if(live)setFundBalanceSummary(r?.data||null);}).catch((e:any)=>console.warn('Fund balance summary unavailable:',e?.message||e));return()=>{live=false;};},[]);
 
   // Metrics
   const totalProperties = properties.length;
@@ -96,7 +100,9 @@ export const AdminDashboard: React.FC = () => {
   // Current Indian financial year (1 April – 31 March).
   const financialYearStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   const financialYearLabel = `FY ${financialYearStart}-${financialYearStart + 1}`;
-  const openingBalanceTotal = bankAccounts.reduce((sum, b) => sum + (b.Opening_Balance || 0), 0);
+  // Authoritative opening balance is read from Fund Balance Register on the server.
+  // Never derive FY opening from Bank Account Master once the register is configured.
+  const openingBalanceTotal = Number(fundBalanceSummary?.openingFundBalance ?? 0);
   const fundSummary = calculateFundSummary({
     openingBalance: openingBalanceTotal, receipts, expenses, invoices,
     startDate: `${financialYearStart}-04-01`, endDate: `${financialYearStart + 1}-03-31`,

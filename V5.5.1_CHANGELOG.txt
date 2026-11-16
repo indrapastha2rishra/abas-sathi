@@ -1,0 +1,2 @@
+ABAS SATHI v5.5.1
+Added Admin Year-End Closing & Carry Forward workflow, Fund Balance Register, server-side fund summary, Dashboard integration, reconciliation checks, carry-forward, audit logging, script lock and idempotent finalization.

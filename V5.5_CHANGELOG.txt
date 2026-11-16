@@ -32,3 +32,11 @@ PRESERVED
 - Admin, Committee, Accountant and Resident roles.
 - Existing KYC/profile and application modules.
 - Existing forgot-password email OTP backend flow.
+
+V5.5.1 – Year-End Closing & Carry Forward
+- Added Admin Reports submenu and Year-End Closing & Carry Forward UI.
+- Added Fund Balance Register with Cash/Bank-wise year-end balances.
+- Added Apps Script preview/finalize/fund-summary actions with role checks, script locking, idempotency and audit logging.
+- Dashboard Opening Fund Balance now reads from Fund Balance Register; current FY receipts and paid expenses are read from their respective registers.
+- Previous finalized FY closing balance auto-carries to next FY opening; Opening is not double-counted as receipt.
+- Added tests for confirmed receipt / paid expense filtering and FY carry-forward.

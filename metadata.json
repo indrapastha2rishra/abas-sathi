@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.4.1 — mobile login transport fix, corrected Apps Script endpoint migration, and single-request live dashboard bootstrap.",
+  "description": "ABAS SATHI Version 5.5.1 — Smart Login plus Admin Year-End Closing & Carry Forward, Fund Balance Register integration, and dashboard fund summary.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -18,6 +18,9 @@
     "Batch Central Master lookup and Drive upload pre-validation",
     "Mobile-safe CORS POST transport with bounded retry and diagnostics",
     "Corrected default Apps Script deployment URL migration",
-    "Single-request dashboard data bootstrap to reduce mobile round trips"
+    "Single-request dashboard data bootstrap to reduce mobile round trips",
+    "Admin year-end closing and account-wise cash/bank reconciliation",
+    "Fund Balance Register with previous-year closing carry-forward",
+    "Dashboard opening fund balance from Fund Balance Register and live cash-basis receipts/payments"
   ]
 }

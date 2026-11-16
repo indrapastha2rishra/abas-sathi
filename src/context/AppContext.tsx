@@ -148,6 +148,9 @@ interface AppContextType {
   approveReportSnapshot: (snapshotId: string) => Promise<any>;
   listReportSnapshots: () => Promise<any[]>;
   postOpeningBalances: (entries: Array<{accountCode?:string;accountName:string;accountType:string;debit:number;credit:number}>, effectiveDate: string) => Promise<any>;
+  getFundBalanceSummary: () => Promise<any>;
+  getYearEndClosingPreview: (fyId: string, initialCashOpening?: number) => Promise<any>;
+  finalizeYearEndClosing: (fyId: string, rows: any[], remarks?: string, initialCashOpening?: number) => Promise<any>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -246,7 +249,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'createRecord','updateRecord','cancelRecord','generateInvoice','cancelInvoice',
       'submitPayment','confirmPayment','rejectPayment','allocatePayment','createExpense',
       'approveExpense','markExpensePaid','cancelExpense','uploadPrivateFile',
-      'postOpeningBalances'
+      'postOpeningBalances','finalizeYearEndClosing'
     ]);
     try {
       let result: T;
@@ -345,7 +348,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],
-      reports_property_due: ['invoices','properties','owners'], reports_ownership_due: ['invoices','properties','owners','ownershipHistory'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'],
+      reports_property_due: ['invoices','properties','owners'], reports_ownership_due: ['invoices','properties','owners','ownershipHistory'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'], reports_year_end: ['financialYears','bankAccounts'],
       resident_notices: ['notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
     const load = async () => {
@@ -491,6 +494,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const listReportSnapshots = async () => { const result:any=await apiCall('listReportSnapshots'); return Array.isArray(result.data)?result.data:[]; };
   const postOpeningBalances = (entries: Array<{accountCode?:string;accountName:string;accountType:string;debit:number;credit:number}>, effectiveDate: string) =>
     apiCall('postOpeningBalances', { entries, effectiveDate });
+  const getFundBalanceSummary = () => apiCall('getFundBalanceSummary');
+  const getYearEndClosingPreview = (fyId: string, initialCashOpening = 0) => apiCall('getYearEndClosingPreview', { fyId, initialCashOpening });
+  const finalizeYearEndClosing = (fyId: string, rows: any[], remarks = '', initialCashOpening = 0) => apiCall('finalizeYearEndClosing', { fyId, rows, remarks, initialCashOpening });
 
   const cancelInvoice = async (invoiceId: string, reason: string): Promise<void> => {
     await apiCall('cancelInvoice', { invoiceId, reason });
@@ -697,6 +703,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveReportSnapshot,
         listReportSnapshots,
         postOpeningBalances,
+        getFundBalanceSummary,
+        getYearEndClosingPreview,
+        finalizeYearEndClosing,
       }}
     >
       {children}
