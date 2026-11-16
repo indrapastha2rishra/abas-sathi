@@ -6,11 +6,13 @@ export type AuthRequestOptions = { timeoutMs?: number };
 export class BackendRequestError extends Error {
   status?: number;
   retryable: boolean;
-  constructor(message: string, status?: number, retryable = false) {
+  code?: string;
+  constructor(message: string, status?: number, retryable = false, code?: string) {
     super(message);
     this.name = 'BackendRequestError';
     this.status = status;
     this.retryable = retryable;
+    this.code = code;
   }
 }
 
@@ -94,7 +96,7 @@ export async function authRequest<T = any>(
 
     if (!response.ok || result?.status !== 'success') {
       const message = result?.message || `Request failed (HTTP ${response.status})`;
-      throw new BackendRequestError(message, response.status, response.status >= 500);
+      throw new BackendRequestError(message, response.status, response.status >= 500, String(result?.code || ''));
     }
     return result as T;
   } finally {

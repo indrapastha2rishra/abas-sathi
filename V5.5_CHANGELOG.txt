@@ -1,0 +1,34 @@
+ABAS SATHI — Version 5.5.0
+Smart Login System Upgrade & Cross-Device Responsive Authentication
+
+Base version: 5.4.2
+
+ADDED
+- Responsive login UI for desktop, laptop, phone and tablet layouts.
+- Bengali/English login and authentication messages.
+- Password visibility toggle and accessible focus/labels.
+- Remember Society Code and Login ID on this device only.
+- Clear Saved Login action.
+- Immediate removal of remembered identifiers when Remember Me is disabled.
+- Automatic password-field focus for returning users.
+- Second backend profile validation after login.
+- Explicit role and active-account validation before protected pages mount.
+- Retry screen for temporary session-validation/network errors.
+- OTP resend cooldown, numeric OTP input, password confirmation and client-side strength checks.
+- Authentication validation unit tests.
+
+SECURITY / FIXES
+- No password is written to browser storage.
+- Generic login failure response for invalid/inactive society or user and incorrect/missing password hash.
+- Temporary 15-minute login attempt throttling; no permanent account lock.
+- Separate session token for each successful login; new device login does not invalidate another device.
+- Existing six-hour sliding session policy, password hashing, legacy hash upgrade and backend account/role revalidation retained.
+- Logout continues to revoke the current server-side token and clear local session.
+
+PRESERVED
+- Multi-Society Central Master and society database routing.
+- Existing Google Sheets schema.
+- Existing Apps Script API action names and response shape.
+- Admin, Committee, Accountant and Resident roles.
+- Existing KYC/profile and application modules.
+- Existing forgot-password email OTP backend flow.

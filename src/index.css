@@ -33,3 +33,66 @@
     display: block !important;
   }
 }
+
+
+/* Version 5.5 — mobile-first authentication viewport and safe-area handling. */
+.abas-login-shell {
+  box-sizing: border-box;
+  display: flex;
+  min-height: 100vh;
+  min-height: 100svh;
+  min-height: 100dvh;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: #F7F4EC;
+  -webkit-overflow-scrolling: touch;
+}
+
+.abas-login-shell *,
+.abas-login-shell *::before,
+.abas-login-shell *::after {
+  box-sizing: border-box;
+}
+
+.abas-login-shell input,
+.abas-login-shell button {
+  touch-action: manipulation;
+}
+
+.abas-login-shell input:focus-visible,
+.abas-login-shell button:focus-visible {
+  outline: 2px solid #536B4D;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .abas-login-shell {
+    align-items: flex-start;
+    padding-top: max(1rem, env(safe-area-inset-top));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-height: 620px) and (orientation: landscape) {
+  .abas-login-shell {
+    align-items: flex-start;
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .abas-login-shell *,
+  .abas-login-shell *::before,
+  .abas-login-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

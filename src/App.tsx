@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState } from 'react';
-import { LoaderCircle } from 'lucide-react';
-import { authRequest } from './utils/authClient';
+import React, { useEffect, useState } from 'react';
+import { LoaderCircle, ShieldCheck } from 'lucide-react';
+import { authRequest, BackendRequestError } from './utils/authClient';
+import { isActiveAuthenticatedProfile } from './utils/authValidation';
 import { Login } from './components/auth/Login';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
@@ -154,53 +155,103 @@ export default function App() {
       if (saved && saved.token && saved.expiresAt > Date.now()) return saved;
       localStorage.removeItem('abasSathiSession');
       return null;
-    } catch { localStorage.removeItem('abasSathiSession'); return null; }
+    } catch {
+      localStorage.removeItem('abasSathiSession');
+      return null;
+    }
   });
   const [validatingSession, setValidatingSession] = useState<boolean>(() => Boolean(session));
-  const restoreCheckStarted = useRef(false);
+  const [sessionError, setSessionError] = useState('');
 
-  // A persisted token is never trusted only because it exists in localStorage.
-  // Validate it with the backend before mounting protected application screens.
-  useEffect(() => {
-    if (!session || restoreCheckStarted.current) return;
-    restoreCheckStarted.current = true;
-    let active = true;
-    authRequest<any>({ action: 'getMyProfile', token: session.token }, { timeoutMs: 30000 })
-      .then(result => {
-        if (!active) return;
-        const profile = result.profile || {};
-        const refreshed = {
-          ...session,
-          expiresAt: Date.now() + 21600 * 1000,
-          user: {
-            ...session.user,
-            userId: profile.UserID || session.user?.userId,
-            fullName: profile.Full_Name || session.user?.fullName,
-            email: profile.Email_ID || session.user?.email,
-            mobile: profile.Mobile_No || session.user?.mobile,
-            role: profile.Role || session.user?.role,
-            propertyId: profile.PropertyID || session.user?.propertyId,
-          }
-        };
-        localStorage.setItem('abasSathiSession', JSON.stringify(refreshed));
-        setSession(refreshed);
-        setValidatingSession(false);
-      })
-      .catch(() => {
-        if (!active) return;
+  const validateSavedSession = async () => {
+    if (!session?.token) {
+      setValidatingSession(false);
+      return;
+    }
+    setValidatingSession(true);
+    setSessionError('');
+    try {
+      const result: any = await authRequest(
+        { action: 'getMyProfile', token: session.token },
+        { timeoutMs: 30000 }
+      );
+      const profile = result?.profile || {};
+      if (!isActiveAuthenticatedProfile(profile)) {
+        throw new BackendRequestError('The saved session is no longer valid.', undefined, false, 'AUTH_ERROR');
+      }
+
+      const refreshed = {
+        ...session,
+        expiresAt: Date.now() + 21600 * 1000,
+        user: {
+          ...session.user,
+          userId: String(profile.UserID),
+          loginId: String(profile.Login_ID || session.user?.loginId || ''),
+          fullName: String(profile.Full_Name || session.user?.fullName || ''),
+          email: String(profile.Email_ID || session.user?.email || ''),
+          mobile: String(profile.Mobile_No || session.user?.mobile || ''),
+          role: String(profile.Role),
+          propertyId: String(profile.PropertyID || ''),
+          accountStatus: String(profile.Account_Status),
+        },
+      };
+      localStorage.setItem('abasSathiSession', JSON.stringify(refreshed));
+      setSession(refreshed);
+    } catch (error: any) {
+      if (error instanceof BackendRequestError && error.code === 'AUTH_ERROR') {
         localStorage.removeItem('abasSathiSession');
         setSession(null);
-        setValidatingSession(false);
-      });
-    return () => { active = false; };
+      } else {
+        // Keep the local token but never mount protected pages until the server confirms it.
+        setSessionError('The server could not validate your session. Check your connection and retry.');
+      }
+    } finally {
+      setValidatingSession(false);
+    }
+  };
+
+  useEffect(() => {
+    if (session?.token) void validateSavedSession();
+    // Validate only the token restored during the initial page load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const signOutFromGate = async () => {
+    const token = session?.token;
+    try {
+      if (token) await authRequest({ action: 'logout', token }, { timeoutMs: 10000 });
+    } catch {
+      // Local logout still proceeds if the network is unavailable.
+    } finally {
+      localStorage.removeItem('abasSathiSession');
+      setSession(null);
+      setSessionError('');
+    }
+  };
+
   if (validatingSession) return (
-    <div className="min-h-screen bg-[#F7F4EC] flex flex-col items-center justify-center gap-3 text-[#536B4D]">
+    <div className="min-h-screen bg-[#F7F4EC] flex flex-col items-center justify-center gap-3 text-[#536B4D]" role="status" aria-live="polite">
       <LoaderCircle className="animate-spin" size={30}/>
-      <p className="text-sm font-semibold">Restoring your secure session…</p>
+      <p className="text-sm font-semibold">Validating your secure session…</p>
     </div>
   );
+
+  if (session && sessionError) return (
+    <div className="min-h-screen bg-[#F7F4EC] flex items-center justify-center px-4 py-8">
+      <div className="w-full max-w-md rounded-2xl border border-[#E8E1D4] bg-white p-6 text-center shadow-lg">
+        <ShieldCheck className="mx-auto mb-3 text-[#536B4D]" size={32}/>
+        <h1 className="text-lg font-bold text-[#29352D]">Session verification required</h1>
+        <p className="mt-2 text-sm text-slate-600">{sessionError}</p>
+        <button onClick={() => void validateSavedSession()} className="mt-5 min-h-11 w-full rounded-xl bg-[#536B4D] px-4 py-3 font-semibold text-white">
+          Retry Session Verification
+        </button>
+        <button onClick={() => void signOutFromGate()} className="mt-2 min-h-10 w-full rounded-xl border border-[#E8E1D4] px-4 py-2 text-sm font-semibold text-slate-600">
+          Sign Out
+        </button>
+      </div>
+    </div>
+  );
+
   if (!session) return <Login onLogin={setSession} />;
 
   return (

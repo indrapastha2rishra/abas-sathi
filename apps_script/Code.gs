@@ -608,46 +608,98 @@ function login_(body) {
   const code = normalizeSociety_(body.societyCode);
   const loginId = normalizeLogin_(body.loginId);
   const password = String(body.password || "");
-  if (!code || !loginId || !password) throw new Error("Society Code, Login ID and Password are required.");
-  const {society, usersSheet, rows} = societyAndUsers_(code);
-  const failKey = "LOGIN_FAIL_" + sha256_(code + "|" + loginId);
+  if (!code || !loginId || !password) {
+    throw new Error("Society Code, Login ID and Password are required.");
+  }
+
   const cache = CacheService.getScriptCache();
-  if (Number(cache.get(failKey) || 0) >= 10) throw new Error("Too many sign-in attempts. Please wait 15 minutes.");
+  const failKey = "LOGIN_FAIL_" + sha256_(code + "|" + loginId);
+  if (Number(cache.get(failKey) || 0) >= 10) {
+    const err = new Error("Too many sign-in attempts. Please wait 15 minutes.");
+    err.code = "RATE_LIMITED";
+    throw err;
+  }
+
+  let context;
+  const genericFailure = "Unable to sign in. Check your Society Code, Login ID and Password, or contact your society administrator.";
+  try {
+    context = societyAndUsers_(code);
+  } catch (lookupError) {
+    const lookupMessage = String(lookupError && lookupError.message || "").toLowerCase();
+    if (lookupMessage.includes("society not found") ||
+        lookupMessage.includes("database is not configured") ||
+        lookupMessage.includes("missing central master") ||
+        lookupMessage.includes("missing central user access")) {
+      recordLoginFailure_(failKey, cache);
+      throw new Error(genericFailure);
+    }
+    throw new Error("Authentication service temporarily unavailable. Please try again later.");
+  }
+
+  const society = context.society;
+  const usersSheet = context.usersSheet;
+  const rows = context.rows;
   const user = rows.find(r => normalizeLogin_(r.Login_ID) === loginId);
-  if (!user || String(user.Account_Status || "").trim().toLowerCase() !== "active") { recordLoginFailure_(failKey,cache); throw new Error("Invalid credentials or account is not active. Contact your society Admin."); }
-  if (!user.Password_Salt || !user.Password_Hash) throw new Error("Password is not configured. Contact your society Admin.");
+
+  // Keep the same response for an unknown Login ID, inactive user or invalid password.
+  if (!user || String(user.Account_Status || "").trim().toLowerCase() !== "active" ||
+      !user.Password_Salt || !user.Password_Hash) {
+    recordLoginFailure_(failKey, cache);
+    throw new Error(genericFailure);
+  }
+
   const expected = String(user.Password_Hash);
   const currentSalt = String(user.Password_Salt);
-  // Check the existing v5.1 SHA-256 format first. This avoids running the
-  // newer KDF unnecessarily and allows existing users to sign in and upgrade.
+  // Check the existing v5.1 SHA-256 format first; upgrade it after successful sign-in.
   const legacyMatch = expected.length === 64 &&
     constantTimeEqual_(sha256_(currentSalt + password), expected);
   const currentMatch = !legacyMatch &&
     constantTimeEqual_(hashPassword_(currentSalt, password), expected);
+
   if (!legacyMatch && !currentMatch) {
-    recordLoginFailure_(failKey,cache);
-    throw new Error("Invalid credentials or account is not active. Contact your society Admin.");
+    recordLoginFailure_(failKey, cache);
+    throw new Error(genericFailure);
   }
+
   cache.remove(failKey);
-  // Upgrade legacy SHA-256 hashes after successful authentication.
   if (legacyMatch) {
     const salt = randomHex_(24);
-    setCell_(usersSheet,user.__row,"Password_Salt",salt);
-    setCell_(usersSheet,user.__row,"Password_Hash",hashPassword_(salt,password));
+    setCell_(usersSheet, user.__row, "Password_Salt", salt);
+    setCell_(usersSheet, user.__row, "Password_Hash", hashPassword_(salt, password));
   }
-  setCell_(usersSheet,user.__row,"Last_Login",new Date());
+
+  setCell_(usersSheet, user.__row, "Last_Login", new Date());
+
+  // Every successful device login receives a separate, unpredictable token.
+  // No existing device session is invalidated by a new login.
   const token = randomHex_(32);
   const session = {
-    societyCode:code, societyName:String(society.Society_Name || ""),
-     societyAddress:String(society.Society_Address || society.Registered_Address || society.Address || ""),
-    databaseId:String(society.Database_ID), fullName:String(user.Full_Name || ""),
-    userId:String(user.UserID || ""), loginId:String(user.Login_ID || ""),
-    role:String(user.Role || "Resident"), propertyId:String(user.PropertyID || ""), ownershipId:String(user.Ownership_ID||""), ownerId:String(user.OwnerID||""),
-    email:String(user.Email_ID || ""), mobile:String(user.Mobile_No || "")
+    societyCode: code,
+    societyName: String(society.Society_Name || ""),
+    societyAddress: String(society.Society_Address || society.Registered_Address || society.Address || ""),
+    databaseId: String(society.Database_ID),
+    fullName: String(user.Full_Name || ""),
+    userId: String(user.UserID || user.Access_ID || ""),
+    loginId: String(user.Login_ID || ""),
+    role: String(user.Role || "Resident"),
+    propertyId: String(user.PropertyID || ""),
+    ownershipId: String(user.Ownership_ID || ""),
+    ownerId: String(user.OwnerID || ""),
+    email: String(user.Email_ID || ""),
+    mobile: String(user.Mobile_No || "")
   };
-  CacheService.getScriptCache().put("SESSION_"+token,JSON.stringify(session),CONFIG.SESSION_TTL_SECONDS);
-  const clientUser=Object.assign({},session);delete clientUser.databaseId;delete clientUser.ownershipId;delete clientUser.ownerId;
-  return json_({status:"success",token,expiresIn:CONFIG.SESSION_TTL_SECONDS,user:clientUser});
+  cache.put("SESSION_" + token, JSON.stringify(session), CONFIG.SESSION_TTL_SECONDS);
+
+  const clientUser = Object.assign({}, session);
+  delete clientUser.databaseId;
+  delete clientUser.ownershipId;
+  delete clientUser.ownerId;
+  return json_({
+    status: "success",
+    token: token,
+    expiresIn: CONFIG.SESSION_TTL_SECONDS,
+    user: clientUser
+  });
 }
 
 function adminCreateUser_(session,body) {
@@ -1292,7 +1344,12 @@ function requireSession_(token) {
     CacheService.getScriptCache().remove("SESSION_"+token);
     throw new Error("Your account is inactive. Contact your society Admin.");
   }
-  session.role=String(user.Role||session.role);
+  const currentRole=String(user.Role||"");
+  if(!["Admin","Committee","Accountant","Resident"].includes(currentRole)) {
+    CacheService.getScriptCache().remove("SESSION_"+token);
+    throw new Error("Your account role is not authorized. Contact your society Admin.");
+  }
+  session.role=currentRole;
   session.propertyId=String(user.PropertyID||"");
   session.ownershipId=String(user.Ownership_ID||"");session.ownerId=String(user.OwnerID||"");
   session.fullName=String(user.Full_Name||session.fullName);
@@ -1322,7 +1379,21 @@ function verifyPassword_(salt,password) {
   // Support the previous 64-char legacy hash for one successful-login upgrade.
   return hashPassword_(salt,password); // new KDF; legacy comparison handled below by caller extension
 }
-function recordLoginFailure_(key,cache) { const n=Number(cache.get(key)||0)+1; cache.put(key,String(n),900); }
+function recordLoginFailure_(key,cache) {
+  // Cache entries expire automatically after 15 minutes; there is no permanent account lock.
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(1500)) {
+    try {
+      const n = Number(cache.get(key) || 0) + 1;
+      cache.put(key, String(n), 900);
+    } finally {
+      lock.releaseLock();
+    }
+  } else {
+    const n = Number(cache.get(key) || 0) + 1;
+    cache.put(key, String(n), 900);
+  }
+}
 function constantTimeEqual_(a,b) {
   a=String(a);b=String(b);let diff=a.length^b.length;
   const n=Math.max(a.length,b.length);for(let i=0;i<n;i++)diff|=(a.charCodeAt(i)||0)^(b.charCodeAt(i)||0);
@@ -1365,7 +1436,7 @@ function audit_(s,action,id,remarks){
   try{const ss=SpreadsheetApp.openById(s.databaseId),sh=ss.getSheetByName("Audit Log");if(sh)sh.appendRow([Utilities.getUuid(),s.userId,action,"User Management",id,"", "",new Date(),remarks]);}catch(e){}
 }
 function nextReceipt_(sh){return "RCT-"+String(Math.max(sh.getLastRow(),1)).padStart(6,"0");}
-function errorCode_(e){const m=String(e&&e.message||e).toLowerCase();if(m.includes("permission denied")||m.includes("access denied"))return "PERMISSION_DENIED";if(m.includes("session")||m.includes("authentication")||m.includes("inactive")||m.includes("invalid credentials"))return "AUTH_ERROR";if(m.includes("missing")||m.includes("invalid")||m.includes("required")||m.includes("not found")||m.includes("already exists")||m.includes("not effective"))return "VALIDATION_ERROR";return "SERVER_ERROR";}
+function errorCode_(e){const m=String(e&&e.message||e).toLowerCase();if(m.includes("too many sign-in attempts"))return "RATE_LIMITED";if(m.includes("permission denied")||m.includes("access denied"))return "PERMISSION_DENIED";if(m.includes("session")||m.includes("authentication")||m.includes("inactive")||m.includes("invalid credentials")||m.includes("unable to sign in"))return "AUTH_ERROR";if(m.includes("missing")||m.includes("invalid")||m.includes("required")||m.includes("not found")||m.includes("already exists")||m.includes("not effective"))return "VALIDATION_ERROR";return "SERVER_ERROR";}
 function safeError_(e){const m=String(e&&e.message||e);return m.length>250?m.slice(0,250):m;}
 function json_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}
 
