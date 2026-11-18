@@ -695,15 +695,36 @@ function ensureInternalSheet_(ss,name,headers) {
  * request. This avoids 8-12 separate mobile round trips and repeated Central Master
  * permission checks after login. Sensitive modules remain role-filtered server-side.
  */
+function sheetObjectsTail_(sh,limit) {
+  if(!sh)return [];
+  const last=sh.getLastRow();
+  if(last<2)return [];
+  const count=Math.max(1,Math.min(Number(limit)||500,last-1));
+  const start=Math.max(2,last-count+1);
+  return sheetObjectsRange_(sh,start,last-start+1);
+}
+
+/**
+ * Dashboard bootstrap. Frequently changing, append-only modules are bounded to
+ * a practical recent window; invoices/properties/ownership remain complete so
+ * outstanding and ownership-sensitive figures are not silently truncated.
+ * A short role-scoped cache removes duplicate full dashboard reads during rapid
+ * navigation/reload. Cache entries are bypassed automatically when too large.
+ */
 function getDashboardData_(session) {
-  const ss = SpreadsheetApp.openById(session.databaseId);
   const role = String(session.role || "Resident");
+  const cache=CacheService.getScriptCache();
+  const cacheKey="DASH_"+sha256_(String(session.societyCode)+"|"+role+"|"+String(session.propertyId||""));
+  const cached=cache.get(cacheKey);
+  if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
+  const ss = SpreadsheetApp.openById(session.databaseId);
   const keys = role === "Resident"
     ? ["properties","owners","ownershipHistory","invoices","receipts","activityRequests","notices","gallery"]
     : ["properties","tenants","invoices","receipts","billWiseDetails",
        ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests"] : []),
        "notices","gallery","preventiveMaintenance",
-       ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts","auditLogs"] : [])];
+       ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts"] : [])];
+  const recentLimits={activityRequests:250,notices:150,gallery:30,preventiveMaintenance:250};
   const data = {};
   keys.forEach(function(key) {
     authorizeModuleRead_(session, key);
@@ -715,18 +736,19 @@ function getDashboardData_(session) {
       if (sh) break;
     }
     if (!sh) { data[key] = []; return; }
-    const rows = role === "Resident"
-      ? residentModuleRecords_(session, key, ss, sh)
-      : sheetObjects_(sh);
+    let rows;
+    if(role==="Resident") {
+      rows=residentModuleRecords_(session,key,ss,sh);
+      if(recentLimits[key]) rows=rows.slice(-recentLimits[key]);
+    } else {
+      rows=recentLimits[key]?sheetObjectsTail_(sh,recentLimits[key]):sheetObjects_(sh);
+    }
     data[key] = rows;
   });
-  return json_({
-    status:"success",
-    data:data,
-    generatedAt:new Date().toISOString(),
-    source:"live-google-sheets",
-    cache:"bypass"
-  });
+  const payload={status:"success",data:data,generatedAt:new Date().toISOString(),source:"live-google-sheets",cache:"20-second role-scoped"};
+  const serialized=JSON.stringify(payload);
+  if(serialized.length<=95000)cache.put(cacheKey,serialized,20);
+  return json_(payload);
 }
 
 function getDashboardSummary_(session) {
@@ -967,6 +989,7 @@ function adminUpdateUser_(session,body){
   if(!Object.keys(patch).length)throw new Error("No editable fields were supplied.");
   patch.Last_Updated_By=session.userId;patch.Last_Updated_At=new Date();
   updateByHeaders_(context.usersSheet,user.__row,patch,["Society_Code","Login_ID","UserID","Password_Salt","Password_Hash"]);
+  invalidateSessionUserCache_(session.societyCode,userId);
   auditEvent_(session,"UPDATE","Society User Access",userId,"User account profile/role updated",user,patch);
   return json_({status:"success",message:"User account updated.",data:{userId,updates:patch}});
 }
@@ -978,6 +1001,7 @@ function adminSetUserStatus_(session,body){
   const context=societyAndUsers_(session.societyCode),user=context.rows.find(x=>String(x.UserID||x.Access_ID)===userId);
   if(!user)throw new Error("User account not found.");
   updateByHeaders_(context.usersSheet,user.__row,{Account_Status:status,Last_Updated_By:session.userId,Last_Updated_At:new Date()},["Society_Code","Login_ID","UserID","Password_Salt","Password_Hash"]);
+  invalidateSessionUserCache_(session.societyCode,userId);
   auditEvent_(session,status==="Inactive"?"CANCEL":"UPDATE","Society User Access",userId,"Account status changed to "+status,user,{Account_Status:status});
   return json_({status:"success",message:"User account status updated to "+status+"."});
 }
@@ -991,6 +1015,7 @@ function adminApproveUser_(session,body) {
   setCell_(usersSheet,user.__row,"Account_Status","Active");
   setCell_(usersSheet,user.__row,"Approved_At",new Date());
   setCell_(usersSheet,user.__row,"Approved_By",session.userId);
+  invalidateSessionUserCache_(session.societyCode,body.userId);
   audit_(session,"USER_APPROVED",body.userId,"User account activated");
   return json_({status:"success",message:"User approved and activated."});
 }
@@ -1000,6 +1025,7 @@ function adminRejectUser_(session,body) {
   const user = rows.find(r => String(r.UserID) === String(body.userId));
   if (!user || user.Role === "Admin") throw new Error("User not found or cannot be rejected.");
   setCell_(usersSheet,user.__row,"Account_Status","Rejected");
+  invalidateSessionUserCache_(session.societyCode,body.userId);
   audit_(session,"USER_REJECTED",body.userId,cleanText_(body.reason,250));
   return json_({status:"success",message:"User request rejected."});
 }
@@ -1011,6 +1037,7 @@ function adminSetKycStatus_(session,body) {
   const user=rows.find(r=>String(r.UserID)===String(body.userId));
   if(!user) throw new Error("User not found.");
   setCell_(usersSheet,user.__row,"KYC_Status",status);
+  invalidateSessionUserCache_(session.societyCode,body.userId);
   audit_(session,"KYC_STATUS_UPDATED",body.userId,"KYC status: "+status);
   return json_({status:"success",message:"KYC status updated to "+status+"."});
 }
@@ -1027,6 +1054,7 @@ function updateMyProfile_(session,body) {
     const val = ({Full_Name:name,Email_ID:email,Mobile_No:mobile,Profile_Address:cleanText_(body.address,250),Emergency_Contact:cleanText_(body.emergencyContact,20)})[k];
     setCell_(usersSheet,user.__row,k,val);
   });
+  invalidateSessionUserCache_(session.societyCode,session.userId);
   audit_(session,"PROFILE_UPDATED",session.userId,"Profile details updated");
   const updated = Object.assign({},user,{Full_Name:name,Email_ID:email,Mobile_No:mobile,Profile_Address:cleanText_(body.address,250),Emergency_Contact:cleanText_(body.emergencyContact,20)});
   return json_({status:"success",message:"Profile updated.",profile:publicUser_(updated)});
@@ -1535,10 +1563,30 @@ function societyAndUsers_(code) {
   ensureHeaders_(usersSheet,USER_HEADERS);const rows=findRowsByHeaderValue_(usersSheet,"Society_Code",code);
   return {society,usersSheet,rows};
 }
+function sessionUserCacheKey_(societyCode,userId) {
+  return "AUTH_USER_" + sha256_(String(societyCode) + "|" + String(userId));
+}
+function invalidateSessionUserCache_(societyCode,userId) {
+  CacheService.getScriptCache().remove(sessionUserCacheKey_(societyCode,userId));
+}
+function getCachedSessionUser_(societyCode,userId) {
+  const cache=CacheService.getScriptCache(),key=sessionUserCacheKey_(societyCode,userId);
+  const cached=cache.get(key);
+  if(cached){try{return JSON.parse(cached);}catch(e){cache.remove(key);}}
+  const rows=societyAndUsers_(societyCode).rows;
+  const user=rows.find(r=>String(r.UserID || r.Access_ID)===String(userId));
+  if(!user)return null;
+  const safe=Object.assign(publicUser_(user),{Ownership_ID:String(user.Ownership_ID||""),OwnerID:String(user.OwnerID||"")});
+  // Short cache reduces a full Central Master read on every API request.
+  // Account/role changes explicitly invalidate this entry; manual Sheet edits
+  // take effect within at most 30 seconds.
+  cache.put(key,JSON.stringify(safe),30);
+  return safe;
+}
 function getUserRow_(session) {
-  const rows=societyAndUsers_(session.societyCode).rows;
-  const user=rows.find(r=>String(r.UserID || r.Access_ID)===session.userId);
-  if(!user) throw new Error("User not found."); return publicUser_(user);
+  const user=getCachedSessionUser_(session.societyCode,session.userId);
+  if(!user) throw new Error("User not found.");
+  return user;
 }
 function publicUser_(u) {
   if(!u) return {};
@@ -1551,8 +1599,7 @@ function requireSession_(token) {
   const session=JSON.parse(raw);
   // Re-check account status and current role on every protected request so Admin
   // approval/rejection or role changes take effect without waiting for token expiry.
-  const {rows}=societyAndUsers_(session.societyCode);
-  const user=rows.find(r=>String(r.UserID||r.Access_ID)===session.userId);
+  const user=getCachedSessionUser_(session.societyCode,session.userId);
   if(!user || String(user.Account_Status || "").trim().toLowerCase()!=="active") {
     CacheService.getScriptCache().remove("SESSION_"+token);
     throw new Error("Your account is inactive. Contact your society Admin.");

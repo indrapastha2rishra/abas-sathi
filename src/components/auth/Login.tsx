@@ -4,7 +4,7 @@ import {
   Eye, EyeOff, Zap, UserRound, Trash2, Mail, KeyRound, CheckCircle2
 } from 'lucide-react';
 import { authRequest, BackendRequestError } from '../../utils/authClient';
-import { isActiveAuthenticatedProfile, isStrongPassword } from '../../utils/authValidation';
+import { isStrongPassword } from '../../utils/authValidation';
 
 type Props = { onLogin: (session: any) => void };
 type Mode = 'login' | 'forgot' | 'reset';
@@ -163,47 +163,29 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
     setNotice('');
     setLoading(true);
     try {
-      let result: any;
-      try {
-        result = await authRequest(
-          { action: 'login', societyCode: code, loginId: id, password },
-          { timeoutMs: 30000 }
-        );
-      } catch (firstError) {
-        if (!(firstError instanceof BackendRequestError) || !firstError.retryable) throw firstError;
-        await new Promise(resolve => window.setTimeout(resolve, 500));
-        result = await authRequest(
-          { action: 'login', societyCode: code, loginId: id, password },
-          { timeoutMs: 30000 }
-        );
-      }
-
-      if (!result?.token || !result?.user) {
-        throw new Error('The server did not return a valid login session.');
-      }
-
-      // Confirm the newly-issued token against the backend before opening any protected page.
-      const profileResult: any = await authRequest(
-        { action: 'getMyProfile', token: result.token },
-        { timeoutMs: 30000 }
+      // The login endpoint already verifies the password, account status and role,
+      // then returns the authenticated profile fields. Do not immediately call
+      // getMyProfile again: that caused a second Apps Script execution and a full
+      // Central Master lookup on every successful login.
+      const result: any = await authRequest(
+        { action: 'login', societyCode: code, loginId: id, password },
+        { timeoutMs: 20000 }
       );
-      const profile = profileResult?.profile;
-      if (
-        !isActiveAuthenticatedProfile(profile)
-      ) {
-        throw new BackendRequestError('The account profile could not be validated.', undefined, false, 'AUTH_ERROR');
+
+      if (!result?.token || !result?.user?.userId || !result?.user?.role) {
+        throw new BackendRequestError('The server did not return a valid login session.', undefined, false, 'AUTH_ERROR');
       }
 
       const sessionUser = {
         ...result.user,
-        userId: String(profile.UserID),
-        loginId: String(profile.Login_ID || id),
-        fullName: String(profile.Full_Name || result.user.fullName || ''),
-        email: String(profile.Email_ID || result.user.email || ''),
-        mobile: String(profile.Mobile_No || result.user.mobile || ''),
-        role: String(profile.Role),
-        propertyId: String(profile.PropertyID || ''),
-        accountStatus: String(profile.Account_Status),
+        userId: String(result.user.userId),
+        loginId: String(result.user.loginId || id),
+        fullName: String(result.user.fullName || ''),
+        email: String(result.user.email || ''),
+        mobile: String(result.user.mobile || ''),
+        role: String(result.user.role),
+        propertyId: String(result.user.propertyId || ''),
+        accountStatus: 'Active',
       };
 
       const session = {

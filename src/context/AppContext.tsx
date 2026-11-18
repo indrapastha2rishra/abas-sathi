@@ -232,6 +232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const newRequestId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
     ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const pendingRequestIds = useRef(new Map<string,string>());
+  const moduleDataCache = useRef(new Map<string,{at:number;data:any[]}>());
   const apiCall = async <T = any,>(action: string, payload: Record<string, unknown> = {}): Promise<T> => {
     let saved: any = {};
     try { saved = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
@@ -261,6 +262,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         result = await authRequest<T>(request);
       }
       pendingRequestIds.current.delete(fingerprint);
+      // Any successful API operation may change server data; invalidate module snapshots.
+      moduleDataCache.current.clear();
       // Mirror the backend's sliding six-hour session TTL so an actively used
       // session is not discarded by an old client-side expiry timestamp.
       try {
@@ -357,6 +360,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const requested = Array.from(new Set(modulePlan[activeTab] || [])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(session.user?.role || '')) && (key !== 'expenses' || session.user?.role !== 'Resident'));
         const permittedRequested = requested.filter(key => key !== 'auditLogs' || ['Admin','Accountant'].includes(session.user?.role || ''));
         const loadOne = async (module: string) => {
+          const cacheKey = `${session.societyCode || ''}:${session.user?.userId || ''}:${session.user?.role || ''}:${module}`;
+          const cached = moduleDataCache.current.get(cacheKey);
+          if (cached && Date.now() - cached.at < 15000) return cached.data;
           const all: any[] = []; let page = 1; let pages = 1;
           do {
             const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
@@ -368,6 +374,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             pages = Number(result.pagination?.totalPages || 1); page += 1;
             if (page > 100) throw new Error(`Safety limit reached while loading ${module}`);
           } while (page <= pages);
+          moduleDataCache.current.set(cacheKey,{at:Date.now(),data:all});
           return all;
         };
         const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'

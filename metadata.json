@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.5.1 — Smart Login plus Admin Year-End Closing & Carry Forward, Fund Balance Register integration, and dashboard fund summary.",
+  "description": "ABAS SATHI Version 5.5.3 — Login round-trip reduction, short-lived server-side session profile cache, dashboard payload caching and bounded event-module bootstrap.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -21,6 +21,11 @@
     "Single-request dashboard data bootstrap to reduce mobile round trips",
     "Admin year-end closing and account-wise cash/bank reconciliation",
     "Fund Balance Register with previous-year closing carry-forward",
-    "Dashboard opening fund balance from Fund Balance Register and live cash-basis receipts/payments"
+    "Dashboard opening fund balance from Fund Balance Register and live cash-basis receipts/payments",
+    "Reduced login to one authentication request by removing redundant immediate profile validation",
+    "Short-lived role-aware server session profile cache with explicit invalidation on user updates",
+    "20-second role-scoped dashboard response cache with payload-size guard",
+    "Bounded dashboard loading for recent activity, notices, gallery and preventive maintenance",
+    "15-second in-memory module cache for faster repeat navigation"
   ]
 }
