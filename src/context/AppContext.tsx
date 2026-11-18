@@ -249,13 +249,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const idempotentActions = new Set([
       'createRecord','updateRecord','cancelRecord','generateInvoice','cancelInvoice',
       'submitPayment','confirmPayment','rejectPayment','allocatePayment','createExpense',
-      'approveExpense','markExpensePaid','cancelExpense','uploadPrivateFile',
+      'approveExpense','markExpensePaid','cancelExpense',
       'postOpeningBalances','finalizeYearEndClosing'
     ]);
     try {
       let result: T;
       try {
-        result = await authRequest<T>(request);
+        result = await authRequest<T>(request, { timeoutMs: action === 'uploadPrivateFile' ? 60000 : 25000 });
       } catch (error) {
         if (!(error instanceof BackendRequestError) || !error.retryable || !idempotentActions.has(action)) throw error;
         await new Promise(resolve => window.setTimeout(resolve, 350));
@@ -338,7 +338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const modulePlan: Record<string, string[]> = {
-      dashboard: ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance','auditLogs'],
+      dashboard: ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance'],
       properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
       properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
       invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],
@@ -466,11 +466,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const uploadPrivateFile = async (file: File, category: string, propertyId?: string, ownerId?: string, relatedModule?: string, relatedRecordId?: string): Promise<{fileId:string;fileName:string;mimeType:string}> => {
     if (file.size > 5 * 1024 * 1024) throw new Error('File size must not exceed 5 MB.');
     if (!['application/pdf','image/jpeg','image/png'].includes(file.type)) throw new Error('Only PDF, JPG and PNG files are accepted.');
-    const base64 = await new Promise<string>((resolve,reject) => {
-      const reader = new FileReader(); reader.onerror = () => reject(new Error('Could not read the selected file.'));
-      reader.onload = () => { const value = String(reader.result || ''); resolve(value.includes(',') ? value.split(',')[1] : value); };
-      reader.readAsDataURL(file);
-    });
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+    }
+    const base64 = btoa(binary);
     const result: any = await apiCall('uploadPrivateFile', { fileName:file.name, mimeType:file.type, base64, category, propertyId:propertyId || '', ownerId:ownerId || '', relatedModule:relatedModule||'', relatedRecordId:relatedRecordId||'' });
     if (!result.data?.fileId) throw new Error('Drive upload did not return a file reference.');
     return result.data;

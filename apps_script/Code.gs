@@ -858,7 +858,7 @@ function login_(body) {
   let context;
   const genericFailure = "Unable to sign in. Check your Society Code, Login ID and Password, or contact your society administrator.";
   try {
-    context = societyAndUsers_(code);
+    context = loginContext_(code, loginId);
   } catch (lookupError) {
     const lookupMessage = String(lookupError && lookupError.message || "").toLowerCase();
     if (lookupMessage.includes("society not found") ||
@@ -873,8 +873,7 @@ function login_(body) {
 
   const society = context.society;
   const usersSheet = context.usersSheet;
-  const rows = context.rows;
-  const user = rows.find(r => normalizeLogin_(r.Login_ID) === loginId);
+  const user = context.user;
 
   // Keep the same response for an unknown Login ID, inactive user or invalid password.
   if (!user || String(user.Account_Status || "").trim().toLowerCase() !== "active" ||
@@ -1166,7 +1165,7 @@ function operationLedger_(ss){
   if(!sh){sh=ss.insertSheet("_Operation Ledger");sh.getRange(1,1,1,6).setValues([["Operation_ID","Action","Record_ID","Status","Result_JSON","Created_At"]]);sh.hideSheet();}
   return sh;
 }
-function findOperation_(sh,key){const rows=sh.getLastRow();if(rows<2)return null;const vals=sh.getRange(2,1,rows-1,5).getValues();for(let i=0;i<vals.length;i++)if(String(vals[i][0])===key)return {row:i+2,status:String(vals[i][3]),result:String(vals[i][4]||"")};return null;}
+function findOperation_(sh,key){const last=sh.getLastRow();if(last<2)return null;const hits=sh.getRange(2,1,last-1,1).createTextFinder(String(key)).matchCase(true).matchEntireCell(true).findAll();if(!hits.length)return null;const row=hits[0].getRow(),v=sh.getRange(row,1,1,6).getValues()[0];return {row,status:String(v[3]||""),result:String(v[4]||"")};}
 function findOperationByActionRecord_(sh,action,recordId){const last=sh.getLastRow();if(last<2)return null;const vals=sh.getRange(2,1,last-1,6).getValues();for(let i=0;i<vals.length;i++){if(String(vals[i][1])===String(action)&&String(vals[i][2])===String(recordId))return {row:i+2,status:String(vals[i][3]),result:String(vals[i][4]||"")};}return null;}
 function requireOperationId_(body){const id=cleanText_(body.requestId||body.idempotencyKey,100);if(!id||id.length<12)throw new Error("A unique requestId (minimum 12 characters) is required.");return id;}
 function writeOperation_(sh,key,action,recordId,status,result){
@@ -1239,19 +1238,49 @@ function validateMasterRecord_(session,mod,record,recordId){
 }
 
 function createRecord_(session,body){
-  const cfg=requireModuleWrite_(session,String(body.module||""),"create");const id=requireOperationId_(body);const lock=LockService.getScriptLock();lock.waitLock(15000);
-  try{const {ss,sh}=societySheet_(session,cfg.sheet);const ledger=operationLedger_(ss);const prior=findOperation_(ledger,id);if(prior){if(prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});throw new Error("A previous operation with this requestId is incomplete; contact Admin.");}
-    if(String(body.module||"")==="owners")ensureHeaders_(sh,["Owner_Status"]);const headers=headerMap_(sh),data=safeRecord_(body.record,headers);if(body.module==="ownershipHistory"){data.Ownership_Status="Current";delete data.Ownership_End_Date;}validateMasterRecord_(session,String(body.module||""),data,"");const recordId=cleanText_(body.record&&body.record[cfg.id]||((cfg.id||"REC").replace(/ID$/i,"")+"-"+randomHex_(8)),100);if(!data[cfg.id])data[cfg.id]=recordId;
-    if(body.module==="activityRequests"){data.Request_Number=data.Request_Number||("REQ-"+new Date().getFullYear()+"-"+String(sh.getLastRow()).padStart(5,"0"));data.Request_Date=data.Request_Date||new Date();data.Request_Status=data.Request_Status||"Pending";data.Assigned_To=data.Assigned_To||"Pending Assignment";data.Updated_At=new Date();}
-    if(body.module==="notices"){data.Notice_Number=data.Notice_Number||("NOT-"+new Date().getFullYear()+"-"+String(sh.getLastRow()).padStart(4,"0"));data.Notice_Status=data.Notice_Status||"Draft";}
-    if(body.module==="gallery"){data.Uploaded_By=session.userId;data.Uploaded_At=new Date();data.Status=data.Status||"Active";}
-    if(body.module==="owners")data.Owner_Status=data.Owner_Status||"Active";
-    if(body.module==="bankAccounts"){data.Current_Balance=Number(data.Opening_Balance||0);}
-    if(cfg.resident){assertPropertyAccess_(session,data.PropertyID);if(session.role==="Resident"){const ownRows=sheetObjects_(societySheet_(session,"Ownership History").sh);const own=ownRows.find(x=>String(x.PropertyID)===String(data.PropertyID)&&String(x.Ownership_Status)==="Current");if(!own)throw new Error("No current ownership is linked to this property.");data.Ownership_ID=own.Ownership_ID;data.OwnerID=own.OwnerID;data.Requested_By=session.userId;data.Request_Status="Pending";}}
+  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"create"),id=requireOperationId_(body);
+  const {ss,sh}=societySheet_(session,cfg.sheet);
+  if(mod==="owners")ensureHeaders_(sh,["Owner_Status"]);
+  const headers=headerMap_(sh),data=safeRecord_(body.record,headers);
+  if(mod==="ownershipHistory"){data.Ownership_Status="Current";delete data.Ownership_End_Date;}
+  const recordId=cleanText_(body.record&&body.record[cfg.id]||((cfg.id||"REC").replace(/ID$/i,"")+"-"+randomHex_(8)),100);
+  if(!data[cfg.id])data[cfg.id]=recordId;
+  if(mod==="activityRequests"){data.Request_Date=data.Request_Date||new Date();data.Request_Status=data.Request_Status||"Pending";data.Assigned_To=data.Assigned_To||"Pending Assignment";data.Updated_At=new Date();}
+  if(mod==="notices")data.Notice_Status=data.Notice_Status||"Draft";
+  if(mod==="gallery"){data.Uploaded_By=session.userId;data.Uploaded_At=new Date();data.Status=data.Status||"Active";}
+  if(mod==="owners")data.Owner_Status=data.Owner_Status||"Active";
+  if(mod==="bankAccounts")data.Current_Balance=Number(data.Opening_Balance||0);
+  if(cfg.resident){
+    assertPropertyAccess_(session,data.PropertyID);
+    if(session.role==="Resident"){
+      const ownRows=sheetObjects_(societySheet_(session,"Ownership History").sh);
+      const own=ownRows.find(x=>String(x.PropertyID)===String(data.PropertyID)&&String(x.Ownership_Status)==="Current");
+      if(!own)throw new Error("No current ownership is linked to this property.");
+      data.Ownership_ID=own.Ownership_ID;data.OwnerID=own.OwnerID;data.Requested_By=session.userId;data.Request_Status="Pending";
+    }
+  }
+  // Perform expensive cross-sheet validation before taking the global lock.
+  // High-integrity uniqueness/ownership constraints are checked again inside it.
+  validateMasterRecord_(session,mod,data,"");
+  data.Created_By=session.userId;data.Created_At=new Date();
+
+  const lock=LockService.getScriptLock();lock.waitLock(5000);
+  let result;
+  try{
+    const ledger=operationLedger_(ss),prior=findOperation_(ledger,id);
+    if(prior){if(prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});throw new Error("A previous operation with this requestId is incomplete; contact Admin.");}
+    if(mod==="properties"||mod==="ownershipHistory"||mod==="bankAccounts")validateMasterRecord_(session,mod,data,"");
     if(cfg.id&&rowById_(sh,cfg.id,data[cfg.id]))throw new Error("Record already exists.");
-    data.Created_By=session.userId;data.Created_At=new Date();writeOperation_(ledger,id,"createRecord",recordId,"STARTED",{});appendByHeaders_(sh,data);auditEvent_(session,"CREATE",cfg.sheet,recordId,"Created through server API","",data);
-    const result={recordId,data};writeOperation_(ledger,id,"createRecord",recordId,"DONE",result);return json_({status:"success",data:result});
+    if(mod==="activityRequests")data.Request_Number=data.Request_Number||("REQ-"+new Date().getFullYear()+"-"+String(sh.getLastRow()).padStart(5,"0"));
+    if(mod==="notices")data.Notice_Number=data.Notice_Number||("NOT-"+new Date().getFullYear()+"-"+String(sh.getLastRow()).padStart(4,"0"));
+    writeOperation_(ledger,id,"createRecord",recordId,"STARTED",{});
+    appendByHeaders_(sh,data);
+    result={recordId,data};
+    writeOperation_(ledger,id,"createRecord",recordId,"DONE",result);
   }finally{lock.releaseLock();}
+  // Audit is append-only but is not part of the critical row-write section.
+  auditEvent_(session,"CREATE",cfg.sheet,recordId,"Created through server API","",data);
+  return json_({status:"success",data:result});
 }
 function updateRecord_(session,body){
   const cfg=requireModuleWrite_(session,String(body.module||""),"update");const id=requireOperationId_(body);const lock=LockService.getScriptLock();lock.waitLock(15000);
@@ -1345,7 +1374,31 @@ function updateExpenseStatus_(session,body,status){const op=requireOperationId_(
     if(status!=="Paid")writeOperation_(ledger,op,"expense"+status,body.expenseId,"STARTED",{});
     updateByHeaders_(sh,f.row,status==="Approved"?{Expense_Status:status,Approved_By:session.userId,Approved_At:new Date()}:{Expense_Status:"Paid",Approved_By:session.userId,Approved_At:r.Approved_At||new Date(),Payment_Date:r.Payment_Date||new Date()},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"expense"+status,body.expenseId,"DONE",{expenseId:body.expenseId,status});auditEvent_(session,status==="Paid"?"APPROVE":"UPDATE","Expense Register",body.expenseId,status,r,{Expense_Status:status,Payment_Date:status==="Paid"?(r.Payment_Date||new Date()):r.Payment_Date});return json_({status:"success"});}finally{lock.releaseLock();}}
 
-function createPrivateSocietyFolder_(session){const info=societyAndUsers_(session.societyCode).society;const folderId=String(info.Drive_Folder_ID||info.Drive_FolderID||info["Drive Folder ID"]||"");const folder=folderId?DriveApp.getFolderById(folderId):DriveApp.getFolderById(getConfigValue_("DEFAULT_DRIVE_FOLDER_ID"));if(folder.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Society Drive root folder must be private.");const name="Society_"+session.societyCode;const it=folder.getFoldersByName(name);const sub=it.hasNext()?it.next():folder.createFolder(name);if(sub.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Society private document folder must not be shared.");return sub;}
+function societyDriveInfo_(code){
+  const master=SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
+  const sh=master.getSheetByName("Society Master");if(!sh)throw new Error("Missing Central Master tab: Society Master");
+  const headers=headerMap_(sh),col=headers.indexOf("Society_Code")+1;if(!col)throw new Error("Missing required column: Society_Code");
+  const last=sh.getLastRow();if(last<2)throw new Error("Society not found or inactive.");
+  const hits=sh.getRange(2,col,last-1,1).createTextFinder(String(code)).matchCase(false).matchEntireCell(true).findAll();
+  if(hits.length!==1)throw new Error("Society not found or duplicated.");
+  const info=objectFromRow_(headers,sh.getRange(hits[0].getRow(),1,1,headers.length).getValues()[0]);
+  if(String(info.Society_Status||"").trim().toLowerCase()!=="active")throw new Error("Society is inactive.");
+  return info;
+}
+
+function createPrivateSocietyFolder_(session){
+  const cache=CacheService.getScriptCache(),key="DRIVE_FOLDER_"+sha256_(String(session.societyCode));
+  const cachedId=cache.get(key);
+  if(cachedId){try{const cached=DriveApp.getFolderById(cachedId);if(cached.getSharingAccess()===DriveApp.Access.PRIVATE)return cached;}catch(e){}cache.remove(key);}
+  const info=societyDriveInfo_(session.societyCode);
+  const rootId=String(info.Drive_Folder_ID||info.Drive_FolderID||info["Drive Folder ID"]||"");
+  const root=rootId?DriveApp.getFolderById(rootId):DriveApp.getFolderById(getConfigValue_("DEFAULT_DRIVE_FOLDER_ID"));
+  if(root.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Society Drive root folder must be private.");
+  const name="Society_"+session.societyCode,iterator=root.getFoldersByName(name);
+  const sub=iterator.hasNext()?iterator.next():root.createFolder(name);
+  if(sub.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Society private document folder must not be shared.");
+  cache.put(key,sub.getId(),21600);return sub;
+}
 function uploadPrivateFile_(session,body){
   const op=requireOperationId_(body),name=cleanText_(body.fileName,120),mime=String(body.mimeType||""),encoded=String(body.base64||"").replace(/^data:[^;]+;base64,/i,"");
   if(!name)throw new Error("File name is required.");
@@ -1363,8 +1416,8 @@ function uploadPrivateFile_(session,body){
   };
   if(!categoryRoles[lower])throw new Error("Unsupported document category.");
   if(categoryRoles[lower].indexOf(session.role)<0)throw new Error("Permission denied for this document category.");
-  if(propertyId&&!sheetObjects_(societySheet_(session,"Property Master").sh).some(x=>String(x.PropertyID)===propertyId))throw new Error("Selected property does not exist in this society.");
-  if(ownerId&&!sheetObjects_(societySheet_(session,"Owner Master").sh).some(x=>String(x.OwnerID)===ownerId))throw new Error("Selected owner does not exist in this society.");
+  if(propertyId&&!rowById_(societySheet_(session,"Property Master").sh,"PropertyID",propertyId))throw new Error("Selected property does not exist in this society.");
+  if(ownerId&&!rowById_(societySheet_(session,"Owner Master").sh,"OwnerID",ownerId))throw new Error("Selected owner does not exist in this society.");
   if(session.role==="Resident")assertPropertyAccess_(session,propertyId);
   const linkMap={
     "owner document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
@@ -1377,49 +1430,79 @@ function uploadPrivateFile_(session,body){
     "payment proof":{module:"receipts",sheet:"Fund Inflow Register",id:"Transaction_ID",fields:["File_Reference","Payment_Proof_File_ID"]},
     "invoice pdf":{module:"invoices",sheet:"Invoice_Register",id:"InvoiceID",fields:["File_Reference","Invoice_PDF_File_ID"]}
   };
-  let relatedTarget=null,relatedRecord=null,targetField="";
+  let relatedTarget=null,relatedRecord=null,targetField="",resolvedPropertyId=propertyId,resolvedOwnerId=ownerId;
   if(relatedModule||relatedRecordId){
     const cfg=linkMap[lower];
     if(!cfg||cfg.module!==relatedModule||!relatedRecordId)throw new Error("The selected module does not match this document category.");
-    const target=societySheet_(session,cfg.sheet);
-    relatedTarget={cfg,sh:target.sh};
-    const found=rowById_(target.sh,cfg.id,relatedRecordId);
+    const target=societySheet_(session,cfg.sheet),found=rowById_(target.sh,cfg.id,relatedRecordId);
     if(!found)throw new Error("Related record was not found.");
-    relatedRecord=objectFromRow_(found.headers,found.values);
+    relatedTarget={cfg,sh:target.sh};relatedRecord=objectFromRow_(found.headers,found.values);
     if(relatedRecord.PropertyID)assertPropertyAccess_(session,relatedRecord.PropertyID);
     if(session.role==="Resident"&&lower==="activity request attachment"&&String(relatedRecord.Requested_By)!==String(session.userId))throw new Error("You may attach files only to your own activity requests.");
     if(propertyId&&relatedRecord.PropertyID&&String(propertyId)!==String(relatedRecord.PropertyID))throw new Error("Document property does not match the related record.");
     if(ownerId&&relatedRecord.OwnerID&&String(ownerId)!==String(relatedRecord.OwnerID))throw new Error("Document owner does not match the related ownership record.");
+    resolvedPropertyId=resolvedPropertyId||String(relatedRecord.PropertyID||"");
+    resolvedOwnerId=resolvedOwnerId||String(relatedRecord.OwnerID||"");
     targetField=cfg.fields.find(f=>found.headers.indexOf(f)>=0);
     if(!targetField)throw new Error("The related sheet has no document reference column. Add one of: "+cfg.fields.join(", "));
   }
-  const lock=LockService.getScriptLock();lock.waitLock(15000);
+
+  // Critical section 1: reserve the idempotency key. Do not keep the global
+  // Apps Script lock while calling Drive (which can take several seconds).
+  const lock=LockService.getScriptLock();let ss,ledger;
+  lock.waitLock(5000);
   try{
-    const ss=SpreadsheetApp.openById(session.databaseId),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);
+    ss=SpreadsheetApp.openById(session.databaseId);ledger=operationLedger_(ss);
+    const prior=findOperation_(ledger,op);
     if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});
-    if(prior)throw new Error("A previous file upload is incomplete; check Drive and File Registry before retrying.");
+    if(prior&&prior.status!=="FAILED")throw new Error("A previous file upload is in progress or incomplete; check File Registry before retrying.");
     writeOperation_(ledger,op,"uploadPrivateFile","","STARTED",{});
-    const folder=createPrivateSocietyFolder_(session),blob=Utilities.newBlob(bytes,mime,session.societyCode+"_"+Date.now()+"_"+name.replace(/[^\w.\-]/g,"_")),file=folder.createFile(blob);
-    file.setSharing(DriveApp.Access.PRIVATE,DriveApp.Permission.NONE);
-    let reg=ss.getSheetByName("_File Registry");
-    if(!reg){reg=ss.insertSheet("_File Registry");reg.getRange(1,1,1,10).setValues([["File_ID","PropertyID","OwnerID","Category","Uploaded_By","Created_At","Related_Module","Related_Record_ID","File_Name","Mime_Type"]]);reg.hideSheet();}
-    ensureHeaders_(reg,["File_ID","PropertyID","OwnerID","Category","Uploaded_By","Created_At","Related_Module","Related_Record_ID","File_Name","Mime_Type"]);
-    appendByHeaders_(reg,{File_ID:file.getId(),PropertyID:propertyId,OwnerID:ownerId,Category:category,Uploaded_By:session.userId,Created_At:new Date(),Related_Module:relatedModule,Related_Record_ID:relatedRecordId,File_Name:file.getName(),Mime_Type:mime});
-    let linked=false;
-    if(relatedTarget&&relatedRecord){
-      const found=rowById_(relatedTarget.sh,relatedTarget.cfg.id,relatedRecordId);
-      if(!found)throw new Error("Related record was removed before the upload completed.");
-      const regFile=rowById_(reg,"File_ID",file.getId());
-      if(regFile)updateByHeaders_(reg,regFile.row,{PropertyID:propertyId||String(relatedRecord.PropertyID||""),OwnerID:ownerId||String(relatedRecord.OwnerID||"")},["File_ID"]);
-      const patch={};patch[targetField]=file.getId();
-      updateByHeaders_(relatedTarget.sh,found.row,patch,[relatedTarget.cfg.id,"Created_By","Created_At"]);
-      auditEvent_(session,"UPDATE",relatedTarget.cfg.sheet,relatedRecordId,"Private document linked: "+category,relatedRecord,patch);linked=true;
-    }
-    const data={fileId:file.getId(),fileName:file.getName(),mimeType:mime,linked};
-    writeOperation_(ledger,op,"uploadPrivateFile",file.getId(),"DONE",data);
-    auditEvent_(session,"CREATE","Drive",file.getId(),"Category="+category,"",{fileId:file.getId(),fileName:file.getName(),propertyId,ownerId,relatedModule,relatedRecordId,linked});
-    return json_({status:"success",data});
   }finally{lock.releaseLock();}
+
+  // Slow I/O outside the global lock: society folder lookup (cached), Drive file
+  // creation and privacy enforcement can now run concurrently for other users.
+  let file=null,reg=null,linked=false,committed=false;
+  try{
+    const folder=createPrivateSocietyFolder_(session);
+    const safeName=name.replace(/[^\w.\-]/g,"_");
+    const blob=Utilities.newBlob(bytes,mime,session.societyCode+"_"+Date.now()+"_"+safeName);
+    file=folder.createFile(blob);
+    file.setSharing(DriveApp.Access.PRIVATE,DriveApp.Permission.NONE);
+
+    // Critical section 2: atomically register/link the file and finish its operation.
+    lock.waitLock(5000);
+    try{
+      reg=ss.getSheetByName("_File Registry");
+      if(!reg){reg=ss.insertSheet("_File Registry");reg.getRange(1,1,1,10).setValues([["File_ID","PropertyID","OwnerID","Category","Uploaded_By","Created_At","Related_Module","Related_Record_ID","File_Name","Mime_Type"]]);reg.hideSheet();}
+      ensureHeaders_(reg,["File_ID","PropertyID","OwnerID","Category","Uploaded_By","Created_At","Related_Module","Related_Record_ID","File_Name","Mime_Type"]);
+      appendByHeaders_(reg,{File_ID:file.getId(),PropertyID:resolvedPropertyId,OwnerID:resolvedOwnerId,Category:category,Uploaded_By:session.userId,Created_At:new Date(),Related_Module:relatedModule,Related_Record_ID:relatedRecordId,File_Name:file.getName(),Mime_Type:mime});
+      if(relatedTarget&&relatedRecord){
+        const found=rowById_(relatedTarget.sh,relatedTarget.cfg.id,relatedRecordId);
+        if(!found)throw new Error("Related record was removed before the upload completed.");
+        const patch={};patch[targetField]=file.getId();
+        updateByHeaders_(relatedTarget.sh,found.row,patch,[relatedTarget.cfg.id,"Created_By","Created_At"]);
+        linked=true;
+      }
+      const data={fileId:file.getId(),fileName:file.getName(),mimeType:mime,linked};
+      writeOperation_(ledger,op,"uploadPrivateFile",file.getId(),"DONE",data);
+      committed=true;
+    }finally{lock.releaseLock();}
+  }catch(uploadError){
+    // Best-effort rollback: do not leave a visible registry reference to an
+    // uncommitted file. FAILED operations may be safely retried with the same ID.
+    if(!committed){
+      try{lock.waitLock(5000);try{
+        if(linked&&relatedTarget&&relatedRecord){const found=rowById_(relatedTarget.sh,relatedTarget.cfg.id,relatedRecordId);if(found&&String(found.values[found.headers.indexOf(targetField)]||"")===String(file&&file.getId()||"")){const restore={};restore[targetField]=relatedRecord[targetField]||"";updateByHeaders_(relatedTarget.sh,found.row,restore,[relatedTarget.cfg.id,"Created_By","Created_At"]);}}
+        if(reg&&file){const rf=rowById_(reg,"File_ID",file.getId());if(rf)reg.deleteRow(rf.row);}
+        writeOperation_(ledger,op,"uploadPrivateFile",file?file.getId():"","FAILED",{message:String(uploadError&&uploadError.message||uploadError).slice(0,200)});
+      }finally{lock.releaseLock();}}catch(cleanupError){Logger.log("Upload rollback warning: "+cleanupError);}
+      if(file){try{file.setTrashed(true);}catch(trashError){Logger.log("Upload cleanup warning: "+trashError);}}
+    }
+    throw uploadError;
+  }
+  if(linked)auditEvent_(session,"UPDATE",relatedTarget.cfg.sheet,relatedRecordId,"Private document linked: "+category,relatedRecord,{[targetField]:file.getId()});
+  auditEvent_(session,"CREATE","Drive",file.getId(),"Category="+category,"",{fileId:file.getId(),fileName:file.getName(),propertyId:resolvedPropertyId,ownerId:resolvedOwnerId,relatedModule,relatedRecordId,linked});
+  return json_({status:"success",data:{fileId:file.getId(),fileName:file.getName(),mimeType:mime,linked}});
 }
 function getPrivateFile_(session,body){const fileId=cleanText_(body.fileId,200);if(!fileId)throw new Error("File ID is required.");const ss=SpreadsheetApp.openById(session.databaseId),reg=ss.getSheetByName("_File Registry");if(!reg)throw new Error("File registry is not available.");const registered=sheetObjects_(reg).find(r=>String(r.File_ID)===fileId);if(!registered)throw new Error("File is not registered to this society.");const category=String(registered.Category||"").toLowerCase();if(session.role==="Resident"){assertPropertyAccess_(session,registered.PropertyID);if(body.propertyId&&String(body.propertyId)!==String(registered.PropertyID))throw new Error("File property access denied.");if(["bank statement","expense voucher"].includes(category))throw new Error("This document category is not available to Resident accounts.");if(!residentCanAccessLinkedFile_(session,registered))throw new Error("This document is not available to your account or its linked record is not visible.");}else if(session.role==="Committee"&&["kyc","owner document","ownership document","bank statement"].includes(category)){throw new Error("This document category is restricted to Admin.");}else if(session.role==="Accountant"&&["kyc","owner document","ownership document"].includes(category)){throw new Error("This document category is restricted to Admin.");}const file=DriveApp.getFileById(fileId);if(file.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Public/shared Drive files are not served by this API.");let allowed=false;let level=[file.getParents()];for(let depth=0;depth<5&&level.length;depth++){const next=[];level.forEach(it=>{while(it.hasNext()){const folder=it.next();if(folder.getName()==="Society_"+session.societyCode)allowed=true;next.push(folder.getParents());}});level=next;}if(!allowed)throw new Error("File does not belong to this society folder.");const blob=file.getBlob();if(blob.getBytes().length>5*1024*1024)throw new Error("File too large for inline preview; use an authorized Drive workflow.");return json_({status:"success",data:{fileName:file.getName(),mimeType:blob.getContentType(),base64:Utilities.base64Encode(blob.getBytes())}});}
 function createSocietyBackup_(session,body){
@@ -1533,7 +1616,7 @@ function restoreSocietyBackup_(session,body){
     return json_({status:"success",data:result});
   }finally{lock.releaseLock();}
 }
-function auditEvent_(session,action,module,recordId,remarks,oldValue,newValue){const sh=societySheet_(session,"Audit Log").sh;const stringify=v=>{if(v===undefined||v===null||v==="")return "";try{return JSON.stringify(v).slice(0,4500);}catch(e){return String(v).slice(0,4500);}};const row={Log_ID:"LOG-"+randomHex_(8),UserID:session.userId,User_Name:session.fullName||session.userId,Action_Type:action,Module_Name:module,Record_ID:recordId,Old_Value:stringify(oldValue),New_Value:stringify(newValue),Action_DateTime:new Date(),Remarks:cleanText_(remarks,500)};appendByHeaders_(sh,row);}
+function auditEvent_(session,action,module,recordId,remarks,oldValue,newValue){const sh=societySheet_(session,"Audit Log").sh;const stringify=v=>{if(v===undefined||v===null||v==="")return "";try{return JSON.stringify(v).slice(0,4500);}catch(e){return String(v).slice(0,4500);}};const row={Log_ID:"LOG-"+randomHex_(8),UserID:session.userId,User_Name:session.fullName||session.userId,Action_Type:action,Module_Name:module,Record_ID:recordId,Old_Value:stringify(oldValue),New_Value:stringify(newValue),Action_DateTime:new Date(),Remarks:cleanText_(remarks,500)};const headers=headerMap_(sh);sh.appendRow(headers.map(h=>Object.prototype.hasOwnProperty.call(row,h)?row[h]:""));}
 
 function getConfigValue_(key){const value=PropertiesService.getScriptProperties().getProperty(key)||CONFIG[key];if(!value)throw new Error("Missing Apps Script Project Property: "+key);return String(value);}
 
@@ -1563,6 +1646,54 @@ function societyAndUsers_(code) {
   ensureHeaders_(usersSheet,USER_HEADERS);const rows=findRowsByHeaderValue_(usersSheet,"Society_Code",code);
   return {society,usersSheet,rows};
 }
+/**
+ * Login-only lookup: find the exact Society_Code and Login_ID rows instead of
+ * downloading and parsing every user row for that society on every sign-in.
+ * Password hash verification remains unchanged (12,000 HMAC-SHA256 rounds).
+ */
+function loginContext_(code, loginId) {
+  const master = SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
+  const societySheet = master.getSheetByName("Society Master");
+  const usersSheet = master.getSheetByName("Society User Access");
+  if (!societySheet) throw new Error('Missing Central Master tab: Society Master');
+  if (!usersSheet) throw new Error('Missing Central User Access tab: Society User Access');
+  ensureHeaders_(usersSheet, USER_HEADERS);
+
+  const societyHeaders = headerMap_(societySheet);
+  const societyCodeCol = societyHeaders.indexOf("Society_Code") + 1;
+  if (!societyCodeCol) throw new Error("Missing required column: Society_Code");
+  const societyLast = societySheet.getLastRow();
+  if (societyLast < 2) throw new Error("Society not found, duplicated or inactive.");
+  const societyMatches = societySheet.getRange(2, societyCodeCol, societyLast - 1, 1)
+    .createTextFinder(String(code)).matchCase(false).matchEntireCell(true).findAll();
+  if (societyMatches.length !== 1) throw new Error("Society not found, duplicated or inactive.");
+  const societyRow = societyMatches[0].getRow();
+  const society = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
+  if (String(society.Society_Status || "").trim().toLowerCase() !== "active") throw new Error("Society not found, duplicated or inactive.");
+  society.Database_ID = society.Database_ID || society.Database_Spreadsheet_ID || society["Database Spreadsheet ID"];
+  if (!society.Database_ID) throw new Error("Society database is not configured.");
+
+  const userHeaders = headerMap_(usersSheet);
+  const loginCol = userHeaders.indexOf("Login_ID") + 1;
+  const societyCol = userHeaders.indexOf("Society_Code") + 1;
+  if (!loginCol || !societyCol) throw new Error("Society User Access is missing Login_ID or Society_Code.");
+  const userLast = usersSheet.getLastRow();
+  if (userLast < 2) return { society, usersSheet, user: null };
+  const candidates = usersSheet.getRange(2, loginCol, userLast - 1, 1)
+    .createTextFinder(String(loginId)).matchCase(false).matchEntireCell(true).findAll();
+  let user = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const row = candidates[i].getRow();
+    const values = usersSheet.getRange(row, 1, 1, userHeaders.length).getValues()[0];
+    const candidate = objectFromRow_(userHeaders, values);
+    if (String(candidate.Society_Code || "").trim().toUpperCase() !== code) continue;
+    if (user) throw new Error("Duplicate Login_ID found for this society.");
+    candidate.__row = row;
+    user = candidate;
+  }
+  return { society, usersSheet, user };
+}
+
 function sessionUserCacheKey_(societyCode,userId) {
   return "AUTH_USER_" + sha256_(String(societyCode) + "|" + String(userId));
 }
