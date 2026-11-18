@@ -82,6 +82,12 @@ function doPost(e) {
       case "approveReportSnapshot": return approveReportSnapshot_(session, body);
       case "listReportSnapshots": return listReportSnapshots_(session, body);
       case "postOpeningBalances": return postOpeningBalances_(session, body);
+      case "listAccountingVouchers": return listAccountingVouchers_(session, body);
+      case "createAccountingVoucher": return createAccountingVoucher_(session, body);
+      case "approveAccountingVoucher": return approveAccountingVoucher_(session, body);
+      case "postAccountingVoucher": return postAccountingVoucher_(session, body);
+      case "cancelAccountingVoucher": return cancelAccountingVoucher_(session, body);
+      case "getAccountingBook": return getAccountingBook_(session, body);
       case "listPrivateFiles": return listPrivateFiles_(session, body);
       case "configureAutomatedBackup": return configureAutomatedBackup_(session, body);
       case "restoreSocietyBackup": return restoreSocietyBackup_(session, body);
@@ -184,14 +190,90 @@ function getModuleSchema_(session, body) {
 function journalSheet_(ss){
   return ensureInternalSheet_(ss,"_Journal Ledger",["Journal_ID","Journal_Date","Source_Type","Source_ID","Account_Code","Account_Name","Account_Type","Debit","Credit","PropertyID","Ownership_ID","Narration","Posted_By","Posted_At","Status"]);
 }
+function voucherRegisterSheet_(ss){
+  return ensureInternalSheet_(ss,"_Voucher Register",["Voucher_ID","Voucher_No","Voucher_Type","Voucher_Date","FY_ID","Narration","Total_Debit","Total_Credit","Voucher_Status","Reference_ID","Created_By","Created_At","Approved_By","Approved_At","Posted_By","Posted_At","Cancelled_By","Cancelled_At","Cancellation_Reason"]);
+}
+function journalDetailsSheet_(ss){
+  return ensureInternalSheet_(ss,"_Journal Details",["Entry_ID","Voucher_ID","Voucher_No","Entry_Date","FY_ID","Account_ID","Account_Code","Account_Name","Account_Type","Debit_Amount","Credit_Amount","PropertyID","Ownership_ID","InvoiceID","Transaction_ID","Expense_ID","Narration","Entry_Status","Created_By","Created_At"]);
+}
+function resolveAccountingFY_(ss,dateValue,providedId){
+  const sh=ss.getSheetByName("Financial Year Master");if(!sh)throw new Error("Financial Year Master is required for accounting voucher posting.");
+  const date=String(dateValue||"").slice(0,10),rows=sheetObjects_(sh);
+  const fy=rows.find(x=>(!providedId||String(x.FY_ID)===String(providedId))&&String(x.Start_Date||"").slice(0,10)<=date&&String(x.End_Date||"").slice(0,10)>=date);
+  if(!fy)throw new Error("Voucher date does not belong to the selected/available Financial Year.");
+  const status=String(fy.FY_Status||"Active").toLowerCase();if(["closed","finalized","locked","inactive"].includes(status))throw new Error("This Financial Year is closed for posting.");
+  return String(fy.FY_ID||"");
+}
+function accountById_(ss,id){
+  const sh=ss.getSheetByName("Account Head Master");
+  if(!sh)throw new Error("Account Head Master sheet is required before posting vouchers.");
+  const row=sheetObjects_(sh).find(x=>String(x.Account_ID)===String(id)&&String(x.Status||"Active")==="Active");
+  if(!row)throw new Error("An active Account Head must be selected for every journal line.");
+  return row;
+}
+function nextVoucherNo_(ss,type,date){
+  const sh=voucherRegisterSheet_(ss),year=String(date||new Date()).slice(0,4)||String(new Date().getFullYear());
+  const prefix=String(type||"JV").toUpperCase()+"-"+year+"-";
+  const count=sheetObjects_(sh).filter(x=>String(x.Voucher_No||"").indexOf(prefix)===0).length+1;
+  return prefix+String(count).padStart(6,"0");
+}
 function postJournalEntry_(ss, sourceType, sourceId, journalDate, entries, session){
   const sh=journalSheet_(ss),existing=sheetObjects_(sh).filter(x=>String(x.Source_Type)===String(sourceType)&&String(x.Source_ID)===String(sourceId)&&String(x.Status)==="Posted");
   if(existing.length)return existing;
-  const totalDebit=entries.reduce((a,x)=>a+Number(x.debit||0),0),totalCredit=entries.reduce((a,x)=>a+Number(x.credit||0),0);
-  if(Math.abs(totalDebit-totalCredit)>0.009)throw new Error("Journal entry is not balanced.");
-  const rows=entries.filter(x=>Number(x.debit||0)>0||Number(x.credit||0)>0).map(x=>({Journal_ID:"JRN-"+randomHex_(8),Journal_Date:journalDate||new Date(),Source_Type:sourceType,Source_ID:sourceId,Account_Code:x.accountCode||"",Account_Name:x.accountName,Account_Type:x.accountType,Debit:Number(x.debit||0),Credit:Number(x.credit||0),PropertyID:x.propertyId||"",Ownership_ID:x.ownershipId||"",Narration:x.narration||"",Posted_By:session.userId,Posted_At:new Date(),Status:"Posted"}));
+  const clean=(entries||[]).filter(x=>Number(x.debit||0)>0||Number(x.credit||0)>0);
+  if(clean.length<2)throw new Error("A journal must contain at least two non-zero lines.");
+  const totalDebit=clean.reduce((a,x)=>a+Number(x.debit||0),0),totalCredit=clean.reduce((a,x)=>a+Number(x.credit||0),0);
+  if(!isFinite(totalDebit)||!isFinite(totalCredit)||Math.abs(totalDebit-totalCredit)>0.009)throw new Error("Journal entry is not balanced.");
+  clean.forEach(x=>{const d=Number(x.debit||0),c=Number(x.credit||0);if(d<0||c<0||(d>0&&c>0)||!isFinite(d)||!isFinite(c))throw new Error("Each journal line must have either a positive debit or a positive credit.");});
+  const rows=clean.map(x=>({Journal_ID:"JRN-"+randomHex_(8),Journal_Date:journalDate||new Date(),Source_Type:sourceType,Source_ID:sourceId,Account_Code:x.accountCode||"",Account_Name:x.accountName,Account_Type:x.accountType,Debit:Number(x.debit||0),Credit:Number(x.credit||0),PropertyID:x.propertyId||"",Ownership_ID:x.ownershipId||"",Narration:x.narration||"",Posted_By:session.userId,Posted_At:new Date(),Status:"Posted"}));
   rows.forEach(r=>appendByHeaders_(sh,r));
+  // Keep a voucher register and line-level journal detail for both automatic and manual postings.
+  const vr=voucherRegisterSheet_(ss),jd=journalDetailsSheet_(ss),typeMap={Receipt:"RV",Expense:"PV",Contra:"CV",Invoice:"JV","Opening Balance":"JV","Invoice Reversal":"JV",RV:"RV",PV:"PV",JV:"JV",CV:"CV"};
+  const existingVoucher=sheetObjects_(vr).find(x=>String(x.Voucher_ID)===String(sourceId));
+  const voucherType=typeMap[String(sourceType)]||"JV",voucherId=existingVoucher?String(sourceId):"VCH-"+String(sourceId),voucherNo=existingVoucher?String(existingVoucher.Voucher_No):nextVoucherNo_(ss,voucherType,journalDate||new Date());
+  if(existingVoucher){
+    const vf=rowById_(vr,"Voucher_ID",voucherId);if(vf)updateByHeaders_(vr,vf.row,{Voucher_Status:"Posted",Posted_By:session.userId,Posted_At:new Date()},["Voucher_ID","Voucher_No"]);
+    sheetObjects_(jd).filter(x=>String(x.Voucher_ID)===voucherId).forEach(x=>{const ef=rowById_(jd,"Entry_ID",x.Entry_ID);if(ef)updateByHeaders_(jd,ef.row,{Entry_Status:"Posted"},["Entry_ID","Voucher_ID"]);});
+  } else {
+    appendByHeaders_(vr,{Voucher_ID:voucherId,Voucher_No:voucherNo,Voucher_Type:voucherType,Voucher_Date:journalDate||new Date(),FY_ID:"",Narration:String(clean[0].narration||sourceType),Total_Debit:totalDebit,Total_Credit:totalCredit,Voucher_Status:"Posted",Reference_ID:String(sourceId),Created_By:session.userId,Created_At:new Date(),Approved_By:session.userId,Approved_At:new Date(),Posted_By:session.userId,Posted_At:new Date()});
+    clean.forEach((x,i)=>appendByHeaders_(jd,{Entry_ID:rows[i].Journal_ID,Voucher_ID:voucherId,Voucher_No:voucherNo,Entry_Date:journalDate||new Date(),FY_ID:"",Account_ID:x.accountId||"",Account_Code:x.accountCode||"",Account_Name:x.accountName,Account_Type:x.accountType,Debit_Amount:Number(x.debit||0),Credit_Amount:Number(x.credit||0),PropertyID:x.propertyId||"",Ownership_ID:x.ownershipId||"",InvoiceID:x.invoiceId||"",Transaction_ID:x.transactionId||"",Expense_ID:x.expenseId||"",Narration:x.narration||"",Entry_Status:"Posted",Created_By:session.userId,Created_At:new Date()}));
+  }
   return rows;
+}
+
+function listAccountingVouchers_(session,body){
+  requireRole_(session,["Admin","Accountant","Committee"]);
+  const ss=SpreadsheetApp.openById(session.databaseId),sh=voucherRegisterSheet_(ss);
+  let rows=sheetObjects_(sh);if(body.voucherType)rows=rows.filter(x=>String(x.Voucher_Type)===String(body.voucherType));if(body.status)rows=rows.filter(x=>String(x.Voucher_Status)===String(body.status));
+  return json_({status:"success",data:rows.slice(-Math.min(500,Math.max(1,Number(body.limit)||200))).reverse()});
+}
+function createAccountingVoucher_(session,body){
+  requireRole_(session,["Admin","Accountant"]);const op=requireOperationId_(body),type=String(body.voucherType||"JV").toUpperCase(),date=cleanText_(body.voucherDate,10),narration=cleanText_(body.narration,500),lines=Array.isArray(body.lines)?body.lines:[];
+  if(["RV","PV","JV","CV"].indexOf(type)<0)throw new Error("Invalid voucher type.");if(!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new Error("A valid voucher date is required.");if(!narration||lines.length<2||lines.length>100)throw new Error("Narration and 2–100 journal lines are required.");
+  const lock=LockService.getScriptLock();lock.waitLock(20000);try{const ss=SpreadsheetApp.openById(session.databaseId),ops=operationLedger_(ss),prior=findOperation_(ops,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("Previous voucher operation is incomplete; reconcile before retrying.");
+    const normalized=lines.map(x=>{const acc=accountById_(ss,x.accountId),d=Number(x.debit||0),c=Number(x.credit||0);if(!isFinite(d)||!isFinite(c)||d<0||c<0||(d>0&&c>0)||(d===0&&c===0))throw new Error("Each line must contain one positive debit or credit.");return {accountId:acc.Account_ID,accountCode:acc.Account_Code,accountName:acc.Account_Name,accountType:acc.Account_Type,debit:d,credit:c,propertyId:cleanText_(x.propertyId,80),ownershipId:cleanText_(x.ownershipId,80),narration:cleanText_(x.narration,300)||narration};});
+    const dr=normalized.reduce((a,x)=>a+x.debit,0),cr=normalized.reduce((a,x)=>a+x.credit,0);if(Math.abs(dr-cr)>0.009)throw new Error("Total Debit must equal Total Credit before a voucher can be saved.");
+    if(type==="CV"){if(normalized.some(x=>x.accountType!=="Asset")||normalized.filter(x=>x.debit>0).length!==1||normalized.filter(x=>x.credit>0).length!==1)throw new Error("Contra Voucher requires exactly one debit and one credit line, both Asset accounts.");}
+    if(type==="RV"&&!normalized.some(x=>x.debit>0&&x.accountType==="Asset"))throw new Error("Receipt Voucher must debit a Cash or Bank (Asset) account.");
+    if(type==="PV"&&!normalized.some(x=>x.credit>0&&x.accountType==="Asset"))throw new Error("Payment Voucher must credit a Cash or Bank (Asset) account.");
+    const fyId=resolveAccountingFY_(ss,date,body.fyId||"");
+    const id="VCH-"+randomHex_(8).toUpperCase(),no=nextVoucherNo_(ss,type,date),sh=voucherRegisterSheet_(ss),jd=journalDetailsSheet_(ss);writeOperation_(ops,op,"createAccountingVoucher",id,"STARTED",{});
+    appendByHeaders_(sh,{Voucher_ID:id,Voucher_No:no,Voucher_Type:type,Voucher_Date:date,FY_ID:fyId,Narration:narration,Total_Debit:dr,Total_Credit:cr,Voucher_Status:"Pending Approval",Reference_ID:cleanText_(body.referenceId,100),Created_By:session.userId,Created_At:new Date()});
+    normalized.forEach(x=>appendByHeaders_(jd,{Entry_ID:"ENT-"+randomHex_(8),Voucher_ID:id,Voucher_No:no,Entry_Date:date,FY_ID:fyId,Account_ID:x.accountId,Account_Code:x.accountCode,Account_Name:x.accountName,Account_Type:x.accountType,Debit_Amount:x.debit,Credit_Amount:x.credit,PropertyID:x.propertyId,Ownership_ID:x.ownershipId,Narration:x.narration,Entry_Status:"Pending Approval",Created_By:session.userId,Created_At:new Date()}));
+    const result={voucherId:id,voucherNo:no,totalDebit:dr,totalCredit:cr,status:"Pending Approval"};writeOperation_(ops,op,"createAccountingVoucher",id,"DONE",result);auditEvent_(session,"CREATE","Voucher Register",id,"Created "+type+" "+no,"",result);return json_({status:"success",data:result});
+  }finally{lock.releaseLock();}
+}
+function approveAccountingVoucher_(session,body){
+  requireRole_(session,["Admin"]);const id=cleanText_(body.voucherId,100),shs=SpreadsheetApp.openById(session.databaseId),vr=voucherRegisterSheet_(shs),f=rowById_(vr,"Voucher_ID",id);if(!f)throw new Error("Voucher not found.");const v=objectFromRow_(f.headers,f.values);if(v.Voucher_Status!=="Pending Approval")throw new Error("Only pending vouchers can be approved.");updateByHeaders_(vr,f.row,{Voucher_Status:"Approved",Approved_By:session.userId,Approved_At:new Date()},["Voucher_ID","Voucher_No"]);auditEvent_(session,"APPROVE","Voucher Register",id,"Voucher approved",v,{Voucher_Status:"Approved"});return json_({status:"success"});
+}
+function postAccountingVoucher_(session,body){
+  requireRole_(session,["Admin"]);const id=cleanText_(body.voucherId,100),op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(20000);try{const ss=SpreadsheetApp.openById(session.databaseId),ops=operationLedger_(ss),prior=findOperation_(ops,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("Previous posting is incomplete; reconcile before retrying.");const vr=voucherRegisterSheet_(ss),vf=rowById_(vr,"Voucher_ID",id);if(!vf)throw new Error("Voucher not found.");const v=objectFromRow_(vf.headers,vf.values);if(v.Voucher_Status!=="Approved")throw new Error("Only approved vouchers can be posted.");resolveAccountingFY_(ss,v.Voucher_Date,v.FY_ID);const jd=journalDetailsSheet_(ss),lines=sheetObjects_(jd).filter(x=>String(x.Voucher_ID)===id);if(lines.length<2)throw new Error("Voucher journal details are missing.");const entries=lines.map(x=>({accountCode:x.Account_Code,accountId:x.Account_ID,accountName:x.Account_Name,accountType:x.Account_Type,debit:Number(x.Debit_Amount||0),credit:Number(x.Credit_Amount||0),propertyId:x.PropertyID,ownershipId:x.Ownership_ID,narration:x.Narration}));const dr=entries.reduce((a,x)=>a+x.debit,0),cr=entries.reduce((a,x)=>a+x.credit,0);if(Math.abs(dr-cr)>0.009)throw new Error("Voucher is not balanced.");writeOperation_(ops,op,"postAccountingVoucher",id,"STARTED",{});postJournalEntry_(ss,v.Voucher_Type,id,v.Voucher_Date,entries,session);updateByHeaders_(vr,vf.row,{Voucher_Status:"Posted",Posted_By:session.userId,Posted_At:new Date()},["Voucher_ID","Voucher_No"]);lines.forEach(x=>{const r=rowById_(jd,"Entry_ID",x.Entry_ID);if(r)updateByHeaders_(jd,r.row,{Entry_Status:"Posted"},["Entry_ID","Voucher_ID"]);});const result={voucherId:id,voucherNo:v.Voucher_No,totalDebit:dr,totalCredit:cr,status:"Posted"};writeOperation_(ops,op,"postAccountingVoucher",id,"DONE",result);auditEvent_(session,"POST","Voucher Register",id,"Voucher posted to General Ledger","",result);return json_({status:"success",data:result});}finally{lock.releaseLock();}
+}
+function cancelAccountingVoucher_(session,body){
+  requireRole_(session,["Admin"]);const id=cleanText_(body.voucherId,100),reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");const ss=SpreadsheetApp.openById(session.databaseId),vr=voucherRegisterSheet_(ss),f=rowById_(vr,"Voucher_ID",id);if(!f)throw new Error("Voucher not found.");const v=objectFromRow_(f.headers,f.values);if(v.Voucher_Status==="Posted")throw new Error("Posted vouchers cannot be cancelled. Create a reversal voucher.");if(["Cancelled","Rejected"].includes(v.Voucher_Status))throw new Error("Voucher is already closed.");updateByHeaders_(vr,f.row,{Voucher_Status:"Cancelled",Cancelled_By:session.userId,Cancelled_At:new Date(),Cancellation_Reason:reason},["Voucher_ID","Voucher_No"]);const jd=journalDetailsSheet_(ss);sheetObjects_(jd).filter(x=>String(x.Voucher_ID)===id).forEach(x=>{const r=rowById_(jd,"Entry_ID",x.Entry_ID);if(r)updateByHeaders_(jd,r.row,{Entry_Status:"Cancelled"},["Entry_ID","Voucher_ID"]);});auditEvent_(session,"CANCEL","Voucher Register",id,reason,v,{Voucher_Status:"Cancelled"});return json_({status:"success"});
+}
+function getAccountingBook_(session,body){
+  requireRole_(session,["Admin","Accountant","Committee"]);const ss=SpreadsheetApp.openById(session.databaseId),j=journalSheet_(ss);let rows=sheetObjects_(j).filter(x=>String(x.Status)==="Posted");if(body.fromDate)rows=rows.filter(x=>String(x.Journal_Date).slice(0,10)>=String(body.fromDate));if(body.toDate)rows=rows.filter(x=>String(x.Journal_Date).slice(0,10)<=String(body.toDate));if(body.accountCode)rows=rows.filter(x=>String(x.Account_Code)===String(body.accountCode));if(body.sourceType)rows=rows.filter(x=>String(x.Source_Type)===String(body.sourceType));const dr=rows.reduce((a,x)=>a+Number(x.Debit||0),0),cr=rows.reduce((a,x)=>a+Number(x.Credit||0),0);return json_({status:"success",data:rows.slice(-1000).reverse(),summary:{totalDebit:dr,totalCredit:cr,balanced:Math.abs(dr-cr)<0.01,lineCount:rows.length}});
 }
 function postOpeningBalances_(session,body){
   requireRole_(session,["Admin"]);

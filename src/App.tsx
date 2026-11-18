@@ -27,6 +27,7 @@ import { InvoicePrintModal } from './components/modals/InvoicePrintModal';
 import { ReceiptPrintModal } from './components/modals/ReceiptPrintModal';
 import { ExpenseVoucherModal } from './components/modals/ExpenseVoucherModal';
 import { AdminUsersView, ProfileView } from './components/settings/AccountViews';
+import { FinancialTransactionsView } from './components/reports/FinancialTransactionsView';
 
 const MainLayout: React.FC = () => {
   const { activeTab, activeRole } = useApp();
@@ -87,6 +88,11 @@ const MainLayout: React.FC = () => {
     // 6. Expenses
     if (activeTab.startsWith('expenses')) {
       return <ExpensesView />;
+    }
+
+    // Financial Transactions
+    if (activeTab.startsWith('financial_')) {
+      return <FinancialTransactionsView initialType={activeTab === 'financial_pv' ? 'PV' : activeTab === 'financial_jv' ? 'JV' : activeTab === 'financial_cv' ? 'CV' : 'RV'} />;
     }
 
     // 7. Reports

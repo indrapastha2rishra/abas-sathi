@@ -48,6 +48,7 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose }) => {
     requests: false,
     expenses: false,
     reports: false,
+    financial: false,
     settings: false,
   });
 
@@ -443,6 +444,17 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose }) => {
                   )}
                 </div>
               )}
+
+              {/* Financial Transactions */}
+              <div>
+                <button onClick={() => toggleSection('financial')} className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-[#29352D] hover:bg-[#F7F4EC]">
+                  <span className="flex items-center gap-3"><Receipt className="h-4 w-4" />Financial Transactions</span>
+                  {expandedSections.financial ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
+                {expandedSections.financial && <div className="ml-7 mt-1 space-y-1">
+                  {([['financial_rv','Receipt Voucher (RV)'],['financial_pv','Payment Voucher (PV)'],['financial_jv','Journal Voucher (JV)'],['financial_cv','Contra Voucher (CV)']] as const).map(([id,label]) => <button key={id} onClick={() => handleNav(id)} className={`block w-full text-left py-1.5 px-2 rounded-lg text-xs ${activeTab===id?'text-[#536B4D] font-bold bg-[#536B4D]/10':'text-[#29352D]/80 hover:text-[#29352D]'}`}>{label}</button>)}
+                </div>}
+              </div>
 
               {/* 7. Reports */}
               <div>

@@ -349,6 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],
       reports_property_due: ['invoices','properties','owners'], reports_ownership_due: ['invoices','properties','owners','ownershipHistory'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'], reports_year_end: ['financialYears','bankAccounts'],
+      financial_rv: ['accountHeads','financialYears'], financial_pv: ['accountHeads','financialYears'], financial_jv: ['accountHeads','financialYears'], financial_cv: ['accountHeads','financialYears'],
       resident_notices: ['notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
     const load = async () => {

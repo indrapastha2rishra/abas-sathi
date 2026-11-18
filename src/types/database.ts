@@ -367,7 +367,7 @@ export interface AccountHeadMaster {
   Account_ID: string;
   Account_Code: string;
   Account_Name: string;
-  Account_Type: 'Asset' | 'Liability' | 'Income' | 'Expense';
+  Account_Type: 'Asset' | 'Liability' | 'Income' | 'Expense' | 'Equity' | 'Fund';
   Parent_Account_ID: string | null;
   Opening_Balance: number;
   Balance_Type: 'Debit' | 'Credit';
