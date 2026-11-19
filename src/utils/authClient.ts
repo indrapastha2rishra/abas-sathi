@@ -1,5 +1,9 @@
-const DEFAULT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbxxlu1phgG2mxJE-atFXlwEqixpVUHHaSUWndNgvDhRTPPU8X7vSORZnvxKvYCZ6Jvj0w/exec';
-const LEGACY_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec';
+const DEFAULT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQhQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec';
+const LEGACY_BACKEND_URLS = [
+  'https://script.google.com/macros/s/AKfycbxxlu1phgG2mxJE-atFXlwEqixpVUHHaSUWndNgvDhRTPPU8X7vSORZnvxKvYCZ6Jvj0w/exec',
+  'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQqQ3hWunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec',
+  'https://script.google.com/macros/s/AKfycbzkKY-gpDVkUQhQ3H WunjLNCILa5TymDNx0iOp6s6w02tzZ_Zc3yRDNBqqZY9x7Jw/exec'
+];
 
 export type AuthRequestOptions = { timeoutMs?: number };
 
@@ -21,8 +25,8 @@ export function backendUrl(): string {
   try {
     const cfg = JSON.parse(localStorage.getItem('abasSathiGoogleConfig') || '{}');
     const configured = String(cfg.appsScriptWebAppUrl || '').trim();
-    if (!configured || configured === LEGACY_BACKEND_URL) {
-      if (configured === LEGACY_BACKEND_URL) {
+    if (!configured || LEGACY_BACKEND_URLS.includes(configured)) {
+      if (configured && LEGACY_BACKEND_URLS.includes(configured)) {
         localStorage.setItem('abasSathiGoogleConfig', JSON.stringify({
           ...cfg, appsScriptWebAppUrl: DEFAULT_BACKEND_URL
         }));
