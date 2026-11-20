@@ -158,7 +158,7 @@ export const AdminDashboard: React.FC = () => {
             <span className="text-xs text-white/80">Society Management Overview</span>
           </div>
           <h1 className="mt-2 text-2xl font-bold tracking-tight">
-            {t.brandDisplayName}
+            {t.apartmentName}
           </h1>
           <p className="text-xs text-white/80 mt-0.5">
             {t.tagline} • Live society overview.

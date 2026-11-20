@@ -566,13 +566,11 @@ export const Sidebar: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
           )}
 
-          {/* Quick Apartment Details badge */}
+          {/* Developer and Version badge */}
           <div className="rounded-xl bg-[#F7F4EC] p-3 text-xs border border-[#E8E1D4] space-y-1">
-            <p className="font-bold text-[#536B4D]">{t.brandDisplayName}</p>
-            <p className="text-[11px] text-[#29352D]/70">50 Flats | Ward 93, Jadavpur</p>
+            <p className="font-bold text-[#536B4D]">Developer: Sanju Kr. Mallik</p>
+            <p className="text-[11px] text-[#29352D]/70">Version: 5.6.4</p>
             <p className="text-[10px] text-[#C97958] font-medium">FY 2026-2027 (Active)</p>
-            <p className="text-[10px] text-[#29352D]/70">Developer: {t.developerName}</p>
-            <p className="text-[10px] text-[#29352D]/70">Version: {t.appVersion}</p>
           </div>
         </div>
       </aside>
