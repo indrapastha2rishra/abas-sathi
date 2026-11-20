@@ -1724,11 +1724,27 @@ function loginContext_(code, loginId) {
   if (!societyCodeCol) throw new Error("Missing required column: Society_Code");
   const societyLast = societySheet.getLastRow();
   if (societyLast < 2) throw new Error("Society not found, duplicated or inactive.");
-  const societyMatches = societySheet.getRange(2, societyCodeCol, societyLast - 1, 1)
-    .createTextFinder(String(code)).matchCase(false).matchEntireCell(true).findAll();
-  if (societyMatches.length !== 1) throw new Error("Society not found, duplicated or inactive.");
-  const societyRow = societyMatches[0].getRow();
-  const society = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
+  // Cache only row indexes (never credentials or database values). Each cached
+  // row is reread and validated on every login; stale/invalid cache falls back
+  // to a fresh TextFinder lookup. This reduces repeated scans without delaying
+  // Society deactivation or Database_ID changes beyond the current request.
+  const indexCache = CacheService.getScriptCache();
+  const societyIndexKey = "AUTH_SOCIETY_ROW_" + sha256_(String(code));
+  let societyRow = Number(indexCache.get(societyIndexKey) || 0);
+  let society = null;
+  if (societyRow >= 2 && societyRow <= societyLast) {
+    const cachedSociety = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
+    if (String(cachedSociety.Society_Code || "").trim().toUpperCase() === code) society = cachedSociety;
+    else societyRow = 0;
+  } else societyRow = 0;
+  if (!societyRow) {
+    const societyMatches = societySheet.getRange(2, societyCodeCol, societyLast - 1, 1)
+      .createTextFinder(String(code)).matchCase(false).matchEntireCell(true).findAll();
+    if (societyMatches.length !== 1) throw new Error("Society not found, duplicated or inactive.");
+    societyRow = societyMatches[0].getRow();
+    society = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
+    indexCache.put(societyIndexKey, String(societyRow), 300);
+  }
   if (String(society.Society_Status || "").trim().toLowerCase() !== "active") throw new Error("Society not found, duplicated or inactive.");
   society.Database_ID = society.Database_ID || society.Database_Spreadsheet_ID || society["Database Spreadsheet ID"];
   if (!society.Database_ID) throw new Error("Society database is not configured.");
@@ -1739,9 +1755,18 @@ function loginContext_(code, loginId) {
   if (!loginCol || !societyCol) throw new Error("Society User Access is missing Login_ID or Society_Code.");
   const userLast = usersSheet.getLastRow();
   if (userLast < 2) return { society, usersSheet, user: null };
-  const candidates = usersSheet.getRange(2, loginCol, userLast - 1, 1)
-    .createTextFinder(String(loginId)).matchCase(false).matchEntireCell(true).findAll();
+  const userIndexKey = "AUTH_USER_ROW_" + sha256_(String(code) + "|" + String(loginId));
+  let cachedUserRow = Number(indexCache.get(userIndexKey) || 0);
   let user = null;
+  if (cachedUserRow >= 2 && cachedUserRow <= userLast) {
+    const cachedUser = objectFromRow_(userHeaders, usersSheet.getRange(cachedUserRow, 1, 1, userHeaders.length).getValues()[0]);
+    if (normalizeSociety_(cachedUser.Society_Code) === code && normalizeLogin_(cachedUser.Login_ID) === loginId) {
+      cachedUser.__row = cachedUserRow;
+      user = cachedUser;
+    } else cachedUserRow = 0;
+  } else cachedUserRow = 0;
+  const candidates = user ? [] : usersSheet.getRange(2, loginCol, userLast - 1, 1)
+    .createTextFinder(String(loginId)).matchCase(false).matchEntireCell(true).findAll();
   // TextFinder narrows Login_ID candidates. For a small row span, read the
   // candidates together in one service call and validate Society_Code in code.
   const candidateRows = candidates.map(r => r.getRow()).sort((a,b)=>a-b);
@@ -1755,6 +1780,7 @@ function loginContext_(code, loginId) {
         if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
         if (user) throw new Error("Duplicate Login_ID found for this society.");
         candidate.__row=row; user=candidate;
+        indexCache.put(userIndexKey, String(row), 300);
       }
     } else {
       // Avoid broad reads where duplicate IDs span an unusually large row range.
@@ -1764,6 +1790,7 @@ function loginContext_(code, loginId) {
         if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
         if (user) throw new Error("Duplicate Login_ID found for this society.");
         candidate.__row=row; user=candidate;
+        indexCache.put(userIndexKey, String(row), 300);
       }
     }
   }

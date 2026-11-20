@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.6.2 — login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
+  "description": "ABAS SATHI Version 5.6.3 — login row-index cache acceleration, login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -27,7 +27,7 @@
     "20-second role-scoped dashboard response cache with payload-size guard",
     "Bounded dashboard loading for recent activity, notices, gallery and preventive maintenance",
     "15-second in-memory module cache for faster repeat navigation",
-    "Targeted TextFinder login lookup instead of scanning all society users",
+    "Targeted TextFinder login lookup with validated short-lived row-index cache",
     "Drive upload I/O moved outside the global Apps Script lock",
     "Six-hour cached private society Drive folder reference",
     "Operation ledger lookup optimized to read only the matching operation row",

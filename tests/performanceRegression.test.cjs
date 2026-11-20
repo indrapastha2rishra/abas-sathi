@@ -64,3 +64,18 @@ test('audit events use appendRow rather than getLastRow plus setValues', () => {
   assert.match(fn, /sh\.appendRow\(/);
   assert.doesNotMatch(fn, /appendByHeaders_\(/);
 });
+
+
+test('login row-index cache stores only indexes and validates cached Society/Login ID rows', () => {
+  const start = backend.indexOf('function loginContext_(code, loginId)');
+  const end = backend.indexOf('function sessionUserCacheKey_', start);
+  const fn = backend.slice(start, end);
+  assert.match(fn, /AUTH_SOCIETY_ROW_/);
+  assert.match(fn, /AUTH_USER_ROW_/);
+  assert.match(fn, /cachedSociety\.Society_Code/);
+  assert.match(fn, /normalizeSociety_\(cachedUser\.Society_Code\) === code/);
+  assert.match(fn, /normalizeLogin_\(cachedUser\.Login_ID\) === loginId/);
+  assert.match(fn, /createTextFinder\(String\(code\)\)/);
+  assert.match(fn, /createTextFinder\(String\(loginId\)\)/);
+  assert.doesNotMatch(fn, /Password_Hash|Password_Salt/);
+});

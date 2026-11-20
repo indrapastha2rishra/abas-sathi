@@ -287,3 +287,8 @@ See `V5.6.2_PERFORMANCE_REMEDIATION_REPORT_BN.md` for the source audit, code cha
 ## Version 5.6.2 login fast-path patch
 
 See `V5.6.2_LOGIN_FASTPATH_REPORT_BN.md` for findings and limitations, `CHANGELOG_V5.6.2.md`, and `DEPLOY_V5.6.2_BN.md`. This release does not guarantee sub-1-second login; authentication still requires backend verification and current 12,000-round password KDF.
+
+
+## Version 5.6.3 Login Index Fast Path
+
+This patch adds a short-lived ScriptCache of **row indexes only** for Society Code and Login ID. Each cached row is re-read and validated on every login; if the index is stale, the normal TextFinder lookup is used. Password hashes, passwords, session tokens, society database IDs and profile values are not stored in this index cache. See `V5.6.3_LOGIN_ACCELERATION_REPORT_BN.md`. This optimization may reduce lookup work for repeat sign-ins but does not guarantee a login under one second.
