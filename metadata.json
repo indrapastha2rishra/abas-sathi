@@ -1,6 +1,6 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.5.3 — targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
+  "description": "ABAS SATHI Version 5.6.1 — login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",

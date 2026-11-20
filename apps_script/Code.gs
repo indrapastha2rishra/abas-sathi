@@ -840,6 +840,8 @@ function scopeRecords_(session,key,records,ss) {
 function societyPublic_(session) { return {societyCode:session.societyCode,societyName:session.societyName,societyAddress:session.societyAddress}; }
 
 function login_(body) {
+  const authStartedAt = Date.now();
+  let lookupMs = 0, passwordVerifyMs = 0;
   const code = normalizeSociety_(body.societyCode);
   const loginId = normalizeLogin_(body.loginId);
   const password = String(body.password || "");
@@ -858,7 +860,9 @@ function login_(body) {
   let context;
   const genericFailure = "Unable to sign in. Check your Society Code, Login ID and Password, or contact your society administrator.";
   try {
+    const lookupStartedAt = Date.now();
     context = loginContext_(code, loginId);
+    lookupMs = Date.now() - lookupStartedAt;
   } catch (lookupError) {
     const lookupMessage = String(lookupError && lookupError.message || "").toLowerCase();
     if (lookupMessage.includes("society not found") ||
@@ -885,10 +889,12 @@ function login_(body) {
   const expected = String(user.Password_Hash);
   const currentSalt = String(user.Password_Salt);
   // Check the existing v5.1 SHA-256 format first; upgrade it after successful sign-in.
+  const passwordStartedAt = Date.now();
   const legacyMatch = expected.length === 64 &&
     constantTimeEqual_(sha256_(currentSalt + password), expected);
   const currentMatch = !legacyMatch &&
     constantTimeEqual_(hashPassword_(currentSalt, password), expected);
+  passwordVerifyMs = Date.now() - passwordStartedAt;
 
   if (!legacyMatch && !currentMatch) {
     recordLoginFailure_(failKey, cache);
@@ -896,13 +902,19 @@ function login_(body) {
   }
 
   cache.remove(failKey);
+  // Resolve columns once on the successful path, rather than rereading the header
+  // for each cell update. Keep the current hash/KDF and legacy migration policy.
+  const loginHeaders = usersSheet.getRange(1, 1, 1, usersSheet.getLastColumn()).getValues()[0].map(String);
+  const saltCol = loginHeaders.indexOf("Password_Salt") + 1;
+  const hashCol = loginHeaders.indexOf("Password_Hash") + 1;
+  const lastLoginCol = loginHeaders.indexOf("Last_Login") + 1;
+  if (!saltCol || !hashCol || !lastLoginCol) throw new Error("Authentication columns are missing from Society User Access.");
   if (legacyMatch) {
     const salt = randomHex_(24);
-    setCell_(usersSheet, user.__row, "Password_Salt", salt);
-    setCell_(usersSheet, user.__row, "Password_Hash", hashPassword_(salt, password));
+    usersSheet.getRange(user.__row, saltCol).setValue(salt);
+    usersSheet.getRange(user.__row, hashCol).setValue(hashPassword_(salt, password));
   }
-
-  setCell_(usersSheet, user.__row, "Last_Login", new Date());
+  usersSheet.getRange(user.__row, lastLoginCol).setValue(new Date());
 
   // Every successful device login receives a separate, unpredictable token.
   // No existing device session is invalidated by a new login.
@@ -932,7 +944,8 @@ function login_(body) {
     status: "success",
     token: token,
     expiresIn: CONFIG.SESSION_TTL_SECONDS,
-    user: clientUser
+    user: clientUser,
+    performance: { lookupMs: lookupMs, passwordVerifyMs: passwordVerifyMs, authMs: Date.now() - authStartedAt }
   });
 }
 
@@ -1657,8 +1670,8 @@ function loginContext_(code, loginId) {
   const usersSheet = master.getSheetByName("Society User Access");
   if (!societySheet) throw new Error('Missing Central Master tab: Society Master');
   if (!usersSheet) throw new Error('Missing Central User Access tab: Society User Access');
-  ensureHeaders_(usersSheet, USER_HEADERS);
-
+  // Authentication is read-only with respect to sheet structure. Header repair belongs
+  // to setup/admin maintenance, not the login critical path.
   const societyHeaders = headerMap_(societySheet);
   const societyCodeCol = societyHeaders.indexOf("Society_Code") + 1;
   if (!societyCodeCol) throw new Error("Missing required column: Society_Code");

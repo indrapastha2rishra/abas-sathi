@@ -159,6 +159,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
     }
 
     submitLock.current = true;
+    const loginStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     setError('');
     setNotice('');
     setLoading(true);
@@ -188,6 +189,9 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         accountStatus: 'Active',
       };
 
+      const frontendLoginMs = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - loginStartedAt);
+      // Privacy-safe timing diagnostics: never log identifiers, credentials, tokens, or response payloads.
+      console.info('ABAS SATHI login timing', { frontendLoginMs, backendAuthMs: Number(result.performance?.authMs || 0), backendLookupMs: Number(result.performance?.lookupMs || 0), backendPasswordVerifyMs: Number(result.performance?.passwordVerifyMs || 0) });
       const session = {
         token: result.token,
         expiresAt: Date.now() + Number(result.expiresIn || 21600) * 1000,

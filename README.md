@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Project Overview — Version 5.5.3
+## 1. Project Overview — Version 5.6.1
 
 - **Website:** Responsive, bilingual (English & Bengali) React application with Admin, Committee, Accountant and Resident roles.
 - **Backend integration:** Google Apps Script Web App with selective Google Sheets reads, validated write workflows, private Drive file APIs, backup and server-side reports.
@@ -279,6 +279,6 @@ The backend creates these hidden tabs as needed:
 See `V5.5.1_YEAR_END_CLOSING_CHANGELOG_BN.md` for the new Admin Year-End Closing & Carry Forward workflow, Fund Balance Register and dashboard integration. Deploy the updated `apps_script/Code.gs` as a new Apps Script version before using the feature.
 
 
-## Version 5.5.3 performance remediation
+## Version 5.6.1 performance remediation
 
-See `V5.5.3_PERFORMANCE_REMEDIATION_REPORT_BN.md` for the source audit, code changes, test results and staging deployment checklist. The remediation keeps the existing Google Sheets schema and server-side role checks. It does not certify live Apps Script/Drive performance until deployed and tested against the actual Central Master and Society databases.
+See `V5.6.1_PERFORMANCE_REMEDIATION_REPORT_BN.md` for the source audit, code changes, test results and staging deployment checklist. The remediation keeps the existing Google Sheets schema and server-side role checks. It does not certify live Apps Script/Drive performance until deployed and tested against the actual Central Master and Society databases.
