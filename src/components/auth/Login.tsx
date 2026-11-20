@@ -209,6 +209,8 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         setHasSavedLogin(false);
       }
       localStorage.setItem('abasSathiSession', JSON.stringify(session));
+      // Non-blocking metadata write: open the authenticated UI immediately.
+      void authRequest({ action: 'updateLoginActivity', token: session.token }, { timeoutMs: 8000 }).catch(() => undefined);
       setPassword('');
       onLogin(session);
     } catch (caught) {

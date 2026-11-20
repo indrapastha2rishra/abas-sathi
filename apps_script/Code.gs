@@ -67,6 +67,9 @@ function doPost(e) {
       if (body.token) CacheService.getScriptCache().remove("SESSION_" + body.token);
       return json_({status:"success",message:"Signed out"});
     }
+    // Last-login metadata is written after the frontend has already opened the
+    // authenticated shell. This keeps a non-essential write off the login path.
+    if (body.action === "updateLoginActivity") return updateLoginActivity_(body.token);
     const session = requireSession_(body.token);
     switch (body.action) {
       case "getSocietyData": return json_({status:"error",code:"SELECTIVE_READ_REQUIRED",message:"Use getModuleData to load one module at a time."});
@@ -904,7 +907,7 @@ function login_(body) {
   cache.remove(failKey);
   // Resolve columns once on the successful path, rather than rereading the header
   // for each cell update. Keep the current hash/KDF and legacy migration policy.
-  const loginHeaders = usersSheet.getRange(1, 1, 1, usersSheet.getLastColumn()).getValues()[0].map(String);
+  const loginHeaders = cachedAuthHeaders_(usersSheet);
   const saltCol = loginHeaders.indexOf("Password_Salt") + 1;
   const hashCol = loginHeaders.indexOf("Password_Hash") + 1;
   const lastLoginCol = loginHeaders.indexOf("Last_Login") + 1;
@@ -914,7 +917,7 @@ function login_(body) {
     usersSheet.getRange(user.__row, saltCol).setValue(salt);
     usersSheet.getRange(user.__row, hashCol).setValue(hashPassword_(salt, password));
   }
-  usersSheet.getRange(user.__row, lastLoginCol).setValue(new Date());
+  // Last_Login is deferred to an authenticated metadata request after Dashboard mount.
 
   // Every successful device login receives a separate, unpredictable token.
   // No existing device session is invalidated by a new login.
@@ -932,14 +935,23 @@ function login_(body) {
     ownershipId: String(user.Ownership_ID || ""),
     ownerId: String(user.OwnerID || ""),
     email: String(user.Email_ID || ""),
-    mobile: String(user.Mobile_No || "")
+    mobile: String(user.Mobile_No || ""),
+    userAccessRow: Number(user.__row || 0)
   };
   cache.put("SESSION_" + token, JSON.stringify(session), CONFIG.SESSION_TTL_SECONDS);
+  // The login response already contains this validated profile. Cache the safe
+  // server-side profile so the first protected Dashboard request does not repeat
+  // a Central Master user-list read. Role/status changes invalidate this cache.
+  const safeAuthUser = Object.assign(publicUser_(user), {
+    Ownership_ID: String(user.Ownership_ID || ""), OwnerID: String(user.OwnerID || "")
+  });
+  cache.put(sessionUserCacheKey_(code, session.userId), JSON.stringify(safeAuthUser), 30);
 
   const clientUser = Object.assign({}, session);
   delete clientUser.databaseId;
   delete clientUser.ownershipId;
   delete clientUser.ownerId;
+  delete clientUser.userAccessRow;
   return json_({
     status: "success",
     token: token,
@@ -947,6 +959,28 @@ function login_(body) {
     user: clientUser,
     performance: { lookupMs: lookupMs, passwordVerifyMs: passwordVerifyMs, authMs: Date.now() - authStartedAt }
   });
+}
+
+function updateLoginActivity_(token) {
+  if (!token) throw new Error("Authentication required.");
+  const cache=CacheService.getScriptCache(), raw=cache.get("SESSION_"+token);
+  if (!raw) throw new Error("Session expired. Sign in again.");
+  const session=JSON.parse(raw), row=Number(session.userAccessRow||0);
+  if (!row || !session.societyCode || !session.userId) return json_({status:"success",skipped:true});
+  const master=SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
+  const sh=master.getSheetByName("Society User Access");
+  if (!sh) throw new Error("Missing Central Master tab: Society User Access");
+  const headers=cachedAuthHeaders_(sh), userIdCol=headers.indexOf("UserID")+1,
+    societyCol=headers.indexOf("Society_Code")+1, statusCol=headers.indexOf("Account_Status")+1,
+    lastLoginCol=headers.indexOf("Last_Login")+1;
+  if (!userIdCol||!societyCol||!statusCol||!lastLoginCol) throw new Error("Login activity columns are missing.");
+  // Confirm the cached row still belongs to this user/society and is active.
+  const values=sh.getRange(row,1,1,headers.length).getValues()[0], user=objectFromRow_(headers,values);
+  if (String(user.UserID||user.Access_ID||"")!==String(session.userId) ||
+      String(user.Society_Code||"").trim().toUpperCase()!==String(session.societyCode).toUpperCase() ||
+      String(user.Account_Status||"").trim().toLowerCase()!=="active") return json_({status:"success",skipped:true});
+  sh.getRange(row,lastLoginCol).setValue(new Date());
+  return json_({status:"success"});
 }
 
 function adminCreateUser_(session,body) {
@@ -1664,6 +1698,19 @@ function societyAndUsers_(code) {
  * downloading and parsing every user row for that society on every sign-in.
  * Password hash verification remains unchanged (12,000 HMAC-SHA256 rounds).
  */
+function cachedAuthHeaders_(sh) {
+  const cache = CacheService.getScriptCache();
+  const key = "AUTH_HEADERS_" + sha256_(String(sh.getParent().getId()) + "|" + sh.getName());
+  const cached = cache.get(key);
+  if (cached) {
+    try { const parsed = JSON.parse(cached); if (Array.isArray(parsed) && parsed.length) return parsed; }
+    catch (e) { cache.remove(key); }
+  }
+  const headers = headerMap_(sh);
+  cache.put(key, JSON.stringify(headers), 300);
+  return headers;
+}
+
 function loginContext_(code, loginId) {
   const master = SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
   const societySheet = master.getSheetByName("Society Master");
@@ -1672,7 +1719,7 @@ function loginContext_(code, loginId) {
   if (!usersSheet) throw new Error('Missing Central User Access tab: Society User Access');
   // Authentication is read-only with respect to sheet structure. Header repair belongs
   // to setup/admin maintenance, not the login critical path.
-  const societyHeaders = headerMap_(societySheet);
+  const societyHeaders = cachedAuthHeaders_(societySheet);
   const societyCodeCol = societyHeaders.indexOf("Society_Code") + 1;
   if (!societyCodeCol) throw new Error("Missing required column: Society_Code");
   const societyLast = societySheet.getLastRow();
@@ -1686,7 +1733,7 @@ function loginContext_(code, loginId) {
   society.Database_ID = society.Database_ID || society.Database_Spreadsheet_ID || society["Database Spreadsheet ID"];
   if (!society.Database_ID) throw new Error("Society database is not configured.");
 
-  const userHeaders = headerMap_(usersSheet);
+  const userHeaders = cachedAuthHeaders_(usersSheet);
   const loginCol = userHeaders.indexOf("Login_ID") + 1;
   const societyCol = userHeaders.indexOf("Society_Code") + 1;
   if (!loginCol || !societyCol) throw new Error("Society User Access is missing Login_ID or Society_Code.");
@@ -1695,14 +1742,30 @@ function loginContext_(code, loginId) {
   const candidates = usersSheet.getRange(2, loginCol, userLast - 1, 1)
     .createTextFinder(String(loginId)).matchCase(false).matchEntireCell(true).findAll();
   let user = null;
-  for (let i = 0; i < candidates.length; i++) {
-    const row = candidates[i].getRow();
-    const values = usersSheet.getRange(row, 1, 1, userHeaders.length).getValues()[0];
-    const candidate = objectFromRow_(userHeaders, values);
-    if (String(candidate.Society_Code || "").trim().toUpperCase() !== code) continue;
-    if (user) throw new Error("Duplicate Login_ID found for this society.");
-    candidate.__row = row;
-    user = candidate;
+  // TextFinder narrows Login_ID candidates. For a small row span, read the
+  // candidates together in one service call and validate Society_Code in code.
+  const candidateRows = candidates.map(r => r.getRow()).sort((a,b)=>a-b);
+  if (candidateRows.length) {
+    const first = candidateRows[0], last = candidateRows[candidateRows.length-1];
+    const span = last-first+1;
+    if (span <= 200) {
+      const batch = usersSheet.getRange(first,1,span,userHeaders.length).getValues();
+      for (let i=0;i<candidateRows.length;i++) {
+        const row=candidateRows[i], candidate=objectFromRow_(userHeaders,batch[row-first]);
+        if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
+        if (user) throw new Error("Duplicate Login_ID found for this society.");
+        candidate.__row=row; user=candidate;
+      }
+    } else {
+      // Avoid broad reads where duplicate IDs span an unusually large row range.
+      for (let i=0;i<candidateRows.length;i++) {
+        const row=candidateRows[i], values=usersSheet.getRange(row,1,1,userHeaders.length).getValues()[0];
+        const candidate=objectFromRow_(userHeaders,values);
+        if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
+        if (user) throw new Error("Duplicate Login_ID found for this society.");
+        candidate.__row=row; user=candidate;
+      }
+    }
   }
   return { society, usersSheet, user };
 }
