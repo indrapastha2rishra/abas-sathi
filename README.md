@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Project Overview — Version 5.6.2
+## 1. Project Overview — Version 5.6.4
 
 - **Website:** Responsive, bilingual (English & Bengali) React application with Admin, Committee, Accountant and Resident roles.
 - **Backend integration:** Google Apps Script Web App with selective Google Sheets reads, validated write workflows, private Drive file APIs, backup and server-side reports.
@@ -292,3 +292,8 @@ See `V5.6.2_LOGIN_FASTPATH_REPORT_BN.md` for findings and limitations, `CHANGELO
 ## Version 5.6.3 Login Index Fast Path
 
 This patch adds a short-lived ScriptCache of **row indexes only** for Society Code and Login ID. Each cached row is re-read and validated on every login; if the index is stale, the normal TextFinder lookup is used. Password hashes, passwords, session tokens, society database IDs and profile values are not stored in this index cache. See `V5.6.3_LOGIN_ACCELERATION_REPORT_BN.md`. This optimization may reduce lookup work for repeat sign-ins but does not guarantee a login under one second.
+
+
+## Version 5.6.4 — Instant Returning-Session Restore
+
+Returning sessions now restore the app shell immediately from the browser's saved session. Server session validation runs in the background; temporary network/server errors retain the shell and show an offline/server-unavailable notice. A confirmed authentication rejection clears the saved session and returns to Login. Server APIs remain responsible for authenticating data requests and writes. This does **not** promise offline financial data or offline writes, nor a one-second first-time login under slow Internet. See `V5.6.4_INSTANT_SESSION_RESTORE_REPORT_BN.md` and `DEPLOY_V5.6.4_BN.md`.

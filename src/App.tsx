@@ -4,7 +4,6 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { LoaderCircle, ShieldCheck } from 'lucide-react';
 import { authRequest, BackendRequestError } from './utils/authClient';
 import { isActiveAuthenticatedProfile } from './utils/authValidation';
 import { Login } from './components/auth/Login';
@@ -155,6 +154,8 @@ const MainLayout: React.FC = () => {
 };
 
 export default function App() {
+  // Restore the local session immediately. Network verification is deliberately
+  // background-only so returning users never wait on slow Apps Script startup.
   const [session, setSession] = useState<any>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('abasSathiSession') || 'null');
@@ -166,26 +167,23 @@ export default function App() {
       return null;
     }
   });
-  const [validatingSession, setValidatingSession] = useState<boolean>(() => Boolean(session));
-  const [sessionError, setSessionError] = useState('');
+  const [sessionCheck, setSessionCheck] = useState<'none'|'checking'|'verified'|'offline'>('none');
 
   const validateSavedSession = async () => {
     if (!session?.token) {
-      setValidatingSession(false);
+      setSessionCheck('none');
       return;
     }
-    setValidatingSession(true);
-    setSessionError('');
+    setSessionCheck('checking');
     try {
       const result: any = await authRequest(
         { action: 'getMyProfile', token: session.token },
-        { timeoutMs: 30000 }
+        { timeoutMs: 12000 }
       );
       const profile = result?.profile || {};
       if (!isActiveAuthenticatedProfile(profile)) {
         throw new BackendRequestError('The saved session is no longer valid.', undefined, false, 'AUTH_ERROR');
       }
-
       const refreshed = {
         ...session,
         expiresAt: Date.now() + 21600 * 1000,
@@ -203,66 +201,74 @@ export default function App() {
       };
       localStorage.setItem('abasSathiSession', JSON.stringify(refreshed));
       setSession(refreshed);
+      setSessionCheck('verified');
     } catch (error: any) {
       if (error instanceof BackendRequestError && error.code === 'AUTH_ERROR') {
         localStorage.removeItem('abasSathiSession');
         setSession(null);
+        setSessionCheck('none');
       } else {
-        // Keep the local token but never mount protected pages until the server confirms it.
-        setSessionError('The server could not validate your session. Check your connection and retry.');
+        // Keep local identity/session for offline shell only. Every data request
+        // and write is still server-authenticated and will fail closed offline.
+        setSessionCheck('offline');
       }
-    } finally {
-      setValidatingSession(false);
     }
   };
 
+
   useEffect(() => {
     if (session?.token) void validateSavedSession();
-    // Validate only the token restored during the initial page load.
+    // Validate only the session restored at initial mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
+  useEffect(() => {
+    const onOffline = () => { if (session?.token) setSessionCheck('offline'); };
+    const onOnline = () => { if (session?.token) void validateSavedSession(); };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
+    return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
+    };
+    // Session listeners are set up for the restored/new session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.token]);
+
 
   const signOutFromGate = async () => {
     const token = session?.token;
     try {
-      if (token) await authRequest({ action: 'logout', token }, { timeoutMs: 10000 });
+      if (token) await authRequest({ action: 'logout', token }, { timeoutMs: 5000 });
     } catch {
       // Local logout still proceeds if the network is unavailable.
     } finally {
       localStorage.removeItem('abasSathiSession');
       setSession(null);
-      setSessionError('');
+      setSessionCheck('none');
     }
   };
 
-  if (validatingSession) return (
-    <div className="min-h-screen bg-[#F7F4EC] flex flex-col items-center justify-center gap-3 text-[#536B4D]" role="status" aria-live="polite">
-      <LoaderCircle className="animate-spin" size={30}/>
-      <p className="text-sm font-semibold">Validating your secure session…</p>
-    </div>
-  );
-
-  if (session && sessionError) return (
-    <div className="min-h-screen bg-[#F7F4EC] flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-md rounded-2xl border border-[#E8E1D4] bg-white p-6 text-center shadow-lg">
-        <ShieldCheck className="mx-auto mb-3 text-[#536B4D]" size={32}/>
-        <h1 className="text-lg font-bold text-[#29352D]">Session verification required</h1>
-        <p className="mt-2 text-sm text-slate-600">{sessionError}</p>
-        <button onClick={() => void validateSavedSession()} className="mt-5 min-h-11 w-full rounded-xl bg-[#536B4D] px-4 py-3 font-semibold text-white">
-          Retry Session Verification
-        </button>
-        <button onClick={() => void signOutFromGate()} className="mt-2 min-h-10 w-full rounded-xl border border-[#E8E1D4] px-4 py-2 text-sm font-semibold text-slate-600">
-          Sign Out
-        </button>
-      </div>
-    </div>
-  );
-
-  if (!session) return <Login onLogin={setSession} />;
+  if (!session) return <Login onLogin={(newSession) => { setSession(newSession); setSessionCheck('verified'); }} />;
 
   return (
     <AppProvider>
-      <MainLayout />
+      <>
+        {sessionCheck === 'checking' && (
+          <div className="w-full px-3 py-1.5 bg-emerald-50 text-emerald-800 text-xs font-medium text-center" role="status" aria-live="polite">
+            Session restored — verifying in background. App is opening.
+          </div>
+        )}
+        {sessionCheck === 'offline' && (
+          <div className="w-full px-3 py-2 bg-amber-50 text-amber-900 text-xs font-medium text-center" role="status" aria-live="polite">
+            Offline / server unavailable. App shell is open; live data and any changes require connection.
+            <button className="ml-2 underline font-semibold" onClick={() => void validateSavedSession()}>Retry</button>
+            <button className="ml-2 underline font-semibold" onClick={() => void signOutFromGate()}>Sign out</button>
+          </div>
+        )}
+        <MainLayout />
+      </>
     </AppProvider>
   );
 }
