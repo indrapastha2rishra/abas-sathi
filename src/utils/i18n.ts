@@ -10,6 +10,9 @@ export const translations = {
     // Brand
     appName: 'ABAS SATHI',
     appNameBengali: 'আবাসসাথী',
+    brandDisplayName: 'ABAS SATHI (আবাসসাথী)',
+    developerName: 'Sanju Kr. Mallik',
+    appVersion: '5.6.4',
     tagline: 'Smart Living. Better Community.',
     apartmentName: 'Abas Sathi Housing Society',
     apartmentAddress: '14/B, Raja Subodh Chandra Mallick Road, Jadavpur, Kolkata - 700032',
@@ -145,6 +148,9 @@ export const translations = {
     // Brand
     appName: 'আবাসসাথী',
     appNameBengali: 'ABAS SATHI',
+    brandDisplayName: 'ABAS SATHI (আবাসসাথী)',
+    developerName: 'Sanju Kr. Mallik',
+    appVersion: '5.6.4',
     tagline: 'স্মার্ট লিভিং। উন্নত সম্প্রদায়।',
     apartmentName: 'আবাসসাথী হাউজিং সোসাইটি',
     apartmentAddress: '১৪/বি, রাজা সুবোধ চন্দ্র মল্লিক রোড, যাদবপুর, কলকাতা - ৭০০০৩২',
