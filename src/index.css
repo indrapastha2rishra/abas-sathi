@@ -32,6 +32,34 @@
   .print-only {
     display: block !important;
   }
+
+  /* Resident bill printing: retain the invoice document, hide only modal controls. */
+  .invoice-print-overlay {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: white !important;
+    backdrop-filter: none !important;
+  }
+  .invoice-print-overlay > div {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    animation: none !important;
+  }
+  .invoice-print-controls { display: none !important; }
+
+  /* When an invoice preview is open, print only that invoice (not the underlying app). */
+  body:has(.invoice-print-overlay) * { visibility: hidden !important; }
+  body:has(.invoice-print-overlay) .invoice-print-overlay,
+  body:has(.invoice-print-overlay) .invoice-print-overlay * { visibility: visible !important; }
+  body:has(.invoice-print-overlay) .invoice-print-overlay { width: 100% !important; }
 }
 
 

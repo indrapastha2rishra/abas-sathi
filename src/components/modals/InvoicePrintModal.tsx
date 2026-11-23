@@ -8,7 +8,7 @@ import { useApp } from '../../context/AppContext';
 import { Printer, Download, X, CheckCircle, ShieldCheck } from 'lucide-react';
 
 export const InvoicePrintModal: React.FC = () => {
-  const { previewInvoice, setPreviewInvoice, t, language } = useApp();
+  const { previewInvoice, setPreviewInvoice, t, language, activeRole } = useApp();
 
   if (!previewInvoice) return null;
 
@@ -17,10 +17,10 @@ export const InvoicePrintModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto no-print backdrop-blur-xs">
+    <div className="invoice-print-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto backdrop-blur-xs">
       <div className="relative w-full max-w-3xl rounded-2xl bg-white shadow-2xl overflow-hidden border border-[#E8E1D4] my-8 animate-in fade-in zoom-in-95 duration-200">
         {/* Modal Controls Header */}
-        <div className="flex items-center justify-between border-b border-[#E8E1D4] bg-[#F7F4EC] px-6 py-4">
+        <div className="invoice-print-controls flex items-center justify-between border-b border-[#E8E1D4] bg-[#F7F4EC] px-6 py-4">
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-[#536B4D]"></span>
             <span className="font-semibold text-[#29352D] text-sm md:text-base">
@@ -33,7 +33,7 @@ export const InvoicePrintModal: React.FC = () => {
               className="flex items-center gap-2 rounded-lg bg-[#536B4D] px-4 py-2 text-xs md:text-sm font-medium text-white shadow-xs hover:bg-[#3F523A] transition-colors cursor-pointer"
             >
               <Printer className="h-4 w-4" />
-              <span>{t.actionPrint}</span>
+              <span>Print / Download PDF</span>
             </button>
             <button
               onClick={() => setPreviewInvoice(null)}

@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
 import { useApp } from '../../context/AppContext';
 import {
   Home,
@@ -43,27 +44,8 @@ export const ResidentDashboard: React.FC = () => {
   const myReceipts = receipts.filter((r) => r.PropertyID === myProperty?.PropertyID);
   const myRequests = activityRequests.filter((r) => r.PropertyID === myProperty?.PropertyID);
 
-  const confirmedTransactionIds = new Set(receipts
-    .filter(r => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
-    .map(r => String(r.Transaction_ID || '')));
-  const allocatedByInvoice = new Map<string, number>();
-  billAllocations.forEach(row => {
-    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
-    const invoiceId = String(row.InvoiceID || '');
-    if (invoiceId) allocatedByInvoice.set(invoiceId, (allocatedByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
-  });
   const now = new Date();
-  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const billMetrics = myInvoices
-    .filter(inv => !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(inv.Invoice_Status || '').trim().toLowerCase()))
-    .map(inv => {
-      const allocated = allocatedByInvoice.get(String(inv.InvoiceID || ''));
-      const net = Number(inv.Net_Charge_Amount || 0);
-      const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));
-      const due = Math.max(0, net - paid);
-      const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) && String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
-      return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
-    });
+  const billMetrics = calculateResidentInvoiceMetrics(myInvoices, myReceipts, billAllocations, now);
   const totalOutstanding = billMetrics.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
   const nextDueDate = billMetrics.find(i => i.Outstanding_Amount > 0)?.Due_Date || 'None Pending';
   const recentReceipts = [...myReceipts].sort((a,b) => String(b.Date_Of_Received || '').localeCompare(String(a.Date_Of_Received || ''))).slice(0,4);
@@ -234,7 +216,7 @@ export const ResidentDashboard: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {myInvoices.slice(0, 4).map((inv) => (
+            {billMetrics.slice(0, 4).map((inv) => (
               <div
                 key={inv.InvoiceID}
                 className="flex items-center justify-between p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs"
@@ -261,7 +243,7 @@ export const ResidentDashboard: React.FC = () => {
                   </p>
                 </div>
                 <div className="text-right">
-                  <span className="font-bold text-sm text-[#29352D]">₹{inv.Net_Charge_Amount.toFixed(2)}</span>
+                  <span className="font-bold text-sm text-[#29352D]">₹{Number(inv.Net_Charge_Amount || 0).toFixed(2)}</span>
                   <div className="mt-1">
                     <button
                       onClick={() => setPreviewInvoice(inv)}
@@ -307,6 +289,13 @@ export const ResidentDashboard: React.FC = () => {
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     Date: {rec.Date_Of_Received} • via {rec.Received_Mode}
                   </p>
+                  {String(rec.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && billAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {billAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).map(a => (
+                        <span key={a.Allocation_ID} className="rounded-md bg-white border border-[#E8E1D4] px-1.5 py-0.5 text-[10px] text-[#536B4D]">{a.Invoice_Number}: ₹{Number(a.Allocated_Amount || 0).toFixed(2)}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="text-right">
                   <span className="font-bold text-sm text-emerald-800">

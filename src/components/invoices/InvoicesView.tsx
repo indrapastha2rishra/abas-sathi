@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
 import type { InvoiceRegister } from '../../types/database';
+import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
@@ -36,6 +37,9 @@ const getInvoiceOutstanding = (invoice: InvoiceRegister): number => {
 export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   const {
     invoices,
+    receipts,
+    billAllocations,
+    residentProperty,
     properties,
     rates,
     generateInvoice,
@@ -45,7 +49,8 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     t,
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'register' | 'generate' | 'rates' | 'outstanding'>(initialTab);
+  const residentSafeTab = activeRole === 'Resident' ? 'register' : initialTab;
+  const [activeSubTab, setActiveSubTab] = useState<'register' | 'generate' | 'rates' | 'outstanding'>(residentSafeTab);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
 
@@ -98,8 +103,11 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     } catch (error:any) { window.alert(error?.message || 'Invoice could not be saved. Please retry.'); }
   };
 
+  // Resident scope: only the authenticated flat. For residents, payment/outstanding values come strictly from confirmed Fund Inflow + Bill Wise Details.
+  const residentMetrics = calculateResidentInvoiceMetrics(invoices, receipts, billAllocations);
+  const invoicesForView = activeRole === 'Resident' ? residentMetrics.filter(inv => inv.PropertyID === residentProperty?.PropertyID) : invoices;
   // Filtered invoices
-  const filteredInvoices = invoices.filter((inv) => {
+  const filteredInvoices = invoicesForView.filter((inv) => {
     const matchesSearch =
       String(inv.Invoice_Number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       String(inv.Flat_Number || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -138,9 +146,9 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                 : 'text-[#29352D]/70 hover:text-[#29352D]'
             }`}
           >
-            Invoice Register ({invoices.length})
+            {activeRole === 'Resident' ? 'My Bills' : `Invoice Register (${invoices.length})`}
           </button>
-          {activeRole !== 'Committee' && (
+          {activeRole !== 'Resident' && activeRole !== 'Committee' && (
             <button
               onClick={() => setActiveSubTab('generate')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -153,7 +161,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
               Generate Invoice
             </button>
           )}
-          <button
+          {activeRole !== 'Resident' && <button
             onClick={() => setActiveSubTab('rates')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'rates'
@@ -162,8 +170,8 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
             }`}
           >
             Rate Master
-          </button>
-          <button
+          </button>}
+          {activeRole !== 'Resident' && <button
             onClick={() => setActiveSubTab('outstanding')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'outstanding'
@@ -172,7 +180,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
             }`}
           >
             Outstanding Dues
-          </button>
+          </button>}
         </div>
       </div>
 

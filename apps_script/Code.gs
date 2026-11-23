@@ -722,7 +722,7 @@ function getDashboardData_(session) {
   if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
   const ss = SpreadsheetApp.openById(session.databaseId);
   const keys = role === "Resident"
-    ? ["properties","owners","ownershipHistory","invoices","receipts","activityRequests","notices","gallery"]
+    ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery"]
     : ["properties","tenants","invoices","receipts","billWiseDetails",
        ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests"] : []),
        "notices","gallery","preventiveMaintenance",

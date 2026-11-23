@@ -27,7 +27,6 @@ interface Props {
 export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) => {
   const {
     activeRole,
-    currentUser,
     residentProperty,
     invoices,
     receipts,
@@ -41,8 +40,13 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
   } = useApp();
 
   const [subTab, setSubTab] = useState<'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record'>(
-    activeRole === 'Resident' ? 'pay_now' : initialSubTab
+    initialSubTab
   );
+
+  // Resident data is scoped to the authenticated flat/property in the UI; backend authorization must enforce the same scope.
+  const residentScopedReceipts = activeRole === 'Resident' ? receipts.filter(r => r.PropertyID === residentProperty?.PropertyID) : receipts;
+  const residentScopedAllocations = activeRole === 'Resident' ? billAllocations.filter(a => a.PropertyID === residentProperty?.PropertyID) : billAllocations;
+  useEffect(() => { setSubTab(initialSubTab); }, [initialSubTab, activeRole]);
 
   // Resident "Pay Now" flow state
   const myInvoices = invoices.filter(
@@ -119,7 +123,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
         <div>
           <h1 className="text-xl font-bold tracking-tight text-[#29352D] flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-[#536B4D]" />
-            {t.navPayments} / পেমেন্ট ও মানি রসিদ
+            {activeRole === 'Resident' && initialSubTab === 'receipts' ? 'My Receipts / আমার রসিদ' : `${t.navPayments} / পেমেন্ট ও মানি রসিদ`}
           </h1>
           <p className="text-xs text-gray-500">
             Society UPI payments, fund inflow tracking, and safe bill-wise allocation
@@ -129,7 +133,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
         <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
           {activeRole === 'Resident' ? (
             <>
-              <button
+              {initialSubTab === 'pay_now' && <button
                 onClick={() => setSubTab('pay_now')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   subTab === 'pay_now'
@@ -138,8 +142,8 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 }`}
               >
                 Pay Bills Online
-              </button>
-              <button
+              </button>}
+              {initialSubTab === 'receipts' && <button
                 onClick={() => setSubTab('receipts')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   subTab === 'receipts'
@@ -148,7 +152,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 }`}
               >
                 My Receipts
-              </button>
+              </button>}
             </>
           ) : (
             <>
@@ -368,10 +372,10 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
         <div className="rounded-2xl border border-[#E8E1D4] bg-white overflow-hidden shadow-2xs">
           <div className="p-4 border-b border-[#E8E1D4] bg-[#F7F4EC] flex justify-between items-center">
             <div>
-              <h3 className="font-bold text-[#29352D] text-sm">Fund Inflow Register / প্রাপ্তি রেজিস্টার</h3>
-              <p className="text-xs text-gray-500">Official Society Receipts and Inflow Log</p>
+              <h3 className="font-bold text-[#29352D] text-sm">{activeRole === 'Resident' ? 'My Receipts / আমার রসিদ' : 'Fund Inflow Register / প্রাপ্তি রেজিস্টার'}</h3>
+              <p className="text-xs text-gray-500">{activeRole === 'Resident' ? 'Your receipts and bill-wise payment adjustments' : 'Official Society Receipts and Inflow Log'}</p>
             </div>
-            <span className="text-xs text-gray-500">{receipts.length} Total Receipts</span>
+            <span className="text-xs text-gray-500">{residentScopedReceipts.length} Total Receipts</span>
           </div>
 
           <div className="overflow-x-auto">
@@ -390,8 +394,9 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {receipts.map((rec) => (
-                  <tr key={rec.Transaction_ID} className="hover:bg-neutral-50 transition-colors">
+                {residentScopedReceipts.map((rec) => (
+                  <React.Fragment key={rec.Transaction_ID}>
+                  <tr className="hover:bg-neutral-50 transition-colors">
                     <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</td>
                     <td className="px-4 py-3 text-gray-500">{rec.Date_Of_Received}</td>
                     <td className="px-4 py-3 font-bold text-[#536B4D]">{rec.Flat_No}</td>
@@ -429,6 +434,24 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                       ) : <span className="text-[10px] text-amber-700">Awaiting verification</span>}
                     </td>
                   </tr>
+                  {activeRole === 'Resident' && residentScopedAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).length > 0 && (
+                    <tr className="bg-[#F7F4EC]/70">
+                      <td colSpan={9} className="px-4 py-3">
+                        <div className="font-semibold text-[#536B4D] mb-1">Bill-wise Allocation / বিল অনুযায়ী সমন্বয়</div>
+                        <div className="flex flex-wrap gap-2">
+                          {residentScopedAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).map(a => (
+                            <span key={a.Allocation_ID} className="rounded-lg border border-[#E8E1D4] bg-white px-3 py-2 text-[11px]">
+                              <strong className="block text-[#29352D]">{a.Invoice_Number}</strong>
+                              <span className="block text-gray-500">Invoice: ₹{Number(a.Invoice_Amount || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                              <span className="block text-emerald-700">Allocated: ₹{Number(a.Allocated_Amount || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                              <span className="block text-amber-700">Balance After: ₹{Number(a.Outstanding_After || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

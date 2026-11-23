@@ -350,7 +350,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       payments_record: ['receipts','invoices','properties','owners','ownershipHistory','bankAccounts','billWiseDetails'],
       payments_receipts: ['receipts','invoices','properties','billWiseDetails'], payments_allocation: ['receipts','invoices','billWiseDetails','properties','owners','ownershipHistory'],
       payments_advances: ['receipts','invoices','billWiseDetails','properties'], resident_flat: ['properties','owners','ownershipHistory','propertyUtilityDetails','tenants'],
-      resident_bills: ['invoices'], resident_pay: ['invoices','properties','owners','ownershipHistory'], resident_history: ['receipts','billWiseDetails'],
+      resident_bills: ['invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory'], resident_history: ['receipts','billWiseDetails'],
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],

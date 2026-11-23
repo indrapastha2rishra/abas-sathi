@@ -1,6 +1,7 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "description": "ABAS SATHI Version 5.6.4 — login row-index cache acceleration, login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
+  "version": "5.6.5",
+  "description": "ABAS SATHI Version 5.6.5 — resident dashboard balance/payment history, My Receipts navigation and printable resident bills. Previous release details: login row-index cache acceleration, login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -11,6 +12,9 @@
     "Database-faithful property area display",
     "Lease period date formatting",
     "Enhanced invoice register and outstanding dues",
+    "Resident invoice balances from confirmed Fund Inflow and Bill Wise Details",
+    "Resident scoped My Receipts and allocation details",
+    "Formatted resident invoice preview and print-to-PDF",
     "Ownership-period-wise outstanding report",
     "Quick Login with remembered non-secret identifiers",
     "Backend-validated session restore and sliding session expiry",

@@ -8,11 +8,11 @@ import { useApp } from '../../context/AppContext';
 import { Printer, X, CheckCircle2 } from 'lucide-react';
 
 export const ReceiptPrintModal: React.FC = () => {
-  const { previewReceipt, setPreviewReceipt, billAllocations, t } = useApp();
+  const { previewReceipt, setPreviewReceipt, billAllocations, t, activeRole, residentProperty } = useApp();
 
   if (!previewReceipt || previewReceipt.Receipt_Status !== 'Confirmed' || !previewReceipt.Receipt_Number) return null;
 
-  const allocations = billAllocations.filter((a) => a.Transaction_ID === previewReceipt.Transaction_ID);
+  const allocations = billAllocations.filter((a) => a.Transaction_ID === previewReceipt.Transaction_ID && (activeRole !== 'Resident' || a.PropertyID === residentProperty?.PropertyID));
 
   const handlePrint = () => {
     window.print();
@@ -144,7 +144,7 @@ export const ReceiptPrintModal: React.FC = () => {
                 <CheckCircle2 className="h-3.5 w-3.5" />
                 Valid Electronic Payment Voucher
               </p>
-              <p className="text-[10px]">Bank: {previewReceipt.Bank_Account}</p>
+              {activeRole !== 'Resident' && <p className="text-[10px]">Bank: {previewReceipt.Bank_Account}</p>}
             </div>
             <div className="text-center">
               <div className="w-32 border-b border-gray-400 mb-1"></div>
