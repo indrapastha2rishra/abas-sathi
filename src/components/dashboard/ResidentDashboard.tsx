@@ -39,7 +39,7 @@ export const ResidentDashboard: React.FC = () => {
   const myProperty = residentProperty;
 
   // Filter bills & receipts belonging specifically to this flat
-  const myInvoices = invoices.filter((i) => i.PropertyID === myProperty?.PropertyID);
+  const myInvoices = myProperty?.PropertyID ? invoices.filter((i) => i.PropertyID === myProperty.PropertyID) : [];
   const myReceipts = receipts.filter((r) => r.PropertyID === myProperty?.PropertyID);
   const myRequests = activityRequests.filter((r) => r.PropertyID === myProperty?.PropertyID);
 
@@ -52,13 +52,16 @@ export const ResidentDashboard: React.FC = () => {
     const invoiceId = String(row.InvoiceID || '');
     if (invoiceId) allocatedByInvoice.set(invoiceId, (allocatedByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
   });
-  const now = new Date();\n  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const billMetrics = myInvoices
-    .filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')))
+    .filter(inv => !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(inv.Invoice_Status || '').trim().toLowerCase()))
     .map(inv => {
       const allocated = allocatedByInvoice.get(String(inv.InvoiceID || ''));
-      const net = Number(inv.Net_Charge_Amount || 0);\n      const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));\n      const due = Math.max(0, net - paid);
-      const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
+      const net = Number(inv.Net_Charge_Amount || 0);
+      const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));
+      const due = Math.max(0, net - paid);
+      const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) && String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
       return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
     });
   const totalOutstanding = billMetrics.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
@@ -166,7 +169,7 @@ export const ResidentDashboard: React.FC = () => {
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
               <span className="text-[#29352D]/70">Pending Verification:</span>
               <span className="font-semibold text-amber-700">
-                {myReceipts.filter((r) => String(r.Receipt_Status || '').toLowerCase() === 'pending verification').length}
+                {myReceipts.filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'pending verification').length}
               </span>
             </div>
             <div className="flex justify-between py-1">
@@ -310,7 +313,7 @@ export const ResidentDashboard: React.FC = () => {
                     ₹{rec.Received_Amount.toLocaleString('en-IN')}
                   </span>
                   <div className="mt-1">
-                    {rec.Receipt_Status === 'Confirmed' && rec.Receipt_Number ? (
+                    {String(rec.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && rec.Receipt_Number ? (
                       <button onClick={() => setPreviewReceipt(rec)} className="text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer">View Receipt</button>
                     ) : <span className="text-[11px] text-amber-700">Awaiting verification</span>}
                   </div>

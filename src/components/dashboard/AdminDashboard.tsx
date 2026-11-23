@@ -78,13 +78,14 @@ export const AdminDashboard: React.FC = () => {
     const invoiceId = String(row.InvoiceID || '');
     if (invoiceId) allocationsByInvoice.set(invoiceId, (allocationsByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
   });
-  const issuedInvoices = invoices.filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')));
+  const excludedInvoiceStatuses = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);
+  const issuedInvoices = invoices.filter(inv => !excludedInvoiceStatuses.has(String(inv.Invoice_Status || '').trim().toLowerCase()));
   const invoiceMetrics = issuedInvoices.map(inv => {
     const allocated = allocationsByInvoice.get(String(inv.InvoiceID || ''));
     const net = Number(inv.Net_Charge_Amount || 0);
     const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));
     const due = Math.max(0, net - paid);
-    const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
+    const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) && String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
     return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
   });
   const totalBilled = issuedInvoices.reduce((sum, inv) => sum + Number(inv.Net_Charge_Amount || 0), 0);
