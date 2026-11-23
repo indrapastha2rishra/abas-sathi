@@ -67,15 +67,33 @@ export const AdminDashboard: React.FC = () => {
   const occupancyRate = totalProperties > 0 ? ((occupiedProperties / totalProperties) * 100).toFixed(1) : '0';
   const tenantRate = totalProperties > 0 ? ((tenantProperties / totalProperties) * 100).toFixed(1) : '0';
 
-  // Invoice breakdown
-  const totalBilled = invoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0);
-  const totalCollected = invoices.reduce((sum, inv) => sum + (inv.Paid_Amount || 0), 0);
+  // Dashboard financial metrics use confirmed Fund Inflow + Bill Wise Details as the
+  // allocation ledger. Legacy invoices with no allocation rows fall back to Paid_Amount.
+  const confirmedTransactionIds = new Set(receipts
+    .filter(r => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
+    .map(r => String(r.Transaction_ID || '')));
+  const allocationsByInvoice = new Map<string, number>();
+  billAllocations.forEach(row => {
+    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
+    const invoiceId = String(row.InvoiceID || '');
+    if (invoiceId) allocationsByInvoice.set(invoiceId, (allocationsByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
+  });
+  const issuedInvoices = invoices.filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')));
+  const invoiceMetrics = issuedInvoices.map(inv => {
+    const allocated = allocationsByInvoice.get(String(inv.InvoiceID || ''));
+    const net = Number(inv.Net_Charge_Amount || 0);
+    const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));
+    const due = Math.max(0, net - paid);
+    const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
+    return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
+  });
+  const totalBilled = issuedInvoices.reduce((sum, inv) => sum + Number(inv.Net_Charge_Amount || 0), 0);
+  const totalCollected = invoiceMetrics.reduce((sum, inv) => sum + Number(inv.Paid_Amount || 0), 0);
   const collectionRate = totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0';
-
-  const paidCount = invoices.filter((i) => i.Invoice_Status === 'Paid').length;
-  const partialCount = invoices.filter((i) => i.Invoice_Status === 'Partially Paid').length;
-  const unpaidCount = invoices.filter((i) => i.Invoice_Status === 'Unpaid').length;
-  const overdueCount = invoices.filter((i) => i.Invoice_Status === 'Overdue').length;
+  const paidCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Paid').length;
+  const partialCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Partially Paid').length;
+  const unpaidCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Unpaid').length;
+  const overdueCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Overdue').length;
 
   // Flats with outstanding dues
 
@@ -110,22 +128,8 @@ export const AdminDashboard: React.FC = () => {
 
   // Bill Wise Details is the allocation ledger. Only confirmed receipt allocations
   // reduce invoice dues. Legacy invoices without allocation rows use Paid_Amount.
-  const confirmedTransactionIds = new Set(receipts
-    .filter(r => String(r.Receipt_Status || '').toLowerCase() === 'confirmed')
-    .map(r => String(r.Transaction_ID || '')));
-  const allocationsByInvoice = new Map<string, number>();
-  billAllocations.forEach(row => {
-    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
-    const key = String(row.InvoiceID || '');
-    if (key) allocationsByInvoice.set(key, (allocationsByInvoice.get(key) || 0) + Number(row.Allocated_Amount || 0));
-  });
-  const outstandingRows = invoices
-    .filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')))
-    .map(inv => {
-      const key = String(inv.InvoiceID || '');
-      const paid = allocationsByInvoice.has(key) ? (allocationsByInvoice.get(key) || 0) : Number(inv.Paid_Amount || 0);
-      return { ...inv, Paid_Amount: paid, Outstanding_Amount: Math.max(0, Number(inv.Net_Charge_Amount || 0) - paid) };
-    })
+  // Reuse the confirmed-receipt allocation map built above.
+  const outstandingRows = invoiceMetrics
     .filter(inv => inv.Outstanding_Amount > 0)
     .sort((a, b) => String(a.Due_Date || '').localeCompare(String(b.Due_Date || '')));
   const totalOutstanding = outstandingRows.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);

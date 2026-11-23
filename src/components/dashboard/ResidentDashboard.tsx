@@ -26,6 +26,7 @@ export const ResidentDashboard: React.FC = () => {
     residentProperty,
     invoices,
     receipts,
+    billAllocations,
     activityRequests,
     notices,
     gallery,
@@ -42,8 +43,27 @@ export const ResidentDashboard: React.FC = () => {
   const myReceipts = receipts.filter((r) => r.PropertyID === myProperty?.PropertyID);
   const myRequests = activityRequests.filter((r) => r.PropertyID === myProperty?.PropertyID);
 
-  const totalOutstanding = myInvoices.reduce((sum, inv) => sum + (inv.Outstanding_Amount || 0), 0);
-  const nextDueDate = myInvoices.find((i) => i.Outstanding_Amount > 0)?.Due_Date || 'None Pending';
+  const confirmedTransactionIds = new Set(receipts
+    .filter(r => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
+    .map(r => String(r.Transaction_ID || '')));
+  const allocatedByInvoice = new Map<string, number>();
+  billAllocations.forEach(row => {
+    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
+    const invoiceId = String(row.InvoiceID || '');
+    if (invoiceId) allocatedByInvoice.set(invoiceId, (allocatedByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
+  });
+  const now = new Date();\n  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const billMetrics = myInvoices
+    .filter(inv => !['Cancelled', 'Draft', 'Pending_Approval', 'Pending Approval'].includes(String(inv.Invoice_Status || '')))
+    .map(inv => {
+      const allocated = allocatedByInvoice.get(String(inv.InvoiceID || ''));
+      const net = Number(inv.Net_Charge_Amount || 0);\n      const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));\n      const due = Math.max(0, net - paid);
+      const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
+      return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
+    });
+  const totalOutstanding = billMetrics.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
+  const nextDueDate = billMetrics.find(i => i.Outstanding_Amount > 0)?.Due_Date || 'None Pending';
+  const recentReceipts = [...myReceipts].sort((a,b) => String(b.Date_Of_Received || '').localeCompare(String(a.Date_Of_Received || ''))).slice(0,4);
 
   return (
     <div className="space-y-6">
@@ -135,24 +155,24 @@ export const ResidentDashboard: React.FC = () => {
           <div className="space-y-2 text-xs">
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
               <span className="text-[#29352D]/70">Current Invoices:</span>
-              <span className="font-bold text-[#29352D]">{myInvoices.length} Issued</span>
+              <span className="font-bold text-[#29352D]">{billMetrics.length} Issued</span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
               <span className="text-[#29352D]/70">Paid In Full:</span>
               <span className="font-semibold text-emerald-700">
-                {myInvoices.filter((i) => i.Invoice_Status === 'Paid').length}
+                {billMetrics.filter((i) => i.Invoice_Status === 'Paid').length}
               </span>
             </div>
             <div className="flex justify-between py-1 border-b border-[#E8E1D4]/50">
               <span className="text-[#29352D]/70">Pending Verification:</span>
               <span className="font-semibold text-amber-700">
-                {myInvoices.filter((i) => i.Invoice_Status === 'Pending Verification').length}
+                {myReceipts.filter((r) => String(r.Receipt_Status || '').toLowerCase() === 'pending verification').length}
               </span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-[#29352D]/70">Overdue Invoices:</span>
               <span className="font-bold text-red-700">
-                {myInvoices.filter((i) => i.Invoice_Status === 'Overdue').length}
+                {billMetrics.filter((i) => i.Invoice_Status === 'Overdue').length}
               </span>
             </div>
           </div>
@@ -269,7 +289,7 @@ export const ResidentDashboard: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {myReceipts.slice(0, 4).map((rec) => (
+            {recentReceipts.map((rec) => (
               <div
                 key={rec.Transaction_ID}
                 className="flex items-center justify-between p-3.5 rounded-xl border border-[#E8E1D4] hover:bg-neutral-50 transition-colors text-xs"
