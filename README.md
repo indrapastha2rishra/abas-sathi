@@ -5,7 +5,7 @@
 
 ---
 
-## 1. Project Overview — Version 5.6.4
+## 1. Project Overview — Version 6.0.0
 
 - **Website:** Responsive, bilingual (English & Bengali) React application with Admin, Committee, Accountant and Resident roles.
 - **Backend integration:** Google Apps Script Web App with selective Google Sheets reads, validated write workflows, private Drive file APIs, backup and server-side reports.
@@ -297,3 +297,12 @@ This patch adds a short-lived ScriptCache of **row indexes only** for Society Co
 ## Version 5.6.4 — Instant Returning-Session Restore
 
 Returning sessions now restore the app shell immediately from the browser's saved session. Server session validation runs in the background; temporary network/server errors retain the shell and show an offline/server-unavailable notice. A confirmed authentication rejection clears the saved session and returns to Login. Server APIs remain responsible for authenticating data requests and writes. This does **not** promise offline financial data or offline writes, nor a one-second first-time login under slow Internet. See `V5.6.4_INSTANT_SESSION_RESTORE_REPORT_BN.md` and `DEPLOY_V5.6.4_BN.md`.
+
+
+## Version 6.0.0 — Role Permission Segregation & Resident Preview
+
+V6.0.0 integrates the existing `Role_Permission` sheet as the main module/action policy for Admin, Committee, Accountant and Resident. Permission records are loaded per authenticated role; missing records default to deny. Backend reads and writes independently validate module/action permissions. The first request creates the existing sheet/header and seeds starter records only if the sheet is empty; existing non-empty permission configuration is not overwritten.
+
+Settings includes an Admin-only Role Permission manager. Committee and Accountant may use **View as Resident** only when their user profile is linked to a current `PropertyID` and `Ownership_ID`. The viewing mode does not alter the authenticated role. Resident-preview reads are scoped to the linked current ownership, resident request creation/edit is own-request scoped, and Pay Now/payment-proof uploads are restricted to the linked property/ownership. Backend permission and property checks remain mandatory.
+
+See `V6.0.0_RELEASE/ROLE_PERMISSION_DEFAULTS_V6.csv`, `V6.0.0_RELEASE/V6.0.0_CHANGELOG.md`, `V6.0.0_RELEASE/V6.0.0_TEST_REPORT_BN.md` and `V6.0.0_RELEASE/DEPLOY_V6.0.0_BN.md`. V6.0.0 is a staging candidate until a full dependency install, Vite production build, live Apps Script deployment, and real role/property testing are completed.

@@ -20,6 +20,7 @@ import { ActivityRequestsView } from './components/requests/ActivityRequestsView
 import { ExpensesView } from './components/expenses/ExpensesView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
+import { MasterDataManager } from './components/settings/MasterDataManager';
 import { ResidentFlatView } from './components/resident/ResidentFlatView';
 import { ResidentNoticesView } from './components/resident/ResidentNoticesView';
 import { InvoicePrintModal } from './components/modals/InvoicePrintModal';
@@ -29,10 +30,11 @@ import { AdminUsersView, ProfileView } from './components/settings/AccountViews'
 import { FinancialTransactionsView } from './components/reports/FinancialTransactionsView';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, activeRole } = useApp();
+  const { activeTab, activeRole, canAccessTab, isResidentMode, actualRole } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const renderContent = () => {
+    if (!canAccessTab(activeTab)) return <div className="rounded-2xl border border-red-200 bg-white p-6 md:p-10 text-center space-y-2"><h2 className="text-lg font-bold text-red-700">Access Denied</h2><p className="text-sm text-slate-600">Role_Permission configuration does not allow viewing this module. Missing permission defaults to DENY.</p><button onClick={()=>window.location.replace(window.location.pathname)} className="mt-3 px-4 py-2 rounded-lg bg-[#536B4D] text-white text-sm font-semibold">Return to Dashboard</button></div>;
     if (activeTab === 'profile') return <ProfileView />;
     if (activeTab === 'settings_users') return <AdminUsersView />;
     // 1. Dashboard (Role-specific)
@@ -138,6 +140,7 @@ const MainLayout: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 max-w-7xl mx-auto w-full pb-20 md:pb-8 overflow-x-hidden">
+          {isResidentMode && <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-800">Resident Preview Mode — actual role remains {actualRole}; resident-scoped view is active.</div>}
           {renderContent()}
         </main>
       </div>

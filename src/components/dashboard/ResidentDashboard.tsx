@@ -33,6 +33,7 @@ export const ResidentDashboard: React.FC = () => {
     gallery,
     t,
     setActiveTab,
+    hasPermission,
     setPreviewInvoice,
     setPreviewReceipt,
   } = useApp();
@@ -76,20 +77,20 @@ export const ResidentDashboard: React.FC = () => {
             <span className="text-2xl font-bold text-white">₹{totalOutstanding.toLocaleString('en-IN')}</span>
             <span className="block text-[10px] text-amber-200 mt-0.5">Next Due: {nextDueDate}</span>
           </div>
-          <button
+          {hasPermission('Pay Now','Can_Create') && <button
             onClick={() => setActiveTab('resident_pay')}
             className="flex items-center gap-2 rounded-xl bg-[#C97958] px-4 py-2.5 text-xs font-bold text-white hover:bg-[#A95D3E] shadow-sm transition-all cursor-pointer"
           >
             <CreditCard className="h-4 w-4" />
             <span>Pay Now</span>
-          </button>
+          </button>}
         </div>
       </div>
 
       {/* Grid: Flat Details & Recent Requests */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* My Flat Information Card */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Properties & Residents','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-3">
             <span className="text-xs font-bold uppercase tracking-wider text-[#536B4D] flex items-center gap-1.5">
               <Home className="h-4 w-4" />
@@ -121,10 +122,10 @@ export const ResidentDashboard: React.FC = () => {
               <span className="font-mono text-[11px] text-[#29352D]/80">{myProperty?.PropertyID}</span>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Quick Outstanding Summary */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('My Bills','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-3">
             <span className="text-xs font-bold uppercase tracking-wider text-[#536B4D] flex items-center gap-1.5">
               <Receipt className="h-4 w-4" />
@@ -161,10 +162,10 @@ export const ResidentDashboard: React.FC = () => {
               </span>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Quick Service Request */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Activity Requests','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-3">
             <span className="text-xs font-bold uppercase tracking-wider text-[#536B4D] flex items-center gap-1.5">
               <Wrench className="h-4 w-4" />
@@ -195,13 +196,13 @@ export const ResidentDashboard: React.FC = () => {
               + Raise New Ticket
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* Row 2: Recent Bills & Payments */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Bills */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('My Bills','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Receipt className="h-4 w-4 text-[#536B4D]" />
@@ -246,7 +247,7 @@ export const ResidentDashboard: React.FC = () => {
                   <span className="font-bold text-sm text-[#29352D]">₹{Number(inv.Net_Charge_Amount || 0).toFixed(2)}</span>
                   <div className="mt-1">
                     <button
-                      onClick={() => setPreviewInvoice(inv)}
+                      onClick={() => setPreviewInvoice(inv as any)}
                       className="text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer"
                     >
                       Download Bill
@@ -256,10 +257,10 @@ export const ResidentDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* Recent Payments & Receipts */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Payment History','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-700" />
@@ -313,12 +314,12 @@ export const ResidentDashboard: React.FC = () => {
               <p className="text-xs text-gray-500 italic p-4 text-center">No payment receipts on record yet.</p>
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* Row 3: Notices & Community Gallery */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Notices','Can_View') && <div className="lg:col-span-8 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Calendar className="h-4 w-4 text-[#536B4D]" />
@@ -338,9 +339,9 @@ export const ResidentDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
-        <div className="lg:col-span-4 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Gallery','Can_View') && <div className="lg:col-span-4 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <ImageIcon className="h-4 w-4 text-[#536B4D]" />
@@ -360,7 +361,7 @@ export const ResidentDashboard: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </div>
   );

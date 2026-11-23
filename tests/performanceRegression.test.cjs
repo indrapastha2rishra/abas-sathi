@@ -38,7 +38,7 @@ test('upload validation uses keyed row lookup rather than full master-sheet read
 });
 
 test('dashboard bootstrap no longer requests Audit Log', () => {
-  const dashboardLine = context.split('\n').find(line => line.includes("dashboard: ['properties'"));
+  const dashboardLine = context.split('\n').find(line => line.includes("dashboard: activeRole === 'Resident'"));
   assert.ok(dashboardLine);
   assert.doesNotMatch(dashboardLine, /auditLogs/);
 });

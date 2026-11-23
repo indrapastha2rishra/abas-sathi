@@ -10,7 +10,7 @@ const today = new Date().toISOString().slice(0, 10);
 const emptyLine = (): Line => ({ accountId: '', debit: '', credit: '', narration: '' });
 
 export const FinancialTransactionsView: React.FC<{ initialType?: VoucherType }> = ({ initialType = 'RV' }) => {
-  const { accountHeads, currentUser } = useApp();
+  const { accountHeads, currentUser, hasPermission } = useApp();
   const [type, setType] = useState<VoucherType>(initialType);
   const [date, setDate] = useState(today);
   const [narration, setNarration] = useState('');
@@ -52,10 +52,11 @@ export const FinancialTransactionsView: React.FC<{ initialType?: VoucherType }> 
     catch (e: any) { setError(e?.message || 'Voucher action failed.'); }
     finally { setBusy(false); }
   };
-  const canApprove = currentUser.Role === 'Admin';
+  const canApprove = currentUser.Role === 'Admin' && hasPermission('Financial Transactions','Can_Approve');
+  const canCreateVoucher = hasPermission('Financial Transactions','Can_Create');
   return <div className="space-y-5">
     <div><h2 className="text-xl font-bold text-[#29352D]">Financial Transactions</h2><p className="text-xs text-gray-500 mt-1">Voucher entry, approval and posting to the existing journal ledger.</p></div>
-    {currentUser.Role !== 'Committee' && <div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-4">
+    {currentUser.Role !== 'Committee' && canCreateVoucher && <div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-bold text-sm">Create Voucher</h3><span className="text-[11px] text-gray-500">New vouchers require Admin approval before posting.</span></div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <label className="text-xs font-semibold">Voucher Type<select value={type} onChange={e => setType(e.target.value as VoucherType)} className="mt-1 w-full border rounded-lg p-2 bg-white">{(['RV','PV','JV','CV'] as VoucherType[]).map(x => <option key={x} value={x}>{x} – {({RV:'Receipt',PV:'Payment',JV:'Journal',CV:'Contra'} as any)[x]} Voucher</option>)}</select></label>

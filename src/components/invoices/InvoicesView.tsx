@@ -46,6 +46,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     cancelInvoice,
     setPreviewInvoice,
     activeRole,
+    hasPermission,
     t,
   } = useApp();
 
@@ -114,7 +115,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       String(inv.Owner_Name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       String(inv.Purpose || '').toLowerCase().includes(searchTerm.toLowerCase());
 
-    const outstandingAmount = getInvoiceOutstanding(inv);
+    const outstandingAmount = getInvoiceOutstanding(inv as any);
     const isOutstanding = inv.Invoice_Status !== 'Cancelled' && outstandingAmount > 0;
     const matchesStatus = activeSubTab === 'outstanding'
       ? isOutstanding && (statusFilter === 'All' || inv.Invoice_Status === statusFilter)
@@ -148,7 +149,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
           >
             {activeRole === 'Resident' ? 'My Bills' : `Invoice Register (${invoices.length})`}
           </button>
-          {activeRole !== 'Resident' && activeRole !== 'Committee' && (
+          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_Create') && (
             <button
               onClick={() => setActiveSubTab('generate')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
@@ -161,7 +162,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
               Generate Invoice
             </button>
           )}
-          {activeRole !== 'Resident' && <button
+          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
             onClick={() => setActiveSubTab('rates')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'rates'
@@ -171,7 +172,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
           >
             Rate Master
           </button>}
-          {activeRole !== 'Resident' && <button
+          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
             onClick={() => setActiveSubTab('outstanding')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'outstanding'
@@ -186,10 +187,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
 
       {activeSubTab === 'outstanding' && (() => {
         const activeOutstanding = invoices.filter((inv) => {
-          const due = getInvoiceOutstanding(inv);
+          const due = getInvoiceOutstanding(inv as any);
           return inv.Invoice_Status !== 'Cancelled' && due > 0;
         });
-        const totalDue = activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv), 0);
+        const totalDue = activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv as any), 0);
         const overdueCount = activeOutstanding.filter((inv) => inv.Invoice_Status === 'Overdue').length;
         return (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -275,7 +276,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                       <td className="px-4 py-3 text-right">₹{Number(inv.Adjustment_Amount || 0).toFixed(2)}</td>
                       <td className="px-4 py-3 text-right font-bold text-[#29352D]">₹{Number(inv.Net_Charge_Amount || 0).toFixed(2)}</td>
                       <td className="px-4 py-3 text-right text-emerald-700 font-medium">₹{Number(inv.Paid_Amount || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right font-bold text-red-700">₹{getInvoiceOutstanding(inv).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-red-700">₹{getInvoiceOutstanding(inv as any).toFixed(2)}</td>
                       <td className="px-4 py-3 text-center">
                         <span
                           className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -293,10 +294,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-3">
-                          <button onClick={() => setPreviewInvoice(inv)} className="flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">
+                          <button onClick={() => setPreviewInvoice(inv as any)} className="flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">
                             <Printer className="h-3.5 w-3.5" /><span>View</span>
                           </button>
-                          {activeRole==='Admin'&&inv.Invoice_Status!=='Cancelled'&&Number(inv.Paid_Amount||0)===0&&<button onClick={async()=>{const reason=window.prompt('Invoice cancellation reason:');if(!reason?.trim())return;try{await cancelInvoice(inv.InvoiceID,reason);}catch(e:any){window.alert(e?.message||'Invoice cancellation failed.');}}} className="text-xs font-semibold text-red-700 hover:underline">Cancel</button>}
+                          {activeRole==='Admin'&&hasPermission('Maintenance & Invoices','Can_Delete')&&inv.Invoice_Status!=='Cancelled'&&Number(inv.Paid_Amount||0)===0&&<button onClick={async()=>{const reason=window.prompt('Invoice cancellation reason:');if(!reason?.trim())return;try{await cancelInvoice(inv.InvoiceID,reason);}catch(e:any){window.alert(e?.message||'Invoice cancellation failed.');}}} className="text-xs font-semibold text-red-700 hover:underline">Cancel</button>}
                         </div>
                       </td>
                     </tr>

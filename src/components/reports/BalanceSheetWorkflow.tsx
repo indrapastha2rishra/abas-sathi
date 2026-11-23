@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 
 type Line={accountCode:string;accountName:string;accountType:string;debit:number;credit:number};
 export const BalanceSheetWorkflow: React.FC = () => {
-  const { currentUser, getReport, postOpeningBalances, createReportSnapshot, approveReportSnapshot, listReportSnapshots } = useApp();
+  const { currentUser, hasPermission, getReport, postOpeningBalances, createReportSnapshot, approveReportSnapshot, listReportSnapshots } = useApp();
   const [report,setReport]=useState<any>(null);
   const [snapshots,setSnapshots]=useState<any[]>([]);
   const [lines,setLines]=useState<Line[]>([{accountCode:'',accountName:'',accountType:'Asset',debit:0,credit:0}]);
@@ -54,8 +54,8 @@ export const BalanceSheetWorkflow: React.FC = () => {
       <div className="flex flex-wrap justify-between gap-2 text-xs"><button onClick={()=>setLines(prev=>[...prev,{accountCode:'',accountName:'',accountType:'Asset',debit:0,credit:0}])} className="border rounded-lg px-3 py-2">Add Account Line</button><span>Debit ₹{totals.debit.toFixed(2)} / Credit ₹{totals.credit.toFixed(2)}</span></div>
       <button disabled={busy||Math.abs(totals.debit-totals.credit)>0.009} onClick={()=>void submitOpening()} className="rounded-lg bg-[#536B4D] text-white px-4 py-2 text-xs font-bold disabled:opacity-50">Post Opening Balances</button>
     </div>}
-    {['Accountant','Admin'].includes(currentUser.Role)&&data.balanced&&data.hasOpeningBalances&&<button disabled={busy} onClick={()=>void submitSnapshot()} className="rounded-lg bg-[#536B4D] text-white px-4 py-2 text-xs font-bold">Submit Balance Sheet for Admin Approval</button>}
-    {currentUser.Role==='Admin'&&<div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-2">
+    {['Accountant','Admin'].includes(currentUser.Role)&&hasPermission('Reports','Can_Create')&&data.balanced&&data.hasOpeningBalances&&<button disabled={busy} onClick={()=>void submitSnapshot()} className="rounded-lg bg-[#536B4D] text-white px-4 py-2 text-xs font-bold">Submit Balance Sheet for Admin Approval</button>}
+    {currentUser.Role==='Admin'&&hasPermission('Reports','Can_Approve')&&<div className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-2">
       <h3 className="font-bold text-sm">Approve Report Snapshot</h3>
       <div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead><tr><th className="p-2">Snapshot</th><th className="p-2">As Of</th><th className="p-2">Created By</th><th className="p-2">Status</th><th className="p-2">Select</th></tr></thead><tbody>{snapshots.filter(x=>x.Status==='Pending Approval').map(x=><tr key={x.Snapshot_ID} className="border-b"><td className="p-2 font-mono">{x.Snapshot_ID}</td><td className="p-2">{String(x.As_Of_Date||'').slice(0,10)}</td><td className="p-2">{x.Created_By}</td><td className="p-2">{x.Status}</td><td className="p-2"><button onClick={()=>setSnapshotId(x.Snapshot_ID)} className="text-[#536B4D] font-bold">Select</button></td></tr>)}</tbody></table></div>
       <input value={snapshotId} onChange={e=>setSnapshotId(e.target.value)} placeholder="Snapshot ID (created by another Accountant/Admin)" className="w-full border rounded-lg p-2 text-xs"/>

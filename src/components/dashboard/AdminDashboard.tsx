@@ -45,6 +45,7 @@ export const AdminDashboard: React.FC = () => {
     setPreviewInvoice,
     setPreviewReceipt,
     getFundBalanceSummary,
+    hasPermission,
   } = useApp();
   const [fundBalanceSummary,setFundBalanceSummary]=useState<any>(null);
   useEffect(()=>{if(!['Admin','Accountant'].includes(currentUser.Role))return;let live=true;getFundBalanceSummary().then((r:any)=>{if(live)setFundBalanceSummary(r?.data||null);}).catch((e:any)=>console.warn('Fund balance summary unavailable:',e?.message||e));return()=>{live=false;};},[]);
@@ -170,27 +171,27 @@ export const AdminDashboard: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
+          {hasPermission('Maintenance & Invoices','Can_Create') && <button
             onClick={() => setActiveTab('invoices_generate')}
             className="flex items-center gap-1.5 rounded-xl bg-white px-3.5 py-2 text-xs font-bold text-[#536B4D] hover:bg-neutral-100 transition-colors shadow-xs cursor-pointer"
           >
             <PlusCircle className="h-4 w-4" />
             <span>Generate Invoice</span>
-          </button>
-          <button
+          </button>}
+          {hasPermission('Payments','Can_Create') && <button
             onClick={() => setActiveTab('payments_record')}
             className="flex items-center gap-1.5 rounded-xl bg-[#C97958] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#A95D3E] transition-colors shadow-xs cursor-pointer"
           >
             <Receipt className="h-4 w-4" />
             <span>Record Payment</span>
-          </button>
+          </button>}
         </div>
       </div>
 
       {/* 4 Core KPIs from Section 10 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* 1. Total Properties */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Properties & Residents','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#29352D]/70">{t.statTotalProperties}</span>
             <div className="p-2 rounded-xl bg-[#536B4D]/10 text-[#536B4D]">
@@ -203,10 +204,10 @@ export const AdminDashboard: React.FC = () => {
             <span>•</span>
             <span className="font-semibold text-[#536B4D]">Active records: {properties.filter(p => p.Property_Status === 'Active').length}</span>
           </div>
-        </div>
+        </div>}
 
         {/* 2. Occupancy Rate */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Properties & Residents','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#29352D]/70">{t.statOccupancyRate}</span>
             <div className="p-2 rounded-xl bg-emerald-100 text-emerald-800">
@@ -217,10 +218,10 @@ export const AdminDashboard: React.FC = () => {
           <p className="text-xs text-gray-500 mt-1">
             {occupiedProperties} occupied flats ({totalProperties - occupiedProperties} vacant)
           </p>
-        </div>
+        </div>}
 
         {/* 3. Tenant Rate */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Tenant Management','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#29352D]/70">{t.statTenantRate}</span>
             <div className="p-2 rounded-xl bg-indigo-100 text-indigo-800">
@@ -231,10 +232,10 @@ export const AdminDashboard: React.FC = () => {
           <p className="text-xs text-gray-500 mt-1">
             {tenantProperties} flats with active tenant records
           </p>
-        </div>
+        </div>}
 
         {/* 4. Maintenance Collection Rate */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Maintenance & Invoices','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#29352D]/70">{t.statCollectionRate}</span>
             <div className="p-2 rounded-xl bg-amber-100 text-amber-800">
@@ -245,11 +246,11 @@ export const AdminDashboard: React.FC = () => {
           <p className="text-xs text-amber-700 font-semibold mt-1">
             Total Outstanding: ₹{totalOutstanding.toLocaleString('en-IN')}
           </p>
-        </div>
+        </div>}
       </div>
 
       {/* Fund Summary (Items 5 to 9) - Financial Year wise */}
-      <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs space-y-4">
+      {hasPermission('Reports','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3">
           <div>
             <div className="flex items-center gap-2">
@@ -265,12 +266,12 @@ export const AdminDashboard: React.FC = () => {
               {t.fundSummarySubtitle}
             </p>
           </div>
-          <div className="flex items-center gap-2 text-xs text-gray-500">
+          {hasPermission('Bank Accounts','Can_View') && <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#F7F4EC] border border-[#E8E1D4] font-medium text-[11px] text-[#29352D]">
               <Landmark className="h-3.5 w-3.5 text-[#536B4D]" />
               {bankAccounts.length} bank accounts
             </span>
-          </div>
+          </div>}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -369,12 +370,12 @@ export const AdminDashboard: React.FC = () => {
             </p>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Row 3: Status Donut Chart & Collection Trend Bar Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {hasPermission('Maintenance & Invoices','Can_View') && <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 5. Maintenance Status Donut Breakdown */}
-        <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Maintenance & Invoices','Can_View') && <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D]">
               Maintenance Status / রক্ষণাবেক্ষণ অবস্থা
@@ -455,10 +456,10 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* 6. Maintenance Collection Trend – Last 6 Months */}
-        <div className="lg:col-span-7 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Maintenance & Invoices','Can_View') && <div className="lg:col-span-7 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <div>
               <h3 className="text-sm font-bold text-[#29352D]">
@@ -495,11 +496,11 @@ export const AdminDashboard: React.FC = () => {
               <span className="h-2.5 w-2.5 rounded-sm bg-[#E8E1D4]"></span> Monthly receipt amount
             </span>
           </div>
-        </div>
-      </div>
+        </div>}
+      </div>}
 
       {/* Row 3: 7. Outstanding Maintenance Charges Total & Flat-wise Details */}
-      <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+      {hasPermission('Maintenance & Invoices','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
           <div>
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
@@ -556,7 +557,7 @@ export const AdminDashboard: React.FC = () => {
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <button
-                      onClick={() => setPreviewInvoice(inv)}
+                      onClick={() => setPreviewInvoice(inv as any)}
                       className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
                     >
                       View Invoice
@@ -567,12 +568,12 @@ export const AdminDashboard: React.FC = () => {
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
 
       {/* Row 4: 8. Recent Activity & 9. Preventive Maintenance Progress */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 8. Recent Activity / Audit Log */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Activity Requests','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Clock className="h-4 w-4 text-[#536B4D]" />
@@ -609,10 +610,10 @@ export const AdminDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* 9. Preventive Maintenance Progress */}
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Preventive Maintenance','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-[#536B4D]" />
@@ -654,13 +655,13 @@ export const AdminDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* Row 5: 10. Notices & Community Gallery */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Latest Notices */}
-        <div className="lg:col-span-7 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Notices','Can_View') && <div className="lg:col-span-7 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Calendar className="h-4 w-4 text-[#536B4D]" />
@@ -687,10 +688,10 @@ export const AdminDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         {/* Community Gallery preview */}
-        <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {hasPermission('Gallery','Can_View') && <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <ImageIcon className="h-4 w-4 text-[#536B4D]" />
@@ -713,7 +714,7 @@ export const AdminDashboard: React.FC = () => {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

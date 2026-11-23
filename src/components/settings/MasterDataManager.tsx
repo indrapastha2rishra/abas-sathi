@@ -2,29 +2,29 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { authRequest } from '../../utils/authClient';
 import { useApp } from '../../context/AppContext';
 
-type ModuleOption = { key:string; label:string; id:string; canArchive:boolean; roles:string[] };
+type ModuleOption = { key:string; label:string; id:string; canArchive:boolean; roles:string[]; permissionModule:string };
 const MODULES: ModuleOption[] = [
-  {key:'properties',label:'Property Master',id:'PropertyID',canArchive:true,roles:['Admin']},
-  {key:'owners',label:'Owner Master',id:'OwnerID',canArchive:true,roles:['Admin','Committee']},
-  {key:'ownershipHistory',label:'Ownership History',id:'Ownership_ID',canArchive:true,roles:['Admin']},
-  {key:'rates',label:'Rate Master',id:'RateID',canArchive:true,roles:['Admin']},
-  {key:'expenseCategories',label:'Expense Category Master',id:'Category_ID',canArchive:true,roles:['Admin']},
-  {key:'bankAccounts',label:'Bank Account Master',id:'BankAccount_ID',canArchive:true,roles:['Admin','Accountant']},
-  {key:'tenants',label:'Tenant Master',id:'Tenant_ID',canArchive:true,roles:['Admin','Committee']},
-  {key:'activityRequests',label:'Activity Request Register',id:'Request_ID',canArchive:true,roles:['Admin','Committee']},
-  {key:'notices',label:'Notice Master',id:'Notice_ID',canArchive:true,roles:['Admin','Committee']},
-  {key:'gallery',label:'Gallery Master',id:'Gallery_ID',canArchive:true,roles:['Admin','Committee']},
-  {key:'preventiveMaintenance',label:'Preventive Maintenance Master',id:'Maintenance_ID',canArchive:true,roles:['Admin','Committee']},
-  {key:'ratePropertyMapping',label:'Rate Property Mapping',id:'Rate_Mapping_ID',canArchive:true,roles:['Admin']},
-  {key:'propertyUtilityDetails',label:'Property Utility Details',id:'Utility_ID',canArchive:true,roles:['Admin','Accountant']},
-  {key:'financialYears',label:'Financial Year Master',id:'FY_ID',canArchive:true,roles:['Admin','Accountant']},
-  {key:'accountHeads',label:'Account Head Master',id:'Account_ID',canArchive:true,roles:['Admin','Accountant']}
+  {key:'properties',label:'Property Master',id:'PropertyID',canArchive:true,roles:['Admin'],permissionModule:'Properties & Residents'},
+  {key:'owners',label:'Owner Master',id:'OwnerID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Owner Management'},
+  {key:'ownershipHistory',label:'Ownership History',id:'Ownership_ID',canArchive:true,roles:['Admin'],permissionModule:'Ownership History'},
+  {key:'rates',label:'Rate Master',id:'RateID',canArchive:true,roles:['Admin'],permissionModule:'Maintenance & Invoices'},
+  {key:'expenseCategories',label:'Expense Category Master',id:'Category_ID',canArchive:true,roles:['Admin','Accountant'],permissionModule:'Expenses'},
+  {key:'bankAccounts',label:'Bank Account Master',id:'BankAccount_ID',canArchive:true,roles:['Admin','Accountant'],permissionModule:'Bank Accounts'},
+  {key:'tenants',label:'Tenant Master',id:'Tenant_ID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Tenant Management'},
+  {key:'activityRequests',label:'Activity Request Register',id:'Request_ID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Activity Requests'},
+  {key:'notices',label:'Notice Master',id:'Notice_ID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Notices'},
+  {key:'gallery',label:'Gallery Master',id:'Gallery_ID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Gallery'},
+  {key:'preventiveMaintenance',label:'Preventive Maintenance Master',id:'Maintenance_ID',canArchive:true,roles:['Admin','Committee'],permissionModule:'Preventive Maintenance'},
+  {key:'ratePropertyMapping',label:'Rate Property Mapping',id:'Rate_Mapping_ID',canArchive:true,roles:['Admin'],permissionModule:'Maintenance & Invoices'},
+  {key:'propertyUtilityDetails',label:'Property Utility Details',id:'Utility_ID',canArchive:true,roles:['Admin','Accountant'],permissionModule:'Properties & Residents'},
+  {key:'financialYears',label:'Financial Year Master',id:'FY_ID',canArchive:true,roles:['Admin','Accountant'],permissionModule:'Financial Year Management'},
+  {key:'accountHeads',label:'Account Head Master',id:'Account_ID',canArchive:true,roles:['Admin','Accountant'],permissionModule:'Account Heads'}
 ];
 const SYSTEM_FIELDS = new Set(['Created_By','Created_At','Updated_By','Updated_At','Approved_By','Approved_At','Cancelled_By','Cancelled_At','Society_Code','Owner_Status','Ownership_Status','Ownership_End_Date','Password_Salt','Password_Hash']);
 
 export const MasterDataManager: React.FC = () => {
-  const { currentUser, createModuleRecord, updateModuleRecord, cancelModuleRecord } = useApp();
-  const allowed = useMemo(() => MODULES.filter(m => m.roles.includes(currentUser.Role)), [currentUser.Role]);
+  const { currentUser, createModuleRecord, updateModuleRecord, cancelModuleRecord, hasPermission } = useApp();
+  const allowed = useMemo(() => MODULES.filter(m => m.roles.includes(currentUser.Role) && hasPermission(m.permissionModule,'Can_View')), [currentUser.Role,hasPermission]);
   const [moduleKey,setModuleKey] = useState(allowed[0]?.key || 'properties');
   const selected = allowed.find(m=>m.key===moduleKey) || allowed[0];
   const [fields,setFields] = useState<string[]>([]);
@@ -52,7 +52,10 @@ export const MasterDataManager: React.FC = () => {
   useEffect(()=>{void load();setEditing(null);setForm({});},[load]);
 
   const visible = records.filter(row=>Object.values(row).some(v=>String(v??'').toLowerCase().includes(search.toLowerCase())));
-  const beginNew = () => {setEditing('');setForm({});setError('');};
+  const canCreate = !!selected && hasPermission(selected.permissionModule,'Can_Create');
+  const canEdit = !!selected && hasPermission(selected.permissionModule,'Can_Edit');
+  const canDelete = !!selected && hasPermission(selected.permissionModule,'Can_Delete');
+  const beginNew = () => {if(!canCreate)return;setEditing('');setForm({});setError('');};
   const beginEdit = (row:Record<string,any>) => {setEditing(String(row[selected.id]));setForm({...row});setError('');};
   const save = async (e:React.FormEvent) => {
     e.preventDefault();if(!selected)return;setSaving(true);setError('');
@@ -65,7 +68,7 @@ export const MasterDataManager: React.FC = () => {
     finally{setSaving(false);}
   };
   const archive = async (row:Record<string,any>) => {
-    if(!selected?.canArchive)return;
+    if(!selected?.canArchive||!canDelete)return;
     const reason=window.prompt('Enter a reason for archiving this record:');
     if(!reason?.trim())return;
     try{await cancelModuleRecord(selected.key,String(row[selected.id]),reason);await load();}
@@ -86,7 +89,7 @@ export const MasterDataManager: React.FC = () => {
         <label className="text-xs font-semibold text-[#29352D] flex-1">Search records
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search any field..." className="mt-1 w-full rounded-lg border border-[#E8E1D4] p-2"/>
         </label>
-        <button onClick={beginNew} className="rounded-lg bg-[#536B4D] px-4 py-2 text-white text-xs font-bold">+ New Record</button>
+        {canCreate&&<button onClick={beginNew} className="rounded-lg bg-[#536B4D] px-4 py-2 text-white text-xs font-bold">+ New Record</button>}
         <button onClick={()=>void load()} className="rounded-lg border px-4 py-2 text-xs font-bold">Refresh</button>
       </div>
       {error&&<div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800">{error}</div>}
@@ -97,15 +100,15 @@ export const MasterDataManager: React.FC = () => {
             <td className="p-2 font-mono">{String(row[selected.id]||'')}</td>
             <td className="p-2">{String(row.Owner_Name||row.Flat_No||row.Purpose||row.Subject||row.Account_Name||row.Asset_Name||row.Notice_Title||row.Category_Name||row.Tenant_Name||'Record')}</td>
             <td className="p-2">{String(row.Property_Status||row.Owner_Status||row.Ownership_Status||row.Status||row.Request_Status||row.Notice_Status||row.FY_Status||'—')}</td>
-            <td className="p-2 whitespace-nowrap"><button onClick={()=>beginEdit(row)} className="text-[#536B4D] font-bold mr-3">Edit</button>
-              {selected.canArchive&&<button onClick={()=>void archive(row)} className="text-red-700 font-bold">{selected.key==='ownershipHistory'?'End Ownership':'Archive'}</button>}
+            <td className="p-2 whitespace-nowrap">{canEdit&&<button onClick={()=>beginEdit(row)} className="text-[#536B4D] font-bold mr-3">Edit</button>}
+              {selected.canArchive&&canDelete&&<button onClick={()=>void archive(row)} className="text-red-700 font-bold">{selected.key==='ownershipHistory'?'End Ownership':'Archive'}</button>}
             </td>
           </tr>)}</tbody>
         </table>
         {!visible.length&&<p className="p-5 text-center text-xs text-gray-500">No records found.</p>}
       </div>}
     </div>
-    {editing!==null&&<form onSubmit={save} className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-3">
+    {editing!==null&&(editing===''?canCreate:canEdit)&&<form onSubmit={save} className="rounded-xl border border-[#E8E1D4] bg-white p-4 space-y-3">
       <div className="flex items-center justify-between"><h3 className="font-bold text-sm">{editing?'Edit':'Create'} — {selected.label}</h3><button type="button" onClick={()=>{setEditing(null);setForm({});}} className="text-xs text-gray-500">Close</button></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {fields.map(field=>{

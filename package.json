@@ -1,7 +1,7 @@
 {
   "name": "abas-sathi",
   "private": true,
-  "version": "5.6.5",
+  "version": "6.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/calculations.test.ts src/utils/authValidation.test.ts src/utils/residentBilling.test.ts tests/ownershipOutstanding.test.cjs tests/yearEndClosing.test.cjs tests/performanceRegression.test.cjs tests/instantSessionRestore.test.cjs"
+    "test": "tsx --test src/utils/calculations.test.ts src/utils/authValidation.test.ts src/utils/residentBilling.test.ts tests/ownershipOutstanding.test.cjs tests/yearEndClosing.test.cjs tests/performanceRegression.test.cjs tests/instantSessionRestore.test.cjs tests/rolePermissionV6.test.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

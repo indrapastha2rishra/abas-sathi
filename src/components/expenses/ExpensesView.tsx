@@ -29,6 +29,7 @@ export const ExpensesView: React.FC = () => {
     uploadPrivateFile,
     setPreviewVoucher,
     activeRole,
+    hasPermission,
     t,
   } = useApp();
 
@@ -137,7 +138,7 @@ export const ExpensesView: React.FC = () => {
           >
             Expense Register ({expenses.length})
           </button>
-          <button
+          {hasPermission('Expenses','Can_Create') && <button
             onClick={() => setActiveSubTab('add')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1 ${
               activeSubTab === 'add' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
@@ -145,23 +146,23 @@ export const ExpensesView: React.FC = () => {
           >
             <PlusCircle className="h-3.5 w-3.5" />
             Add Expense
-          </button>
-          <button
+          </button>}
+          {activeRole==='Admin' && <button
             onClick={() => setActiveSubTab('categories')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
               activeSubTab === 'categories' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
             Categories Master (13)
-          </button>
-          <button
+          </button>}
+          {hasPermission('Expenses','Can_Approve') && <button
             onClick={() => setActiveSubTab('pending')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
               activeSubTab === 'pending' ? 'bg-white text-amber-700 shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
             Pending Approvals ({expenses.filter((e) => e.Expense_Status === 'Pending Approval').length})
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -244,14 +245,14 @@ export const ExpensesView: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right space-x-2">
-                        {exp.Expense_Status === 'Pending Approval' && activeRole === 'Admin' ? (
+                        {exp.Expense_Status === 'Pending Approval' && hasPermission('Expenses','Can_Approve') ? (
                           <button
                             onClick={async () => { try { await approveExpense(exp.Expense_ID); } catch (error:any) { window.alert(error?.message || 'Expense approval failed.'); } }}
                             className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-bold text-[11px] hover:bg-emerald-800 cursor-pointer shadow-2xs"
                           >
                             Approve
                           </button>
-                        ) : exp.Expense_Status === 'Approved' && ['Admin','Accountant'].includes(activeRole) ? (
+                        ) : exp.Expense_Status === 'Approved' && hasPermission('Expenses','Can_Edit') ? (
                           <button
                             onClick={async () => { try { await markExpensePaid(exp.Expense_ID); } catch (error:any) { window.alert(error?.message || 'Expense payment failed.'); } }}
                             className="px-2.5 py-1 rounded-lg bg-[#536B4D] text-white font-bold text-[11px] hover:bg-[#3F523A] cursor-pointer shadow-2xs"

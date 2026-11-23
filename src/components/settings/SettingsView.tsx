@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { MasterDataManager } from './MasterDataManager';
 import { DocumentCenter } from './DocumentCenter';
 import { BackupManager } from './BackupManager';
+import { RolePermissionManager } from './RolePermissionManager';
 import { useApp } from '../../context/AppContext';
 import {
   Settings,
@@ -35,13 +36,17 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
     t,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'google' | 'users' | 'apartment' | 'maintenance' | 'audit' | 'master' | 'documents' | 'backup'>( 
+  const [activeTab, setActiveTab] = useState<'google' | 'users' | 'apartment' | 'maintenance' | 'audit' | 'role_permissions' | 'master' | 'documents' | 'backup'>( 
     initialSubTab === 'settings_users'
       ? 'users'
       : initialSubTab === 'settings_maintenance'
       ? 'maintenance'
       : initialSubTab === 'settings_audit'
       ? 'audit'
+      : initialSubTab === 'settings_role_permissions'
+      ? 'role_permissions'
+      : initialSubTab === 'settings_master'
+      ? 'master'
       : 'google'
   );
 
@@ -93,6 +98,20 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
           User & Role Management
         </button>
         <button
+          onClick={() => setActiveTab('master')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === 'master' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'}`}
+        >
+          Master Data
+        </button>
+        <button
+          onClick={() => setActiveTab('role_permissions')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'role_permissions' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Role Permissions
+        </button>
+        <button
           onClick={() => setActiveTab('maintenance')}
           className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'maintenance' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
@@ -108,7 +127,6 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
         >
           Audit Log ({auditLogs.length})
         </button>
-        {currentUser.Role !== 'Resident' && <button onClick={() => setActiveTab('master')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='master'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Master Data CRUD</button>}
         <button onClick={() => setActiveTab('documents')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='documents'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Documents</button>
         {currentUser.Role === 'Admin' && <button onClick={() => setActiveTab('backup')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='backup'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Backup & Restore</button>}
       </div>
@@ -308,6 +326,9 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
           </div>
         </div>
       )}
+
+      {/* ROLE PERMISSION CONFIGURATION */}
+      {activeTab === 'role_permissions' && <RolePermissionManager />}
 
       {/* TAB 3: PREVENTIVE MAINTENANCE SETTINGS */}
       {activeTab === 'maintenance' && (

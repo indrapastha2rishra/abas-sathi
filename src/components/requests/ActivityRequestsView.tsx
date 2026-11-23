@@ -25,6 +25,7 @@ export const ActivityRequestsView: React.FC = () => {
     createActivityRequest,
     updateActivityRequest,
     activeRole,
+    hasPermission,
     currentUser,
     residentProperty,
     uploadPrivateFile,
@@ -118,13 +119,13 @@ export const ActivityRequestsView: React.FC = () => {
           </p>
         </div>
 
-        <button
+        {hasPermission('Activity Requests','Can_Create') && <button
           onClick={() => setIsNewModalOpen(true)}
           className="flex items-center gap-2 rounded-xl bg-[#536B4D] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#3F523A] transition-colors cursor-pointer self-start sm:self-auto"
         >
           <PlusCircle className="h-4 w-4" />
           <span>Raise New Request</span>
-        </button>
+        </button>}
       </div>
 
       {/* Filter Tabs */}
@@ -215,7 +216,7 @@ export const ActivityRequestsView: React.FC = () => {
                 >
                   {req.Request_Status}
                 </span>
-                {activeRole !== 'Resident' && (
+                {activeRole !== 'Resident' && hasPermission('Activity Requests','Can_Approve') && (
                   <button
                     onClick={() => {
                       setEditingRequest(req);

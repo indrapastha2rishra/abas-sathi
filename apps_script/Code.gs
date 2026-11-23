@@ -31,7 +31,7 @@ const CONFIG = {
     "Expense Register", "Expense Category Master", "Bank Account Master",
     "User Master & Role Management", "Activity Request Register", "Notice Master",
     "Gallery Master", "Preventive Maintenance Master", "Rate Property Mapping",
-    "Property Utility Details", "Audit Log", "Financial Year Master", "Account Head Master"
+    "Property Utility Details", "Audit Log", "Financial Year Master", "Account Head Master", "Role_Permission"
   ]
 };
 const USER_HEADERS = [
@@ -74,23 +74,25 @@ function doPost(e) {
     switch (body.action) {
       case "getSocietyData": return json_({status:"error",code:"SELECTIVE_READ_REQUIRED",message:"Use getModuleData to load one module at a time."});
       case "getModuleData": return getModuleData_(session, body);
+      case "getMyPermissions": return getMyPermissions_(session);
+      case "deleteRolePermission": return deleteRolePermission_(session, body);
       case "getModuleSchema": return getModuleSchema_(session, body);
-      case "getDashboardSummary": return getDashboardSummary_(session);
-      case "getDashboardData": return getDashboardData_(session);
+      case "getDashboardSummary": requirePermission_(session,"Dashboard","Can_View"); return getDashboardSummary_(session);
+      case "getDashboardData": return getDashboardData_(session, body);
       case "getReports": return getReports_(session, body);
-      case "getFundBalanceSummary": return getFundBalanceSummary_(session, body);
-      case "getYearEndClosingPreview": return getYearEndClosingPreview_(session, body);
-      case "finalizeYearEndClosing": return finalizeYearEndClosing_(session, body);
-      case "createReportSnapshot": return createReportSnapshot_(session, body);
-      case "approveReportSnapshot": return approveReportSnapshot_(session, body);
-      case "listReportSnapshots": return listReportSnapshots_(session, body);
-      case "postOpeningBalances": return postOpeningBalances_(session, body);
-      case "listAccountingVouchers": return listAccountingVouchers_(session, body);
-      case "createAccountingVoucher": return createAccountingVoucher_(session, body);
-      case "approveAccountingVoucher": return approveAccountingVoucher_(session, body);
-      case "postAccountingVoucher": return postAccountingVoucher_(session, body);
-      case "cancelAccountingVoucher": return cancelAccountingVoucher_(session, body);
-      case "getAccountingBook": return getAccountingBook_(session, body);
+      case "getFundBalanceSummary": requirePermission_(session,"Reports","Can_View"); return getFundBalanceSummary_(session, body);
+      case "getYearEndClosingPreview": requirePermission_(session,"Reports","Can_View"); return getYearEndClosingPreview_(session, body);
+      case "finalizeYearEndClosing": requirePermission_(session,"Reports","Can_Approve"); return finalizeYearEndClosing_(session, body);
+      case "createReportSnapshot": requirePermission_(session,"Reports","Can_Create"); return createReportSnapshot_(session, body);
+      case "approveReportSnapshot": requirePermission_(session,"Reports","Can_Approve"); return approveReportSnapshot_(session, body);
+      case "listReportSnapshots": requirePermission_(session,"Reports","Can_View"); return listReportSnapshots_(session, body);
+      case "postOpeningBalances": requireRole_(session,["Admin"]); requirePermission_(session,"Financial Transactions","Can_Create"); return postOpeningBalances_(session, body);
+      case "listAccountingVouchers": requirePermission_(session,"Financial Transactions","Can_View"); return listAccountingVouchers_(session, body);
+      case "createAccountingVoucher": requirePermission_(session,"Financial Transactions","Can_Create"); return createAccountingVoucher_(session, body);
+      case "approveAccountingVoucher": requirePermission_(session,"Financial Transactions","Can_Approve"); return approveAccountingVoucher_(session, body);
+      case "postAccountingVoucher": requirePermission_(session,"Financial Transactions","Can_Edit"); return postAccountingVoucher_(session, body);
+      case "cancelAccountingVoucher": requirePermission_(session,"Financial Transactions","Can_Delete"); return cancelAccountingVoucher_(session, body);
+      case "getAccountingBook": requirePermission_(session,"Financial Transactions","Can_View"); return getAccountingBook_(session, body);
       case "listPrivateFiles": return listPrivateFiles_(session, body);
       case "configureAutomatedBackup": return configureAutomatedBackup_(session, body);
       case "restoreSocietyBackup": return restoreSocietyBackup_(session, body);
@@ -134,7 +136,7 @@ function doPost(e) {
 // They require dedicated locked/idempotent transaction handlers.
 // -----------------------------------------------------------------------------
 const MODULE_SHEETS = {
-  properties: "Property Master", owners: "Owner Master", ownershipHistory: "Ownership History",
+  properties: "Property Master", owners: "Owner Master", ownershipHistory: "Ownership History", rolePermissions: "Role_Permission",
   tenants: "Tenant Master", rates: "Rate Master", invoices: "Invoice_Register",
   receipts: "Fund Inflow Register", billWiseDetails: "Bill Wise Details",
   expenses: "Expense Register", expenseCategories: "Expense Category Master",
@@ -149,19 +151,24 @@ function getModuleData_(session, body) {
   const key = String(body.module || "");
   const sheetName = MODULE_SHEETS[key];
   if (!sheetName) throw new Error("Unknown or unsupported module.");
-  authorizeModuleRead_(session, key);
+  const viewSession = residentViewSession_(session, body.viewAsResident);
+  authorizeModuleRead_(session, key, Boolean(body.viewAsResident));
   const page = Math.max(1, Math.floor(Number(body.page) || 1));
   const limit = Math.min(200, Math.max(1, Math.floor(Number(body.limit) || 50)));
   const ss = SpreadsheetApp.openById(session.databaseId);
-  const sheet = ss.getSheetByName(sheetName) || (key==="invoices"?ss.getSheetByName("Invoice Register"):null);
+  const sheet = key === "rolePermissions" ? ensureRolePermissionSheet_(ss) : (ss.getSheetByName(sheetName) || (key==="invoices"?ss.getSheetByName("Invoice Register"):null));
   if(!sheet)throw new Error("Required sheet is missing: "+sheetName);
+  if(key === "rolePermissions") {
+    const all = sheetObjects_(sheet),start=(page-1)*limit,total=all.length;
+    return json_({status:"success",module:key,data:all.slice(start,start+limit),pagination:{page,limit,total,totalPages:Math.ceil(total/limit)}});
+  }
   const hasFilters=Boolean(body.search||body.status||body.propertyId||body.ownerId||body.fromDate||body.toDate);
-  if(session.role!=="Resident"&&!hasFilters){
+  if(viewSession.role!=="Resident"&&!hasFilters){
     const last=sheet.getLastRow(),total=Math.max(0,last-1),start=(page-1)*limit+2;
     const data=(total&&start<=last)?sheetObjectsRange_(sheet,start,Math.min(limit,last-start+1)):[];
     return json_({status:"success",module:key,data,pagination:{page,limit,total,totalPages:Math.ceil(total/limit)}});
   }
-  let records = session.role==="Resident" ? residentModuleRecords_(session,key,ss,sheet) : sheetObjects_(sheet);
+  let records = viewSession.role==="Resident" ? residentModuleRecords_(viewSession,key,ss,sheet) : sheetObjects_(sheet);
   const search = String(body.search || "").trim().toLowerCase();
   if (search) records = records.filter(row => Object.keys(row).some(k => String(row[k] == null ? "" : row[k]).toLowerCase().includes(search)));
   const statusField = {properties:"Property_Status",rates:"Status",invoices:"Invoice_Status",receipts:"Receipt_Status",expenses:"Expense_Status",activityRequests:"Request_Status",notices:"Notice_Status",preventiveMaintenance:"Maintenance_Status",tenants:"Status",gallery:"Status",bankAccounts:"Status",expenseCategories:"Status",propertyUtilityDetails:"Status",financialYears:"FY_Status",ratePropertyMapping:"Status"}[key] || "Status";
@@ -182,6 +189,7 @@ function getModuleSchema_(session, body) {
   if(!cfg||!sheetName) throw new Error("Module does not support generic maintenance.");
   const roles=cfg.roles||[];
   if(roles.indexOf(session.role)<0) throw new Error("Permission denied.");
+  if(key==="rolePermissions")requireRole_(session,["Admin"]);else requirePermission_(session,PERMISSION_MODULE_MAP_[key]||key,"Can_View");
   const sh=societySheet_(session,cfg.sheet).sh;
   if(key==="owners")ensureHeaders_(sh,["Owner_Status"]);
   const headers=headerMap_(sh);
@@ -496,6 +504,7 @@ function finalizeYearEndClosing_(session,body){
 }
 
 function getReports_(session, body) {
+  requirePermission_(session,"Reports","Can_View");
   const type=String(body.reportType||"");
   if(["Admin","Accountant","Committee"].indexOf(session.role)<0) throw new Error("Permission denied.");
   if(type==="outstanding") {
@@ -631,7 +640,7 @@ function residentCanAccessLinkedFile_(session,registered){
   if(["owner document","ownership document"].includes(category)){
     if(!registered.OwnerID)return false;
     const current=sheetObjects_(societySheet_(session,"Ownership History").sh).filter(x=>String(x.PropertyID)===String(session.propertyId)&&String(x.Ownership_Status)==="Current");
-    return current.some(x=>String(x.OwnerID)===String(registered.OwnerID)&&(!session.ownerId||String(session.ownerId)===String(x.OwnerID))&&(!session.ownershipId||String(session.ownershipId)===String(x.Ownership_ID)));
+    return current.some(x=>String(x.OwnerID)===String(registered.OwnerID)&&String(x.Ownership_ID)===String(session.ownershipId)&&(!session.ownerId||String(session.ownerId)===String(x.OwnerID)));
   }
   if(category==="activity request attachment"){
     if(module!=="activityRequests"||!recordId)return String(registered.Uploaded_By)===String(session.userId);
@@ -714,23 +723,25 @@ function sheetObjectsTail_(sh,limit) {
  * A short role-scoped cache removes duplicate full dashboard reads during rapid
  * navigation/reload. Cache entries are bypassed automatically when too large.
  */
-function getDashboardData_(session) {
-  const role = String(session.role || "Resident");
+function getDashboardData_(session,body) {
+  const viewSession=residentViewSession_(session,body&&body.viewAsResident);
+  const role = String(viewSession.role || "Resident");
   const cache=CacheService.getScriptCache();
-  const cacheKey="DASH_"+sha256_(String(session.societyCode)+"|"+role+"|"+String(session.propertyId||""));
+  const cacheKey="DASH_"+sha256_(String(session.societyCode)+"|"+role+"|"+String(session.propertyId||"")+"|"+String(session.ownershipId||"")+"|"+String(session.ownerId||"")+"|"+Boolean(body&&body.viewAsResident));
   const cached=cache.get(cacheKey);
   if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
   const ss = SpreadsheetApp.openById(session.databaseId);
-  const keys = role === "Resident"
-    ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery"]
+  let keys = role === "Resident"
+    ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery","propertyUtilityDetails"]
     : ["properties","tenants","invoices","receipts","billWiseDetails",
        ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests"] : []),
        "notices","gallery","preventiveMaintenance",
        ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts"] : [])];
   const recentLimits={activityRequests:250,notices:150,gallery:30,preventiveMaintenance:250};
   const data = {};
+  keys=keys.filter(function(key){return rolePermission_(session,PERMISSION_MODULE_MAP_[key]||key,"Can_View",role);});
   keys.forEach(function(key) {
-    authorizeModuleRead_(session, key);
+    authorizeModuleRead_(session, key, Boolean(body&&body.viewAsResident));
     const sheetName = MODULE_SHEETS[key];
     const aliases = key === "invoices" ? ["Invoice_Register","Invoice Register"] : [sheetName];
     let sh = null;
@@ -741,7 +752,7 @@ function getDashboardData_(session) {
     if (!sh) { data[key] = []; return; }
     let rows;
     if(role==="Resident") {
-      rows=residentModuleRecords_(session,key,ss,sh);
+      rows=residentModuleRecords_(viewSession,key,ss,sh);
       if(recentLimits[key]) rows=rows.slice(-recentLimits[key]);
     } else {
       rows=recentLimits[key]?sheetObjectsTail_(sh,recentLimits[key]):sheetObjects_(sh);
@@ -757,59 +768,107 @@ function getDashboardData_(session) {
 function getDashboardSummary_(session) {
   const ss = SpreadsheetApp.openById(session.databaseId);
   const read = name => {const aliases={"Invoice_Register":["Invoice_Register","Invoice Register"]};const list=aliases[name]||[name];for(let i=0;i<list.length;i++){const sh=ss.getSheetByName(list[i]);if(sh)return sheetObjects_(sh);}return [];};
-  const properties = session.role==="Resident"?residentModuleRecords_(session,"properties",ss,ss.getSheetByName("Property Master")):read("Property Master");
+  const properties = rolePermission_(session,"Properties & Residents","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"properties",ss,ss.getSheetByName("Property Master")):read("Property Master")):[];
   const invoiceSheet=ss.getSheetByName("Invoice_Register")||ss.getSheetByName("Invoice Register");
-  const invoices = session.role==="Resident"?residentModuleRecords_(session,"invoices",ss,invoiceSheet):read("Invoice_Register");
+  const invoices = rolePermission_(session,"Maintenance & Invoices","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"invoices",ss,invoiceSheet):read("Invoice_Register")):[];
   const receiptSheet=ss.getSheetByName("Fund Inflow Register"),requestSheet=ss.getSheetByName("Activity Request Register");
-  const receipts = session.role==="Resident"?residentModuleRecords_(session,"receipts",ss,receiptSheet):read("Fund Inflow Register");
-  const requests = session.role==="Resident"?residentModuleRecords_(session,"activityRequests",ss,requestSheet):read("Activity Request Register");
+  const receipts = rolePermission_(session,"Payments","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"receipts",ss,receiptSheet):read("Fund Inflow Register")):[];
+  const requests = rolePermission_(session,"Activity Requests","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"activityRequests",ss,requestSheet):read("Activity Request Register")):[];
   const paid = receipts.filter(r => String(r.Receipt_Status || r.Status || "").toLowerCase() === "confirmed");
   const outstanding = invoices.reduce((sum,r) => sum + Math.max(0,Number(r.Outstanding_Amount || 0)),0);
   return json_({status:"success",society:societyPublic_(session),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").toLowerCase()==="occupied").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:outstanding,pendingRequests:requests.filter(r=>String(r.Request_Status||"").toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}});
 }
 
-function authorizeModuleRead_(session,key) {
-  const roleMap={
-    properties:["Admin","Committee","Accountant","Resident"],
-    owners:["Admin","Committee","Accountant","Resident"],
-    ownershipHistory:["Admin","Committee","Accountant","Resident"],
-    tenants:["Admin","Committee","Accountant","Resident"],
-    rates:["Admin","Committee","Accountant"],
-    invoices:["Admin","Committee","Accountant","Resident"],
-    receipts:["Admin","Committee","Accountant","Resident"],
-    billWiseDetails:["Admin","Committee","Accountant","Resident"],
-    expenses:["Admin","Accountant"],
-    expenseCategories:["Admin","Accountant"],
-    bankAccounts:["Admin","Accountant"],
-    activityRequests:["Admin","Committee","Accountant","Resident"],
-    notices:["Admin","Committee","Accountant","Resident"],
-    gallery:["Admin","Committee","Accountant","Resident"],
-    preventiveMaintenance:["Admin","Committee","Accountant"],
-    ratePropertyMapping:["Admin","Accountant"],
-    propertyUtilityDetails:["Admin","Committee","Accountant","Resident"],
-    financialYears:["Admin","Accountant"],
-    accountHeads:["Admin","Accountant"],
-    auditLogs:["Admin","Accountant"]
-  };
-  if(!roleMap[key]||roleMap[key].indexOf(session.role)<0)throw new Error("Permission denied.");
+const PERMISSION_MODULE_MAP_ = {
+  properties:"Properties & Residents", owners:"Owner Management", ownershipHistory:"Ownership History", tenants:"Tenant Management",
+  rates:"Maintenance & Invoices", invoices:"Maintenance & Invoices", receipts:"Payments", billWiseDetails:"Bill Wise Details",
+  expenses:"Expenses", expenseCategories:"Expenses", bankAccounts:"Bank Accounts", activityRequests:"Activity Requests",
+  notices:"Notices", gallery:"Gallery", preventiveMaintenance:"Preventive Maintenance", ratePropertyMapping:"Maintenance & Invoices",
+  propertyUtilityDetails:"Properties & Residents", financialYears:"Financial Year Management", accountHeads:"Account Heads",
+  auditLogs:"Audit Log", rolePermissions:"Role Permission Management"
+};
+const ROLE_PERMISSION_HEADERS_=["Permission_ID","Role","Module_Name","Can_View","Can_Create","Can_Edit","Can_Delete","Can_Approve","Remarks"];
+const ROLE_PERMISSION_MODULES_=["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Activity Requests","Notices","Gallery","Preventive Maintenance","Reports","Financial Year Management","Account Heads","Bank Accounts","User Management","Role Permission Management","Settings","Audit Log","Financial Transactions","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery","Resident Portal"];
+function ensureRolePermissionSheet_(ss){
+  let sh=ss.getSheetByName("Role_Permission");
+  if(!sh){sh=ss.insertSheet("Role_Permission");sh.getRange(1,1,1,ROLE_PERMISSION_HEADERS_.length).setValues([ROLE_PERMISSION_HEADERS_]);}
+  if(sh.getLastColumn()===0)sh.getRange(1,1,1,ROLE_PERMISSION_HEADERS_.length).setValues([ROLE_PERMISSION_HEADERS_]);
+  const headers=headerMap_(sh);
+  ROLE_PERMISSION_HEADERS_.forEach(h=>{if(headers.indexOf(h)<0){sh.getRange(1,sh.getLastColumn()+1).setValue(h);}});
+  if(sh.getLastRow()<=1)seedRolePermissionDefaults_(sh);
+  return sh;
 }
+function seedRolePermissionDefaults_(sh){
+  const rows=[];let n=1;
+  const defaultMap={
+    Admin:ROLE_PERMISSION_MODULES_,
+    Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Activity Requests","Expenses","Reports","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
+    Accountant:["Dashboard","Properties & Residents","Owner Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
+    Resident:["Dashboard","Resident Portal","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Bill Wise Details","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"]
+  };
+  function perms(role,module){
+    if(role==="Admin")return {Can_View:true,Can_Create:true,Can_Edit:true,Can_Delete:module!=="Audit Log",Can_Approve:true};
+    if(role==="Committee")return {Can_View:true,Can_Create:module==="Activity Requests",Can_Edit:module==="Activity Requests",Can_Delete:false,Can_Approve:["Activity Requests","Expenses"].includes(module)};
+    if(role==="Accountant")return {Can_View:true,Can_Create:["Payments","Fund Inflow","Expenses","Financial Transactions"].includes(module),Can_Edit:["Payments","Fund Inflow","Bill Wise Details","Expenses"].includes(module),Can_Delete:false,Can_Approve:["Payments"].includes(module)};
+    return {Can_View:true,Can_Create:["Pay Now","Activity Requests"].includes(module),Can_Edit:module==="Activity Requests",Can_Delete:false,Can_Approve:false};
+  }
+  Object.keys(defaultMap).forEach(role=>defaultMap[role].forEach(module=>{const a=perms(role,module);rows.push(["RP"+String(n++).padStart(5,"0"),role,module,a.Can_View,a.Can_Create,a.Can_Edit,a.Can_Delete,a.Can_Approve,"V6.0.0 starter permissions; Admin may customize per society"]);}));
+  sh.getRange(2,1,rows.length,ROLE_PERMISSION_HEADERS_.length).setValues(rows);
+}
+
+function getMyPermissions_(session){
+  const rows=rolePermissionRows_(session),roles=session.role==="Admin"?["Admin"]:session.role==="Resident"?["Resident"]:[session.role,"Resident"];
+  const data=rows.filter(r=>roles.includes(String(r.Role||"")));
+  return json_({status:"success",data,role:String(session.role||"")});
+}
+function rolePermissionRows_(session){
+  const cache=CacheService.getScriptCache(),key="ROLE_PERMISSIONS_"+sha256_(String(session.societyCode||""));
+  const cached=cache.get(key);if(cached){try{return JSON.parse(cached);}catch(e){cache.remove(key);}}
+  const ss=SpreadsheetApp.openById(session.databaseId),sh=ensureRolePermissionSheet_(ss),rows=sheetObjects_(sh);
+  const json=JSON.stringify(rows);if(json.length<90000)cache.put(key,json,30);return rows;
+}
+function clearRolePermissionCache_(societyCode){CacheService.getScriptCache().remove("ROLE_PERMISSIONS_"+sha256_(String(societyCode||"")));}
+function rolePermission_(session,moduleName,action,effectiveRole){
+  const role=effectiveRole||session.role,rows=rolePermissionRows_(session),row=rows.find(r=>String(r.Role||"").trim().toLowerCase()===String(role).trim().toLowerCase()&&String(r.Module_Name||"").trim().toLowerCase()===String(moduleName||"").trim().toLowerCase());
+  return !!row && (row[action]===true||String(row[action]||"").trim().toLowerCase()==="true"||String(row[action]||"").trim()==="1");
+}
+function requirePermission_(session,moduleName,action,effectiveRole){
+  if(!rolePermission_(session,moduleName,action,effectiveRole))throw new Error("Permission denied by Role_Permission configuration.");
+}
+function residentViewSession_(session,viewAsResident){
+  if(!viewAsResident)return session;
+  if(!["Committee","Accountant"].includes(session.role))throw new Error("Resident preview is available only to Committee and Accountant accounts.");
+  if(!String(session.propertyId||"")||!String(session.ownershipId||""))throw new Error("Resident View requires both PropertyID and Ownership_ID linked to your user account.");
+  const current=sheetObjects_(societySheet_(session,"Ownership History").sh).find(x=>String(x.PropertyID)===String(session.propertyId)&&String(x.Ownership_ID)===String(session.ownershipId)&&String(x.Ownership_Status)==="Current");
+  if(!current)throw new Error("Your linked Ownership_ID is not current for the assigned property.");
+  return Object.assign({},session,{role:"Resident",ownerId:String(current.OwnerID||session.ownerId||"")});
+}
+function authorizeModuleRead_(session,key,viewAsResident){
+  if(key==="rolePermissions"){
+    requireRole_(session,["Admin"]);
+    requirePermission_(session,"Role Permission Management","Can_View");
+    return;
+  }
+  const moduleName=PERMISSION_MODULE_MAP_[key];if(!moduleName)throw new Error("Permission denied.");
+  const effectiveRole=viewAsResident?"Resident":session.role;
+  requirePermission_(session,moduleName,"Can_View",effectiveRole);
+}
+
 function residentModuleRecords_(session,key,ss,sheet){
-  const propertyId=String(session.propertyId||"");
+  const propertyId=String(session.propertyId||""),ownershipId=String(session.ownershipId||""),ownerId=String(session.ownerId||"");
+  if(!propertyId||!ownershipId)return [];
+  const currentRows=findRowsByHeaderValue_(ss.getSheetByName("Ownership History"),"PropertyID",propertyId).filter(r=>String(r.Ownership_Status||"")==="Current"&&String(r.Ownership_ID||"")===ownershipId&&(!ownerId||String(r.OwnerID||"")===ownerId));
+  if(!currentRows.length)return [];
+  const currentIds=currentRows.map(r=>String(r.Ownership_ID||"")),currentOwnerIds=currentRows.map(r=>String(r.OwnerID||""));
   if(["properties","propertyUtilityDetails","invoices","receipts","billWiseDetails","ownershipHistory","tenants","activityRequests"].includes(key)){
     let rows=findRowsByHeaderValue_(sheet,"PropertyID",propertyId);
-    if(key==="ownershipHistory")return rows.filter(r=>String(r.Ownership_Status||"")==="Current");
+    if(key==="ownershipHistory")return rows.filter(r=>String(r.Ownership_Status||"")==="Current"&&currentIds.includes(String(r.Ownership_ID||"")));
     if(key==="tenants")return rows.filter(r=>String(r.Status||"").toLowerCase()==="active");
     if(key==="activityRequests")return rows.filter(r=>String(r.Requested_By||"")===session.userId);
-    if(["invoices","receipts","billWiseDetails"].includes(key)){
-      const ownerships=findRowsByHeaderValue_(ss.getSheetByName("Ownership History"),"PropertyID",propertyId).filter(r=>String(r.Ownership_Status||"")==="Current").map(r=>String(r.Ownership_ID||""));
-      return rows.filter(r=>ownerships.includes(String(r.Ownership_ID||"")));
-    }
+    if(["invoices","receipts","billWiseDetails"].includes(key))return rows.filter(r=>currentIds.includes(String(r.Ownership_ID||"")));
     return rows;
   }
-  if(key==="owners"){
-    const current=findRowsByHeaderValue_(ss.getSheetByName("Ownership History"),"PropertyID",propertyId).filter(r=>String(r.Ownership_Status||"")==="Current");
-    const ids=current.map(r=>String(r.OwnerID||""));return ids.flatMap(id=>findRowsByHeaderValue_(sheet,"OwnerID",id));
-  }
+  if(key==="owners")return currentOwnerIds.flatMap(id=>findRowsByHeaderValue_(sheet,"OwnerID",id));
   if(key==="notices")return scopeRecords_(session,key,sheetObjects_(sheet),ss);
   if(key==="gallery")return scopeRecords_(session,key,sheetObjects_(sheet),ss);
   return [];
@@ -818,7 +877,7 @@ function scopeRecords_(session,key,records,ss) {
   if (session.role !== "Resident") return records;
   const propertyId = String(session.propertyId || "");
   const ownershipRows = sheetObjects_(ss.getSheetByName("Ownership History"));
-  const currentOwnerships = ownershipRows.filter(r=>String(r.PropertyID||"")===propertyId&&String(r.Ownership_Status||"")==="Current");
+  const currentOwnerships = ownershipRows.filter(r=>String(r.PropertyID||"")===propertyId&&String(r.Ownership_Status||"")==="Current"&&String(r.Ownership_ID||"")===String(session.ownershipId||"")&&(!session.ownerId||String(r.OwnerID||"")===String(session.ownerId)));
   const currentOwnershipIds = currentOwnerships.map(r=>String(r.Ownership_ID||""));
   if (["properties","propertyUtilityDetails"].includes(key)) return records.filter(r=>String(r.PropertyID||"")===propertyId);
   if (["invoices","receipts","billWiseDetails"].includes(key)) return records.filter(r=>String(r.PropertyID||"")===propertyId&&currentOwnershipIds.includes(String(r.Ownership_ID||"")));
@@ -1187,7 +1246,7 @@ const CRUD_MODULES = {
   rates:{sheet:"Rate Master",id:"RateID",roles:["Admin"],resident:false},
   expenseCategories:{sheet:"Expense Category Master",id:"Category_ID",roles:["Admin"],resident:false},
   bankAccounts:{sheet:"Bank Account Master",id:"BankAccount_ID",roles:["Admin","Accountant"],resident:false},
-  activityRequests:{sheet:"Activity Request Register",id:"Request_ID",roles:["Admin","Committee","Resident"],resident:true},
+  activityRequests:{sheet:"Activity Request Register",id:"Request_ID",roles:["Admin","Committee","Accountant","Resident"],resident:true},
   notices:{sheet:"Notice Master",id:"Notice_ID",roles:["Admin","Committee"],resident:false},
   gallery:{sheet:"Gallery Master",id:"Gallery_ID",roles:["Admin","Committee"],resident:false},
   preventiveMaintenance:{sheet:"Preventive Maintenance Master",id:"Maintenance_ID",roles:["Admin","Committee"],resident:false},
@@ -1195,9 +1254,10 @@ const CRUD_MODULES = {
   propertyUtilityDetails:{sheet:"Property Utility Details",id:"Utility_ID",roles:["Admin","Accountant"],resident:false},
   financialYears:{sheet:"Financial Year Master",id:"FY_ID",roles:["Admin","Accountant"],resident:false},
   tenants:{sheet:"Tenant Master",id:"Tenant_ID",roles:["Admin","Committee"],resident:false},
-  accountHeads:{sheet:"Account Head Master",id:"Account_ID",roles:["Admin","Accountant"],resident:false}
+  accountHeads:{sheet:"Account Head Master",id:"Account_ID",roles:["Admin","Accountant"],resident:false},
+  rolePermissions:{sheet:"Role_Permission",id:"Permission_ID",roles:["Admin"],resident:false}
 };
-const FINANCE_ROLES={invoice:["Admin"],paymentSubmit:["Admin","Accountant","Resident"],paymentVerify:["Admin","Accountant"],expenseCreate:["Admin","Accountant"],expenseApprove:["Admin"],expensePay:["Admin","Accountant"]};
+const FINANCE_ROLES={invoice:["Admin"],paymentSubmit:["Admin","Accountant","Resident"],paymentVerify:["Admin","Accountant"],expenseCreate:["Admin","Accountant"],expenseApprove:["Admin","Committee"],expensePay:["Admin","Accountant"]};
 
 function societySheet_(session,name){
   const ss=SpreadsheetApp.openById(session.databaseId);
@@ -1234,7 +1294,13 @@ function assertOwnership_(session,propertyId,ownershipId,ownerId){
 }
 function appendByHeaders_(sh,obj){const h=headerMap_(sh);const row=h.map(k=>Object.prototype.hasOwnProperty.call(obj,k)?obj[k]:"");sh.getRange(sh.getLastRow()+1,1,1,h.length).setValues([row]);}
 function updateByHeaders_(sh,row,obj,immutable){const h=headerMap_(sh),old=sh.getRange(row,1,1,h.length).getValues()[0];const blocked=(immutable||[]);const next=old.slice();h.forEach((key,i)=>{if(Object.prototype.hasOwnProperty.call(obj,key)&&blocked.indexOf(key)<0)next[i]=obj[key];});sh.getRange(row,1,1,h.length).setValues([next]);}
-function requireModuleWrite_(session,mod,action){const cfg=CRUD_MODULES[mod];if(!cfg)throw new Error("Unsupported module.");if(cfg.roles.indexOf(session.role)<0)throw new Error("Permission denied.");if(mod==="bankAccounts"&&session.role==="Committee")throw new Error("Bank account details are restricted.");return cfg;}
+function actionMapForModuleWrite_(action){return ({create:"Can_Create",update:"Can_Edit",cancel:"Can_Delete"})[action]||"Can_View";}
+function requireModuleWrite_(session,mod,action,body){const cfg=CRUD_MODULES[mod];if(!cfg)throw new Error("Unsupported module.");if(mod==="rolePermissions"){requireRole_(session,["Admin"]);requirePermission_(session,"Role Permission Management",actionMapForModuleWrite_(action));return cfg;}if(mod==="activityRequests"&&body&&body.viewAsResident){if(!["Committee","Accountant"].includes(session.role)||!session.propertyId||!session.ownershipId)throw new Error("Resident preview requires a linked PropertyID and Ownership_ID.");requirePermission_(session,"Activity Requests",action==="create"?"Can_Create":"Can_Edit","Resident");return cfg;}if(cfg.roles.indexOf(session.role)<0)throw new Error("Permission denied.");if(mod==="bankAccounts"&&session.role==="Committee")throw new Error("Bank account details are restricted.");const permissionModule=PERMISSION_MODULE_MAP_[mod]||mod;const actionMap={create:"Can_Create",update:mod==="activityRequests"&&body&&Object.prototype.hasOwnProperty.call(body.record||{},"Request_Status")?"Can_Approve":"Can_Edit",cancel:"Can_Delete"};requirePermission_(session,permissionModule,actionMap[action]||"Can_View");return cfg;}
+function deleteRolePermission_(session,body){
+  requireRole_(session,["Admin"]);requirePermission_(session,"Role Permission Management","Can_Delete");const permissionId=cleanText_(body.permissionId,100);if(!permissionId)throw new Error("Permission_ID is required.");
+  const ss=SpreadsheetApp.openById(session.databaseId),sh=ensureRolePermissionSheet_(ss),found=rowById_(sh,"Permission_ID",permissionId);if(!found)throw new Error("Permission record not found.");
+  const old=objectFromRow_(found.headers,found.values);if(String(old.Role)==="Admin"&&String(old.Module_Name)==="Role Permission Management")throw new Error("The Admin Role Permission Management record is protected from deletion.");const lock=LockService.getScriptLock();lock.waitLock(10000);try{sh.deleteRow(found.row);clearRolePermissionCache_(session.societyCode);auditEvent_(session,"DELETE","Role_Permission",permissionId,"Permission row deleted",old,"");return json_({status:"success",data:{permissionId}});}finally{lock.releaseLock();}
+}
 function safeRecord_(input,headers){const out={};const forbidden=["Society_Code","Password_Salt","Password_Hash","Created_By","Created_At","Approved_By","Approved_At","Cancelled_By","Cancelled_At","Current_Balance","Owner_Status","Paid_Amount","Outstanding_Amount","Receipt_Number","Voucher_No","Invoice_Number"];Object.keys(input||{}).forEach(k=>{if(headers.indexOf(k)>=0&&forbidden.indexOf(k)<0&&k.indexOf("__")!==0)out[k]=input[k];});return out;}
 
 
@@ -1284,11 +1350,19 @@ function validateMasterRecord_(session,mod,record,recordId){
   else if(mod==="activityRequests")nonblank("Subject","Request subject");
 }
 
+function validateRolePermissionRecord_(record,permissionSheet,skipId){
+  if(!["Admin","Committee","Accountant","Resident"].includes(String(record.Role||"")))throw new Error("Role is invalid.");
+  if(!ROLE_PERMISSION_MODULES_.includes(String(record.Module_Name||"")))throw new Error("Module_Name is invalid.");
+  ["Can_View","Can_Create","Can_Edit","Can_Delete","Can_Approve"].forEach(k=>{record[k]=record[k]===true||String(record[k]||"").toLowerCase()==="true"||String(record[k])==="1";});
+  if(!String(record.Permission_ID||""))throw new Error("Permission_ID is required.");
+  if(String(record.Role)==="Admin"&&String(record.Module_Name)==="Role Permission Management"&&(!record.Can_View||!record.Can_Create||!record.Can_Edit))throw new Error("Admin Role Permission Management View/Create/Edit permissions are protected to prevent lockout.");
+  if(permissionSheet){const dup=sheetObjects_(permissionSheet).some(r=>String(r.Permission_ID)!==String(skipId||"")&&String(r.Role)===String(record.Role)&&String(r.Module_Name)===String(record.Module_Name));if(dup)throw new Error("A permission record already exists for this Role and Module.");}
+}
 function createRecord_(session,body){
-  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"create"),id=requireOperationId_(body);
+  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"create",body),id=requireOperationId_(body);if(mod==="activityRequests"&&body.viewAsResident){if(!["Committee","Accountant"].includes(session.role)||!session.propertyId||!session.ownershipId)throw new Error("Resident preview request requires your linked PropertyID and Ownership_ID.");requirePermission_(session,"Activity Requests","Can_Create","Resident");}
   const {ss,sh}=societySheet_(session,cfg.sheet);
   if(mod==="owners")ensureHeaders_(sh,["Owner_Status"]);
-  const headers=headerMap_(sh),data=safeRecord_(body.record,headers);
+  const headers=headerMap_(sh),data=safeRecord_(body.record,headers);if(mod==="rolePermissions"){validateRolePermissionRecord_(data,sh);}
   if(mod==="ownershipHistory"){data.Ownership_Status="Current";delete data.Ownership_End_Date;}
   const recordId=cleanText_(body.record&&body.record[cfg.id]||((cfg.id||"REC").replace(/ID$/i,"")+"-"+randomHex_(8)),100);
   if(!data[cfg.id])data[cfg.id]=recordId;
@@ -1298,8 +1372,9 @@ function createRecord_(session,body){
   if(mod==="owners")data.Owner_Status=data.Owner_Status||"Active";
   if(mod==="bankAccounts")data.Current_Balance=Number(data.Opening_Balance||0);
   if(cfg.resident){
+    if(body.viewAsResident&&mod==="activityRequests")data.PropertyID=session.propertyId;
     assertPropertyAccess_(session,data.PropertyID);
-    if(session.role==="Resident"){
+    if(session.role==="Resident"||body.viewAsResident&&mod==="activityRequests"){
       const ownRows=sheetObjects_(societySheet_(session,"Ownership History").sh);
       const own=ownRows.find(x=>String(x.PropertyID)===String(data.PropertyID)&&String(x.Ownership_Status)==="Current");
       if(!own)throw new Error("No current ownership is linked to this property.");
@@ -1326,21 +1401,22 @@ function createRecord_(session,body){
     writeOperation_(ledger,id,"createRecord",recordId,"DONE",result);
   }finally{lock.releaseLock();}
   // Audit is append-only but is not part of the critical row-write section.
+  if(mod==="rolePermissions")clearRolePermissionCache_(session.societyCode);
   auditEvent_(session,"CREATE",cfg.sheet,recordId,"Created through server API","",data);
   return json_({status:"success",data:result});
 }
 function updateRecord_(session,body){
-  const cfg=requireModuleWrite_(session,String(body.module||""),"update");const id=requireOperationId_(body);const lock=LockService.getScriptLock();lock.waitLock(15000);
+  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"update",body);if(mod==="activityRequests"&&body.viewAsResident){if(!["Committee","Accountant"].includes(session.role)||!session.propertyId)throw new Error("Resident preview request update requires your linked property.");requirePermission_(session,"Activity Requests","Can_Edit","Resident");}const id=requireOperationId_(body);const lock=LockService.getScriptLock();lock.waitLock(15000);
   try{const {ss,sh}=societySheet_(session,cfg.sheet);const ledger=operationLedger_(ss);const prior=findOperation_(ledger,id);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});
     if(prior)throw new Error("A previous update is incomplete; reconcile it before retrying.");
-    const recordId=cleanText_(body.recordId,100),found=rowById_(sh,cfg.id,recordId);if(!found)throw new Error("Record not found.");const current=objectFromRow_(found.headers,found.values);if(cfg.resident){assertPropertyAccess_(session,current.PropertyID);if(session.role==="Resident"&&String(current.Requested_By)!==String(session.userId))throw new Error("You may update only your own activity request.");}
-    const changes=safeRecord_(body.record,found.headers);if(mod==="bankAccounts")delete changes.Opening_Balance;if(mod==="ownershipHistory"&&(Object.prototype.hasOwnProperty.call(body.record||{},"Ownership_Status")||Object.prototype.hasOwnProperty.call(body.record||{},"Ownership_End_Date")))throw new Error("Use End Ownership to close an ownership period; ownership history status/date cannot be edited directly.");validateMasterRecord_(session,mod,Object.assign({},current,changes),recordId);if(cfg.resident&&session.role==="Resident"){const allowed=["Subject","Description","Priority","Attachment"];Object.keys(changes).forEach(k=>{if(allowed.indexOf(k)<0)delete changes[k];});}
-    changes.Updated_At=new Date();writeOperation_(ledger,id,"updateRecord",recordId,"STARTED",{});updateByHeaders_(sh,found.row,changes,[cfg.id,"Created_By","Created_At"]);auditEvent_(session,"UPDATE",cfg.sheet,recordId,"Record updated through server API",current,changes);
+    const recordId=cleanText_(body.recordId,100),found=rowById_(sh,cfg.id,recordId);if(!found)throw new Error("Record not found.");const current=objectFromRow_(found.headers,found.values);if(cfg.resident){if(body.viewAsResident)assertPropertyAccess_(Object.assign({},session,{role:"Resident"}),current.PropertyID);else assertPropertyAccess_(session,current.PropertyID);if((session.role==="Resident"||body.viewAsResident)&&String(current.Requested_By)!==String(session.userId))throw new Error("You may update only your own activity request.");}
+    const changes=safeRecord_(body.record,found.headers);if(mod==="activityRequests"&&Object.prototype.hasOwnProperty.call(changes,"Request_Status")&&!body.viewAsResident)requirePermission_(session,"Activity Requests","Can_Approve");if(mod==="rolePermissions"){delete changes.Role;delete changes.Module_Name;validateRolePermissionRecord_(Object.assign({},current,changes),sh,recordId);if(String(current.Role)==="Admin"&&String(current.Module_Name)==="Role Permission Management"&&changes.Can_View===false)throw new Error("Admin permission-management access cannot be disabled here.");}if(mod==="bankAccounts")delete changes.Opening_Balance;if(mod==="ownershipHistory"&&(Object.prototype.hasOwnProperty.call(body.record||{},"Ownership_Status")||Object.prototype.hasOwnProperty.call(body.record||{},"Ownership_End_Date")))throw new Error("Use End Ownership to close an ownership period; ownership history status/date cannot be edited directly.");validateMasterRecord_(session,mod,Object.assign({},current,changes),recordId);if(cfg.resident&&(session.role==="Resident"||body.viewAsResident)){const allowed=["Subject","Description","Priority","Attachment"];Object.keys(changes).forEach(k=>{if(allowed.indexOf(k)<0)delete changes[k];});}
+    changes.Updated_At=new Date();writeOperation_(ledger,id,"updateRecord",recordId,"STARTED",{});updateByHeaders_(sh,found.row,changes,[cfg.id,"Created_By","Created_At"]);auditEvent_(session,"UPDATE",cfg.sheet,recordId,"Record updated through server API",current,changes);if(mod==="rolePermissions")clearRolePermissionCache_(session.societyCode);
     const result={recordId};writeOperation_(ledger,id,"updateRecord",recordId,"DONE",result);return json_({status:"success",data:result});
   }finally{lock.releaseLock();}
 }
 function cancelRecord_(session,body){
-  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"cancel");if(session.role==="Resident")throw new Error("Permission denied.");const id=requireOperationId_(body),recordId=cleanText_(body.recordId,100),reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");
+  const mod=String(body.module||""),cfg=requireModuleWrite_(session,mod,"cancel",body);if(session.role==="Resident")throw new Error("Permission denied.");const id=requireOperationId_(body),recordId=cleanText_(body.recordId,100),reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");
   const lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,cfg.sheet),ledger=operationLedger_(ss),prior=findOperation_(ledger,id);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous cancellation is incomplete; reconcile it before retrying.");const found=rowById_(sh,cfg.id,recordId);if(!found)throw new Error("Record not found.");if(mod==="owners"){ensureHeaders_(sh,["Owner_Status"]);found.headers=headerMap_(sh);}const h=found.headers;
     const cancelMap={properties:["Property_Status","Inactive"],owners:["Owner_Status","Inactive"],ownershipHistory:["Ownership_Status","Previous"],rates:["Status","Inactive"],bankAccounts:["Status","Inactive"],expenseCategories:["Status","Inactive"],notices:["Notice_Status","Archived"],gallery:["Status","Archived"],tenants:["Status","Vacated"],activityRequests:["Request_Status","Cancelled"]};const target=cancelMap[mod];const statusKey=target&&h.indexOf(target[0])>=0?target[0]:["Invoice_Status","Expense_Status","Request_Status","Notice_Status","Status"].find(k=>h.indexOf(k)>=0);if(!statusKey)throw new Error("This record type does not support soft cancellation.");
     const current=objectFromRow_(found.headers,found.values);
@@ -1350,7 +1426,7 @@ function cancelRecord_(session,body){
     if(mod==="ownershipHistory")patch.Ownership_End_Date=new Date();if(h.includes("Cancellation_Reason"))patch.Cancellation_Reason=reason;if(h.includes("Cancelled_By"))patch.Cancelled_By=session.userId;if(h.includes("Cancelled_At"))patch.Cancelled_At=new Date();updateByHeaders_(sh,found.row,patch,[cfg.id,"Created_By","Created_At"]);auditEvent_(session,"CANCEL",cfg.sheet,recordId,reason,objectFromRow_(found.headers,found.values),patch);writeOperation_(ledger,id,"cancelRecord",recordId,"DONE",{recordId});return json_({status:"success",data:{recordId}});}finally{lock.releaseLock();}
 }
 function generateInvoice_(session,body){
-  requireRole_(session,FINANCE_ROLES.invoice);const opId=requireOperationId_(body),propertyId=cleanText_(body.propertyId,80),rateId=cleanText_(body.rateId,80);if(!propertyId||!rateId)throw new Error("Property and Rate are required.");
+  requireRole_(session,FINANCE_ROLES.invoice);requirePermission_(session,"Maintenance & Invoices","Can_Create");const opId=requireOperationId_(body),propertyId=cleanText_(body.propertyId,80),rateId=cleanText_(body.rateId,80);if(!propertyId||!rateId)throw new Error("Property and Rate are required.");
   const lock=LockService.getScriptLock();lock.waitLock(20000);try{const {ss,sh}=societySheet_(session,"Invoice_Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,opId);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous invoice generation is incomplete; reconcile it before retrying.");
     const props=sheetObjects_(societySheet_(session,"Property Master").sh),prop=props.find(x=>String(x.PropertyID)===propertyId&&String(x.Property_Status||"Active")==="Active");if(!prop)throw new Error("Active property not found.");
     const from=String(body.billPeriodFrom||""),to=String(body.billPeriodTo||""),date=from;if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||!/^\d{4}-\d{2}-\d{2}$/.test(String(body.dueDate||""))||String(body.dueDate)<from)throw new Error("Invalid billing period or due date.");
@@ -1387,18 +1463,21 @@ function cancelInvoice_(session,body){
 }
 
 function submitPayment_(session,body){
-  requireRole_(session,FINANCE_ROLES.paymentSubmit);
-  const opId=requireOperationId_(body),amount=Number(body.amount);if(!isFinite(amount)||amount<=0||amount>100000000)throw new Error("Payment amount must be greater than zero and within the permitted limit.");if(["UPI","NEFT","IMPS","Cheque","Cash","Card"].indexOf(String(body.mode))<0)throw new Error("Invalid payment mode.");const propertyId=cleanText_(body.propertyId,80);assertPropertyAccess_(session,propertyId);const own=assertOwnership_(session,propertyId,body.ownershipId,body.ownerId);
+  const residentPreview=Boolean(body.viewAsResident)&&["Committee","Accountant"].includes(session.role);
+  if(residentPreview){if(!session.propertyId||!session.ownershipId||String(body.propertyId||"")!==String(session.propertyId)||String(body.ownershipId||"")!==String(session.ownershipId))throw new Error("Resident preview payment is restricted to your linked property and ownership.");requirePermission_(session,"Pay Now","Can_Create","Resident");}
+  else if(session.role==="Resident")requirePermission_(session,"Pay Now","Can_Create","Resident");
+  else {requireRole_(session,FINANCE_ROLES.paymentSubmit);requirePermission_(session,"Payments","Can_Create");}
+  const opId=requireOperationId_(body),amount=Number(body.amount);if(!isFinite(amount)||amount<=0||amount>100000000)throw new Error("Payment amount must be greater than zero and within the permitted limit.");if(["UPI","NEFT","IMPS","Cheque","Cash","Card"].indexOf(String(body.mode))<0)throw new Error("Invalid payment mode.");const propertyId=cleanText_(body.propertyId,80);assertPropertyAccess_(session,propertyId);const ownershipSession=residentPreview?Object.assign({},session,{role:"Resident"}):session;const own=assertOwnership_(ownershipSession,propertyId,body.ownershipId,body.ownerId);
   const lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Fund Inflow Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,opId);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous payment submission is incomplete; reconcile it before retrying.");
     const ref=cleanText_(body.reference,120);if(String(body.mode||"")!=="Cash"&&!ref)throw new Error("Payment transaction reference is required for non-cash payments.");if(ref){const existing=sheetObjects_(sh).find(r=>String(r.Received_Reference||"")===ref&&String(r.PropertyID)===propertyId&&String(r.Receipt_Status||"")!=="Cancelled");if(existing)throw new Error("This payment reference has already been submitted.");}
     const requestedInvoices=Array.isArray(body.invoiceIds)?body.invoiceIds:[];if(requestedInvoices.length){const invoiceRows=sheetObjects_(societySheet_(session,"Invoice_Register").sh);requestedInvoices.forEach(iid=>{const inv=invoiceRows.find(x=>String(x.InvoiceID)===String(iid));if(!inv||String(inv.PropertyID)!==propertyId||String(inv.Ownership_ID)!==String(own.Ownership_ID)||String(inv.Invoice_Status)==="Cancelled")throw new Error("One or more selected invoices are invalid for this ownership period.");});}
     const bankId=cleanText_(body.bankAccount,80);if(bankId){const bankRows=sheetObjects_(societySheet_(session,"Bank Account Master").sh);if(!bankRows.some(b=>String(b.BankAccount_ID)===bankId&&String(b.Status||"Active")==="Active"))throw new Error("Selected bank account is not active.");}
     const prop=sheetObjects_(societySheet_(session,"Property Master").sh).find(x=>String(x.PropertyID)===propertyId);const owner=sheetObjects_(societySheet_(session,"Owner Master").sh).find(x=>String(x.OwnerID)===String(own.OwnerID));const receiptNo="";const transactionId="TXN-"+randomHex_(8).toUpperCase();
-    const record={Transaction_ID:transactionId,Receipt_Number:receiptNo,Date_Of_Received:new Date(),PropertyID:propertyId,Ownership_ID:own.Ownership_ID,OwnerID:own.OwnerID,Flat_No:prop?prop.Flat_No:"",Owner_Name:owner?owner.Owner_Name:"",Received_Amount:amount,Received_Mode:cleanText_(body.mode,30),Received_Reference:ref,Bank_Account:session.role==="Resident"?"":cleanText_(body.bankAccount,80),Unallocated_Amount:amount,Remarks:cleanText_(body.remarks,300),File_Reference:cleanText_(body.fileReference,300),Created_By:session.userId,Created_At:new Date(),Receipt_Status:"Pending Verification"};writeOperation_(ledger,opId,"submitPayment",transactionId,"STARTED",{});appendByHeaders_(sh,record);writeOperation_(ledger,opId,"submitPayment",transactionId,"DONE",{transactionId,receiptNo,amount});auditEvent_(session,"CREATE","Fund Inflow Register",transactionId,"Payment submitted; Amount="+amount,"",record);return json_({status:"success",data:{transactionId,receiptNo,amount,status:"Pending Verification",receipt:record}});
+    const record={Transaction_ID:transactionId,Receipt_Number:receiptNo,Date_Of_Received:new Date(),PropertyID:propertyId,Ownership_ID:own.Ownership_ID,OwnerID:own.OwnerID,Flat_No:prop?prop.Flat_No:"",Owner_Name:owner?owner.Owner_Name:"",Received_Amount:amount,Received_Mode:cleanText_(body.mode,30),Received_Reference:ref,Bank_Account:session.role==="Resident"||residentPreview?"":cleanText_(body.bankAccount,80),Unallocated_Amount:amount,Remarks:cleanText_(body.remarks,300),File_Reference:cleanText_(body.fileReference,300),Created_By:session.userId,Created_At:new Date(),Receipt_Status:"Pending Verification"};writeOperation_(ledger,opId,"submitPayment",transactionId,"STARTED",{});appendByHeaders_(sh,record);writeOperation_(ledger,opId,"submitPayment",transactionId,"DONE",{transactionId,receiptNo,amount});auditEvent_(session,"CREATE","Fund Inflow Register",transactionId,"Payment submitted; Amount="+amount,"",record);return json_({status:"success",data:{transactionId,receiptNo,amount,status:"Pending Verification",receipt:record}});
   }finally{lock.releaseLock();}
 }
-function confirmPayment_(session,body){return settlePayment_(session,body,false);}
-function rejectPayment_(session,body){requireRole_(session,FINANCE_ROLES.paymentVerify);const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Rejection reason is required.");const lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Fund Inflow Register"),ledger=operationLedger_(ss),op=requireOperationId_(body),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous payment rejection is incomplete; reconcile it before retrying.");const priorTxn=findOperationByActionRecord_(ledger,"rejectPayment",body.transactionId);if(priorTxn){if(priorTxn.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous rejection for this payment is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Transaction_ID",body.transactionId);if(!f)throw new Error("Payment not found.");const rec=objectFromRow_(f.headers,f.values);if(rec.Receipt_Status!=="Pending Verification")throw new Error("Only pending payments can be rejected.");writeOperation_(ledger,op,"rejectPayment",body.transactionId,"STARTED",{});updateByHeaders_(sh,f.row,{Receipt_Status:"Rejected",Remarks:String(rec.Remarks||"")+" | Rejected: "+reason},["Transaction_ID","Receipt_Number"]);writeOperation_(ledger,op,"rejectPayment",body.transactionId,"DONE",{transactionId:body.transactionId});auditEvent_(session,"CANCEL","Fund Inflow Register",body.transactionId,reason,rec,{Receipt_Status:"Rejected"});return json_({status:"success"});}finally{lock.releaseLock();}}
+function confirmPayment_(session,body){requirePermission_(session,"Payments","Can_Approve");return settlePayment_(session,body,false);}
+function rejectPayment_(session,body){requireRole_(session,FINANCE_ROLES.paymentVerify);requirePermission_(session,"Payments","Can_Approve");const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Rejection reason is required.");const lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Fund Inflow Register"),ledger=operationLedger_(ss),op=requireOperationId_(body),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous payment rejection is incomplete; reconcile it before retrying.");const priorTxn=findOperationByActionRecord_(ledger,"rejectPayment",body.transactionId);if(priorTxn){if(priorTxn.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous rejection for this payment is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Transaction_ID",body.transactionId);if(!f)throw new Error("Payment not found.");const rec=objectFromRow_(f.headers,f.values);if(rec.Receipt_Status!=="Pending Verification")throw new Error("Only pending payments can be rejected.");writeOperation_(ledger,op,"rejectPayment",body.transactionId,"STARTED",{});updateByHeaders_(sh,f.row,{Receipt_Status:"Rejected",Remarks:String(rec.Remarks||"")+" | Rejected: "+reason},["Transaction_ID","Receipt_Number"]);writeOperation_(ledger,op,"rejectPayment",body.transactionId,"DONE",{transactionId:body.transactionId});auditEvent_(session,"CANCEL","Fund Inflow Register",body.transactionId,reason,rec,{Receipt_Status:"Rejected"});return json_({status:"success"});}finally{lock.releaseLock();}}
 function settlePayment_(session,body,unused){requireRole_(session,FINANCE_ROLES.paymentVerify);const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(20000);try{const {ss,sh}=societySheet_(session,"Fund Inflow Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous payment confirmation is incomplete; reconcile it before retrying.");const priorTxn=findOperationByActionRecord_(ledger,"confirmPayment",body.transactionId);if(priorTxn){if(priorTxn.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(priorTxn.result)});throw new Error("A previous confirmation for this payment is incomplete; reconcile it before retrying.");}const found=rowById_(sh,"Transaction_ID",body.transactionId);if(!found)throw new Error("Payment not found.");const receipt=objectFromRow_(found.headers,found.values);if(receipt.Receipt_Status!=="Pending Verification")throw new Error("Only pending payments can be confirmed.");const allocations=Array.isArray(body.allocations)?body.allocations:[];let remaining=Number(receipt.Received_Amount),totalAllocated=0;const invSh=societySheet_(session,"Invoice_Register").sh,billSh=societySheet_(session,"Bill Wise Details").sh;const invoiceRows=sheetObjects_(invSh);const toWrite=[],seenInvoiceIds={};
     allocations.forEach(a=>{if(seenInvoiceIds[String(a.invoiceId)])throw new Error("Duplicate invoice allocation was supplied.");seenInvoiceIds[String(a.invoiceId)]=true;const inv=invoiceRows.find(x=>String(x.InvoiceID)===String(a.invoiceId));if(!inv)throw new Error("Invoice not found: "+a.invoiceId);if(String(inv.PropertyID)!==String(receipt.PropertyID))throw new Error("Payment can only be allocated to invoices for the same property.");if(String(inv.Ownership_ID)!==String(receipt.Ownership_ID))throw new Error("Invoice ownership period does not match payment ownership.");const out=Math.max(0,Number(inv.Outstanding_Amount||0)),amt=Number(a.amount);if(!isFinite(amt)||amt<=0||amt>out||amt>remaining)throw new Error("Invalid allocation amount.");const after=out-amt;toWrite.push({invoice:inv,amount:amt,before:out,after});remaining-=amt;totalAllocated+=amt;});
     const bankSh=societySheet_(session,"Bank Account Master").sh;let bankId=String(receipt.Bank_Account||"");let bf=bankId?rowById_(bankSh,"BankAccount_ID",bankId):null;if(!bf){const activeBanks=sheetObjects_(bankSh).filter(b=>String(b.Status||"Active")==="Active");const defaultBank=activeBanks.find(b=>String(b.Is_Default||"").toLowerCase()==="true"||String(b.Is_Default||"")==="1")||activeBanks[0];if(defaultBank){bankId=String(defaultBank.BankAccount_ID);bf=rowById_(bankSh,"BankAccount_ID",bankId);}}if(!bf)throw new Error("No active bank account is configured; payment confirmation was not completed.");const receiptNo=nextReceiptNumber_(sh);
@@ -1412,11 +1491,11 @@ function settlePayment_(session,body,unused){requireRole_(session,FINANCE_ROLES.
     postJournalEntry_(ss,"Receipt",receipt.Transaction_ID,new Date(),journalEntries,session);
     const result={transactionId:receipt.Transaction_ID,receiptNo,bankAccount:bankId,allocated:totalAllocated,unallocated:remaining,allocationRows:writtenAllocations};writeOperation_(ledger,op,"confirmPayment",receipt.Transaction_ID,"DONE",result);auditEvent_(session,"ALLOCATE","Fund Inflow Register",receipt.Transaction_ID,"Allocated="+totalAllocated+", advance="+remaining,receipt,{Receipt_Status:"Confirmed",Receipt_Number:receiptNo,Unallocated_Amount:remaining,Bank_Account:bankId});return json_({status:"success",data:result});
   }finally{lock.releaseLock();}}
-function allocatePayment_(session,body){return settlePayment_(session,body,false);}
-function createExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseCreate);const op=requireOperationId_(body),r=body.record||{},amount=Number(r.Payment_Amount);if(!isFinite(amount)||amount<=0)throw new Error("Expense amount must be greater than zero.");if(!cleanText_(r.Expense_Category,100)||!cleanText_(r.Payee_Name,120)||!cleanText_(r.Particulars,300))throw new Error("Expense category, payee and particulars are required.");if(["UPI","NEFT","IMPS","Cheque","Cash","Card"].indexOf(String(r.Payment_Mode))<0)throw new Error("Invalid expense payment mode.");const lock=LockService.getScriptLock();lock.waitLock(15000);try{const bankSh=societySheet_(session,"Bank Account Master").sh;if(!sheetObjects_(bankSh).some(b=>String(b.BankAccount_ID)===String(r.Bank_Account)&&String(b.Status||"Active")==="Active"))throw new Error("Select an active society bank account.");const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous expense creation is incomplete; reconcile it before retrying.");const existingExpense=sheetObjects_(sh).find(x=>String(x.Payment_Reference||"")===String(r.Payment_Reference||"")&&String(x.Payee_Name||"").toLowerCase()===String(r.Payee_Name||"").toLowerCase()&&Number(x.Payment_Amount||0)===amount&&String(x.Expense_Status||"")!=="Cancelled"&&String(r.Payment_Reference||"")!=="N/A");if(existingExpense)throw new Error("An expense with the same payee, payment reference and amount already exists.");writeOperation_(ledger,op,"createExpense","","STARTED",{});const id="EXP-"+randomHex_(8).toUpperCase(),voucher="VOU-"+new Date().getFullYear()+"-"+String(Math.max(1,sh.getLastRow())).padStart(6,"0");const rec=Object.assign({},r,{Expense_ID:id,Voucher_No:voucher,Expense_Status:"Pending Approval",Created_By:session.userId,Created_At:new Date(),Approved_By:"",Approved_At:"",Cancelled_By:"",Cancelled_At:"",Cancellation_Reason:""});appendByHeaders_(sh,rec);writeOperation_(ledger,op,"createExpense",id,"DONE",{expenseId:id,voucherNo:voucher});auditEvent_(session,"CREATE","Expense Register",id,"Voucher="+voucher,"",rec);return json_({status:"success",data:{expenseId:id,voucherNo:voucher,expense:rec}});}finally{lock.releaseLock();}}
-function approveExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);return updateExpenseStatus_(session,body,"Approved");}
-function markExpensePaid_(session,body){requireRole_(session,FINANCE_ROLES.expensePay);return updateExpenseStatus_(session,body,"Paid");}
-function cancelExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorCancel=findOperationByActionRecord_(ledger,"cancelExpense",body.expenseId);if(priorCancel){if(priorCancel.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous cancellation for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(r.Expense_Status==="Paid")throw new Error("Paid expenses cannot be cancelled. Use a reversal entry.");writeOperation_(ledger,op,"cancelExpense",body.expenseId,"STARTED",{});updateByHeaders_(sh,f.row,{Expense_Status:"Cancelled",Cancelled_By:session.userId,Cancelled_At:new Date(),Cancellation_Reason:reason},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"cancelExpense",body.expenseId,"DONE",{expenseId:body.expenseId});auditEvent_(session,"CANCEL","Expense Register",body.expenseId,reason,r,{Expense_Status:"Cancelled"});return json_({status:"success"});}finally{lock.releaseLock();}}
+function allocatePayment_(session,body){requirePermission_(session,"Bill Wise Details","Can_Edit");return settlePayment_(session,body,false);}
+function createExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseCreate);requirePermission_(session,"Expenses","Can_Create");const op=requireOperationId_(body),r=body.record||{},amount=Number(r.Payment_Amount);if(!isFinite(amount)||amount<=0)throw new Error("Expense amount must be greater than zero.");if(!cleanText_(r.Expense_Category,100)||!cleanText_(r.Payee_Name,120)||!cleanText_(r.Particulars,300))throw new Error("Expense category, payee and particulars are required.");if(["UPI","NEFT","IMPS","Cheque","Cash","Card"].indexOf(String(r.Payment_Mode))<0)throw new Error("Invalid expense payment mode.");const lock=LockService.getScriptLock();lock.waitLock(15000);try{const bankSh=societySheet_(session,"Bank Account Master").sh;if(!sheetObjects_(bankSh).some(b=>String(b.BankAccount_ID)===String(r.Bank_Account)&&String(b.Status||"Active")==="Active"))throw new Error("Select an active society bank account.");const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous expense creation is incomplete; reconcile it before retrying.");const existingExpense=sheetObjects_(sh).find(x=>String(x.Payment_Reference||"")===String(r.Payment_Reference||"")&&String(x.Payee_Name||"").toLowerCase()===String(r.Payee_Name||"").toLowerCase()&&Number(x.Payment_Amount||0)===amount&&String(x.Expense_Status||"")!=="Cancelled"&&String(r.Payment_Reference||"")!=="N/A");if(existingExpense)throw new Error("An expense with the same payee, payment reference and amount already exists.");writeOperation_(ledger,op,"createExpense","","STARTED",{});const id="EXP-"+randomHex_(8).toUpperCase(),voucher="VOU-"+new Date().getFullYear()+"-"+String(Math.max(1,sh.getLastRow())).padStart(6,"0");const rec=Object.assign({},r,{Expense_ID:id,Voucher_No:voucher,Expense_Status:"Pending Approval",Created_By:session.userId,Created_At:new Date(),Approved_By:"",Approved_At:"",Cancelled_By:"",Cancelled_At:"",Cancellation_Reason:""});appendByHeaders_(sh,rec);writeOperation_(ledger,op,"createExpense",id,"DONE",{expenseId:id,voucherNo:voucher});auditEvent_(session,"CREATE","Expense Register",id,"Voucher="+voucher,"",rec);return json_({status:"success",data:{expenseId:id,voucherNo:voucher,expense:rec}});}finally{lock.releaseLock();}}
+function approveExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);requirePermission_(session,"Expenses","Can_Approve");return updateExpenseStatus_(session,body,"Approved");}
+function markExpensePaid_(session,body){requireRole_(session,FINANCE_ROLES.expensePay);requirePermission_(session,"Expenses","Can_Edit");return updateExpenseStatus_(session,body,"Paid");}
+function cancelExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);requirePermission_(session,"Expenses","Can_Delete");const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorCancel=findOperationByActionRecord_(ledger,"cancelExpense",body.expenseId);if(priorCancel){if(priorCancel.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous cancellation for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(r.Expense_Status==="Paid")throw new Error("Paid expenses cannot be cancelled. Use a reversal entry.");writeOperation_(ledger,op,"cancelExpense",body.expenseId,"STARTED",{});updateByHeaders_(sh,f.row,{Expense_Status:"Cancelled",Cancelled_By:session.userId,Cancelled_At:new Date(),Cancellation_Reason:reason},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"cancelExpense",body.expenseId,"DONE",{expenseId:body.expenseId});auditEvent_(session,"CANCEL","Expense Register",body.expenseId,reason,r,{Expense_Status:"Cancelled"});return json_({status:"success"});}finally{lock.releaseLock();}}
 function updateExpenseStatus_(session,body,status){const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorExpense=findOperationByActionRecord_(ledger,"expensePaid",body.expenseId);if(status==="Paid"&&priorExpense){if(priorExpense.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous payment for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(status==="Approved"&&r.Expense_Status!=="Pending Approval")throw new Error("Only pending expenses can be approved.");if(status==="Paid"&&String(r.Expense_Status)!=="Approved")throw new Error("Expense must be approved before it can be marked Paid.");if(status==="Paid"){const bankSh=societySheet_(session,"Bank Account Master").sh,bf=rowById_(bankSh,"BankAccount_ID",r.Bank_Account);if(!bf)throw new Error("Bank account not found.");const bank=objectFromRow_(bf.headers,bf.values),amount=Number(r.Payment_Amount||0),balance=Number(bank.Current_Balance||0);if(amount<=0||balance<amount)throw new Error("Insufficient bank balance or invalid expense amount.");writeOperation_(ledger,op,"expensePaid",body.expenseId,"STARTED",{});updateByHeaders_(bankSh,bf.row,{Current_Balance:balance-amount},["BankAccount_ID","Account_Number"]);const bankName=String(bank.Bank_Name||bank.Account_Name||r.Bank_Account);postJournalEntry_(ss,"Expense",body.expenseId,new Date(),[{accountName:"Expense: "+String(r.Expense_Category),accountType:"Expense",debit:amount,credit:0,narration:"Voucher "+String(r.Voucher_No||body.expenseId)},{accountName:"Bank: "+bankName,accountType:"Asset",debit:0,credit:amount,narration:"Voucher "+String(r.Voucher_No||body.expenseId)}],session);}
     if(status!=="Paid")writeOperation_(ledger,op,"expense"+status,body.expenseId,"STARTED",{});
     updateByHeaders_(sh,f.row,status==="Approved"?{Expense_Status:status,Approved_By:session.userId,Approved_At:new Date()}:{Expense_Status:"Paid",Approved_By:session.userId,Approved_At:r.Approved_At||new Date(),Payment_Date:r.Payment_Date||new Date()},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"expense"+status,body.expenseId,"DONE",{expenseId:body.expenseId,status});auditEvent_(session,status==="Paid"?"APPROVE":"UPDATE","Expense Register",body.expenseId,status,r,{Expense_Status:status,Payment_Date:status==="Paid"?(r.Payment_Date||new Date()):r.Payment_Date});return json_({status:"success"});}finally{lock.releaseLock();}}
@@ -1462,10 +1541,13 @@ function uploadPrivateFile_(session,body){
     "kyc":["Admin"],"bank statement":["Admin"]
   };
   if(!categoryRoles[lower])throw new Error("Unsupported document category.");
-  if(categoryRoles[lower].indexOf(session.role)<0)throw new Error("Permission denied for this document category.");
+  const residentPreview=Boolean(body.viewAsResident)&&["Committee","Accountant"].includes(session.role);
+  const previewAllowedCategories=["payment proof","activity request attachment"];
+  if(categoryRoles[lower].indexOf(session.role)<0&&!(residentPreview&&previewAllowedCategories.includes(lower)))throw new Error("Permission denied for this document category.");
+  if(residentPreview){if(!session.propertyId||!session.ownershipId||String(propertyId)!==String(session.propertyId))throw new Error("Resident preview document access is restricted to your linked property and ownership.");if(lower==="payment proof")requirePermission_(session,"Pay Now","Can_Create","Resident");if(lower==="activity request attachment")requirePermission_(session,"Activity Requests","Can_Create","Resident");}
   if(propertyId&&!rowById_(societySheet_(session,"Property Master").sh,"PropertyID",propertyId))throw new Error("Selected property does not exist in this society.");
   if(ownerId&&!rowById_(societySheet_(session,"Owner Master").sh,"OwnerID",ownerId))throw new Error("Selected owner does not exist in this society.");
-  if(session.role==="Resident")assertPropertyAccess_(session,propertyId);
+  if(session.role==="Resident"||residentPreview)assertPropertyAccess_(residentPreview?Object.assign({},session,{role:"Resident"}):session,propertyId);
   const linkMap={
     "owner document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
     "ownership document":{module:"ownershipHistory",sheet:"Ownership History",id:"Ownership_ID",fields:["Owner_Document","Owner_Document_File_ID"]},
@@ -1484,8 +1566,9 @@ function uploadPrivateFile_(session,body){
     const target=societySheet_(session,cfg.sheet),found=rowById_(target.sh,cfg.id,relatedRecordId);
     if(!found)throw new Error("Related record was not found.");
     relatedTarget={cfg,sh:target.sh};relatedRecord=objectFromRow_(found.headers,found.values);
-    if(relatedRecord.PropertyID)assertPropertyAccess_(session,relatedRecord.PropertyID);
-    if(session.role==="Resident"&&lower==="activity request attachment"&&String(relatedRecord.Requested_By)!==String(session.userId))throw new Error("You may attach files only to your own activity requests.");
+    if(relatedRecord.PropertyID)assertPropertyAccess_(residentPreview?Object.assign({},session,{role:"Resident"}):session,relatedRecord.PropertyID);
+    if((session.role==="Resident"||residentPreview)&&lower==="activity request attachment"&&String(relatedRecord.Requested_By)!==String(session.userId))throw new Error("You may attach files only to your own activity requests.");
+    if(residentPreview&&lower==="payment proof"){if(String(relatedRecord.Created_By||"")!==String(session.userId))throw new Error("Resident preview may upload proof only to a payment submitted by your account.");assertOwnership_(Object.assign({},session,{role:"Resident"}),relatedRecord.PropertyID,relatedRecord.Ownership_ID,relatedRecord.OwnerID);}
     if(propertyId&&relatedRecord.PropertyID&&String(propertyId)!==String(relatedRecord.PropertyID))throw new Error("Document property does not match the related record.");
     if(ownerId&&relatedRecord.OwnerID&&String(ownerId)!==String(relatedRecord.OwnerID))throw new Error("Document owner does not match the related ownership record.");
     resolvedPropertyId=resolvedPropertyId||String(relatedRecord.PropertyID||"");
@@ -1551,7 +1634,7 @@ function uploadPrivateFile_(session,body){
   auditEvent_(session,"CREATE","Drive",file.getId(),"Category="+category,"",{fileId:file.getId(),fileName:file.getName(),propertyId:resolvedPropertyId,ownerId:resolvedOwnerId,relatedModule,relatedRecordId,linked});
   return json_({status:"success",data:{fileId:file.getId(),fileName:file.getName(),mimeType:mime,linked}});
 }
-function getPrivateFile_(session,body){const fileId=cleanText_(body.fileId,200);if(!fileId)throw new Error("File ID is required.");const ss=SpreadsheetApp.openById(session.databaseId),reg=ss.getSheetByName("_File Registry");if(!reg)throw new Error("File registry is not available.");const registered=sheetObjects_(reg).find(r=>String(r.File_ID)===fileId);if(!registered)throw new Error("File is not registered to this society.");const category=String(registered.Category||"").toLowerCase();if(session.role==="Resident"){assertPropertyAccess_(session,registered.PropertyID);if(body.propertyId&&String(body.propertyId)!==String(registered.PropertyID))throw new Error("File property access denied.");if(["bank statement","expense voucher"].includes(category))throw new Error("This document category is not available to Resident accounts.");if(!residentCanAccessLinkedFile_(session,registered))throw new Error("This document is not available to your account or its linked record is not visible.");}else if(session.role==="Committee"&&["kyc","owner document","ownership document","bank statement"].includes(category)){throw new Error("This document category is restricted to Admin.");}else if(session.role==="Accountant"&&["kyc","owner document","ownership document"].includes(category)){throw new Error("This document category is restricted to Admin.");}const file=DriveApp.getFileById(fileId);if(file.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Public/shared Drive files are not served by this API.");let allowed=false;let level=[file.getParents()];for(let depth=0;depth<5&&level.length;depth++){const next=[];level.forEach(it=>{while(it.hasNext()){const folder=it.next();if(folder.getName()==="Society_"+session.societyCode)allowed=true;next.push(folder.getParents());}});level=next;}if(!allowed)throw new Error("File does not belong to this society folder.");const blob=file.getBlob();if(blob.getBytes().length>5*1024*1024)throw new Error("File too large for inline preview; use an authorized Drive workflow.");return json_({status:"success",data:{fileName:file.getName(),mimeType:blob.getContentType(),base64:Utilities.base64Encode(blob.getBytes())}});}
+function getPrivateFile_(session,body){const fileId=cleanText_(body.fileId,200);if(!fileId)throw new Error("File ID is required.");const ss=SpreadsheetApp.openById(session.databaseId),reg=ss.getSheetByName("_File Registry");if(!reg)throw new Error("File registry is not available.");const registered=sheetObjects_(reg).find(r=>String(r.File_ID)===fileId);if(!registered)throw new Error("File is not registered to this society.");const category=String(registered.Category||"").toLowerCase(),residentPreview=Boolean(body.viewAsResident)&&["Committee","Accountant"].includes(session.role);if(session.role==="Resident"||residentPreview){const residentSession=residentPreview?residentViewSession_(session,true):session;assertPropertyAccess_(residentSession,registered.PropertyID);if(body.propertyId&&String(body.propertyId)!==String(registered.PropertyID))throw new Error("File property access denied.");if(["bank statement","expense voucher","kyc"].includes(category))throw new Error("This document category is not available in Resident View.");if(!residentCanAccessLinkedFile_(residentSession,registered))throw new Error("This document is not available to your account or its linked record is not visible.");}else if(session.role==="Committee"&&["kyc","owner document","ownership document","bank statement"].includes(category)){throw new Error("This document category is restricted to Admin.");}else if(session.role==="Accountant"&&["kyc","owner document","ownership document"].includes(category)){throw new Error("This document category is restricted to Admin.");}const file=DriveApp.getFileById(fileId);if(file.getSharingAccess()!==DriveApp.Access.PRIVATE)throw new Error("Public/shared Drive files are not served by this API.");let allowed=false;let level=[file.getParents()];for(let depth=0;depth<5&&level.length;depth++){const next=[];level.forEach(it=>{while(it.hasNext()){const folder=it.next();if(folder.getName()==="Society_"+session.societyCode)allowed=true;next.push(folder.getParents());}});level=next;}if(!allowed)throw new Error("File does not belong to this society folder.");const blob=file.getBlob();if(blob.getBytes().length>5*1024*1024)throw new Error("File too large for inline preview; use an authorized Drive workflow.");return json_({status:"success",data:{fileName:file.getName(),mimeType:blob.getContentType(),base64:Utilities.base64Encode(blob.getBytes())}});}
 function createSocietyBackup_(session,body){
   requireRole_(session,["Admin"]);const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(20000);
   try{

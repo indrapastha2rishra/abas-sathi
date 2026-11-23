@@ -12,6 +12,7 @@ import {
   Bell,
   LogOut,
   UserRound,
+  Home,
 } from 'lucide-react';
 
 interface Props {
@@ -24,6 +25,9 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
     setLanguage,
     t,
     activeRole,
+    actualRole,
+    isResidentMode,
+    toggleResidentMode,
     currentUser,
     activityRequests,
     receipts,
@@ -120,6 +124,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
             <span className="font-bold">{language === 'en' ? 'বাংলা' : 'English'}</span>
           </button>
 
+          {['Committee','Accountant'].includes(actualRole) && <button onClick={() => { const ok=toggleResidentMode(); if(!ok)window.alert('Resident Mode চালু করতে User Master-এ আপনার user account-এর সঙ্গে current PropertyID ও Ownership_ID link করতে হবে।'); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-colors ${isResidentMode?'border-[#536B4D] bg-[#536B4D] text-white':'border-slate-200 text-slate-600 hover:bg-slate-50'}`} title={isResidentMode?'Back to Staff Mode':'View as Resident'}><Home size={15}/><span className="hidden sm:inline">{isResidentMode?'Staff Mode':'View as Resident'}</span></button>}
           <button onClick={() => setActiveTab('profile')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="My Profile"><UserRound size={15}/><span className="hidden sm:inline">Profile</span></button>
 
           {/* Notification Bell */}

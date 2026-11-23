@@ -27,6 +27,7 @@ interface Props {
 export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) => {
   const {
     activeRole,
+    hasPermission,
     residentProperty,
     invoices,
     receipts,
@@ -166,7 +167,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
               >
                 Receipt Register ({receipts.length})
               </button>
-              <button
+              {hasPermission('Bill Wise Details','Can_Edit') && <button
                 onClick={() => setSubTab('allocation')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   subTab === 'allocation'
@@ -175,7 +176,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 }`}
               >
                 Bill Allocations ({billAllocations.length})
-              </button>
+              </button>}
               <button
                 onClick={() => setSubTab('advances')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
@@ -422,7 +423,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right space-x-2">
-                      {rec.Receipt_Status === 'Pending Verification' && activeRole !== 'Resident' ? (
+                      {rec.Receipt_Status === 'Pending Verification' && activeRole !== 'Resident' && hasPermission('Payments','Can_Approve') ? (
                         <button
                           onClick={() => setConfirmingReceipt(rec)}
                           className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-bold text-[11px] hover:bg-emerald-800 shadow-2xs cursor-pointer"

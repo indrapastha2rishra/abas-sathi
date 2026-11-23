@@ -30,6 +30,7 @@ import {
 
 import { Language, translations } from '../utils/i18n';
 import { authRequest, BackendRequestError } from '../utils/authClient';
+import { permissionGranted, moduleForTab, actionForTab, type PermissionAction, type RolePermissionRecord } from '../utils/permissions';
 
 export interface GoogleBackendConfig {
   spreadsheetId: string;
@@ -46,6 +47,14 @@ interface AppContextType {
   currentUser: UserMaster;
   setCurrentUser: (user: UserMaster) => void;
   activeRole: UserRole;
+  actualRole: UserRole;
+  isResidentMode: boolean;
+  toggleResidentMode: () => boolean;
+  hasPermission: (moduleName: string, action?: PermissionAction) => boolean;
+  canAccessTab: (tab: string) => boolean;
+  rolePermissions: RolePermissionRecord[];
+  refreshRolePermissions: () => Promise<void>;
+  deleteRolePermission: (permissionId: string) => Promise<void>;
   setActiveRole: (role: UserRole) => void;
   switchUser: (userId: string) => void;
   residentProperty: PropertyMaster | null;
@@ -161,6 +170,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:u.role || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
   const [activeRole, setActiveRole] = useState<UserRole>(() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}').user?.role || 'Resident'; } catch { return 'Resident'; } });
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const actualRole: UserRole = currentUser.Role || 'Resident';
+  const [isResidentMode, setIsResidentMode] = useState(false);
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionRecord[]>([]);
 
   // Database collections
   const [properties, setProperties] = useState<PropertyMaster[]>([]);
@@ -246,7 +258,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const requestId = suppliedId || pendingRequestIds.current.get(fingerprint) || newRequestId();
     pendingRequestIds.current.set(fingerprint, requestId);
     if (pendingRequestIds.current.size > 100) pendingRequestIds.current.delete(pendingRequestIds.current.keys().next().value as string);
-    const request = { action, token: saved.token, ...requestPayload, requestId };
+    const request = { action, token: saved.token, ...requestPayload, requestId, viewAsResident:isResidentMode };
     // Only retry writes whose backend handlers persist requestId in the operation
     // ledger. Reusing the same ID makes an ambiguous network retry idempotent.
     const idempotentActions = new Set([
@@ -341,7 +353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const modulePlan: Record<string, string[]> = {
-      dashboard: ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance'],
+      dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance'],
       properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
       properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
       invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],
@@ -360,16 +372,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     const load = async () => {
       try {
-        const requested = Array.from(new Set(modulePlan[activeTab] || [])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(session.user?.role || '')) && (key !== 'expenses' || session.user?.role !== 'Resident'));
-        const permittedRequested = requested.filter(key => key !== 'auditLogs' || ['Admin','Accountant'].includes(session.user?.role || ''));
+        const requested = Array.from(new Set([...(modulePlan[activeTab] || []), 'rolePermissions'])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(activeRole)) && (key !== 'expenses' || activeRole !== 'Resident'));
+        const permittedRequested = requested.filter(key => key !== 'auditLogs' || ['Admin','Accountant'].includes(activeRole));
         const loadOne = async (module: string) => {
-          const cacheKey = `${session.societyCode || ''}:${session.user?.userId || ''}:${session.user?.role || ''}:${module}`;
+          const cacheKey = `${session.societyCode || ''}:${session.user?.userId || ''}:${session.user?.role || ''}:${isResidentMode ? 'resident-preview' : 'staff'}:${module}`;
           const cached = moduleDataCache.current.get(cacheKey);
           if (cached && Date.now() - cached.at < 15000) return cached.data;
           const all: any[] = []; let page = 1; let pages = 1;
           do {
             const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-              body: JSON.stringify({action:'getModuleData', token:session.token, module, page, limit:200}) });
+              body: JSON.stringify({action:module==='rolePermissions'&&actualRole!=='Admin'?'getMyPermissions':'getModuleData', token:session.token, module, page, limit:200, viewAsResident:isResidentMode}) });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const result = await response.json();
             if (result.status !== 'success') throw new Error(result.message || `Could not load ${module}`);
@@ -381,7 +393,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return all;
         };
         const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'
-          ? Object.entries((await apiCall<any>('getDashboardData')).data || {}).map(([key, value]) => [key, normalizeRows(value as any[])] as const)
+          ? await Promise.all([
+              apiCall<any>('getDashboardData', { viewAsResident:isResidentMode }).then(result => Object.entries(result.data || {}).map(([key,value]) => [key,normalizeRows(value as any[])] as const)),
+              loadOne('rolePermissions').then(rows => [['rolePermissions',normalizeRows(rows)] as const])
+            ]).then(parts=>parts.flat())
           : await Promise.all(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const));
         if (cancelled) return;
         const data: Record<string, any[]> = Object.fromEntries(loaded);
@@ -412,6 +427,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (requested.includes('financialYears')) setFinancialYears(rows('financialYears') as FinancialYearMaster[]);
         if (requested.includes('accountHeads')) setAccountHeads(rows('accountHeads') as AccountHeadMaster[]);
         if (permittedRequested.includes('auditLogs')) setAuditLogs(rows('auditLogs') as AuditLog[]);
+        if (requested.includes('rolePermissions')) setRolePermissions(rows('rolePermissions') as RolePermissionRecord[]);
         console.info(`ABAS SATHI: selectively loaded ${permittedRequested.join(', ') || 'no modules'} for ${activeTab}.`);
       } catch (error:any) {
         console.error('ABAS SATHI selective database load failed:', error);
@@ -422,7 +438,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     load();
     return () => { cancelled = true; };
-  }, [googleConfig.appsScriptWebAppUrl, activeTab]);
+  }, [googleConfig.appsScriptWebAppUrl, activeTab, activeRole, isResidentMode]);
 
   // Helper to add audit log
   const logAction = (action: AuditLog['Action_Type'], module: string, recordId: string, oldVal: string, newVal: string, remarks: string) => {
@@ -444,26 +460,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Find resident's property
   const residentProperty = currentUser.PropertyID
     ? properties.find((p) => p.PropertyID === currentUser.PropertyID) || null
-    : (properties[0] || null);
+    : (activeRole === 'Resident' ? null : (properties[0] || null));
 
   const switchUser = (userId: string) => {
-    const found = users.find((u) => u.UserID === userId);
-    if (found) {
-      setCurrentUser(found);
-      setActiveRole(found.Role);
-      setActiveTab('dashboard');
-      logAction('LOGIN', 'User Session', found.UserID, '', `Switched user to ${found.Full_Name} (${found.Role})`, 'Role switch');
-    }
+    // Role simulation is disabled in the authenticated production context.
+    // Only the authenticated user may be selected; this prevents client-side role spoofing.
+    if (String(userId) !== String(currentUser.UserID)) return;
+    setActiveRole(actualRole);
+    setActiveTab('dashboard');
   };
 
   const handleRoleChange = (role: UserRole) => {
-    setActiveRole(role);
-    // Find representative user for this role
-    const repUser = users.find((u) => u.Role === role);
-    if (repUser) {
-      setCurrentUser(repUser);
+    // UI display mode only. This never changes the authenticated user's actual role.
+    if (role === 'Resident' && ['Committee','Accountant'].includes(actualRole)) {
+      if (!currentUser.PropertyID || !currentUser.Ownership_ID) return;
+      setIsResidentMode(true);
+      setActiveRole('Resident');
+      setActiveTab('dashboard');
+    } else if (role === actualRole) {
+      setIsResidentMode(false);
+      setActiveRole(actualRole);
+      setActiveTab('dashboard');
     }
+  };
+  const toggleResidentMode = () => {
+    if (!['Committee','Accountant'].includes(actualRole)) return false;
+    if (!currentUser.PropertyID || !currentUser.Ownership_ID) return false;
+    setIsResidentMode(prev => {
+      const next = !prev;
+      setActiveRole(next ? 'Resident' : actualRole);
+      return next;
+    });
     setActiveTab('dashboard');
+    return true;
+  };
+  const hasPermission = (moduleName: string, action: PermissionAction = 'Can_View') => {
+    const effectiveRole = isResidentMode ? 'Resident' : actualRole;
+    return permissionGranted(rolePermissions, effectiveRole, moduleName, action);
+  };
+  const canAccessTab = (tab: string) => {
+    if (tab === 'profile') return true;
+    if (tab === 'settings_role_permissions') return actualRole === 'Admin';
+    if (tab === 'settings_master') return activeRole !== 'Resident' && actualRole !== 'Resident' && ['Account Heads','Financial Year Management','Bank Accounts','Properties & Residents','Owner Management','Expenses'].some(m=>hasPermission(m,'Can_View'));
+    const moduleName = moduleForTab(tab);
+    return moduleName ? hasPermission(moduleName, 'Can_View') && hasPermission(moduleName, actionForTab(tab)) : false;
+  };
+  const refreshRolePermissions = async () => {
+    const saved:any = (()=>{try{return JSON.parse(localStorage.getItem('abasSathiSession')||'{}')}catch{return {}}})();
+    if(!saved.token)return;
+    const res:any=await apiCall(actualRole==='Admin'?'getModuleData':'getMyPermissions',{module:'rolePermissions',viewAsResident:isResidentMode,page:1,limit:200});
+    setRolePermissions(Array.isArray(res.data)?res.data:[]);
+  };
+  const deleteRolePermission = async (permissionId:string) => {
+    await apiCall('deleteRolePermission',{permissionId});
+    await refreshRolePermissions();
   };
 
   const uploadPrivateFile = async (file: File, category: string, propertyId?: string, ownerId?: string, relatedModule?: string, relatedRecordId?: string): Promise<{fileId:string;fileName:string;mimeType:string}> => {
@@ -659,6 +709,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         setCurrentUser,
         activeRole,
+        actualRole,
+        isResidentMode,
+        toggleResidentMode,
+        hasPermission,
+        canAccessTab,
+        rolePermissions,
+        refreshRolePermissions,
+        deleteRolePermission,
         setActiveRole: handleRoleChange,
         switchUser,
         residentProperty,
