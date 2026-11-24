@@ -17,7 +17,8 @@ export const Sidebar:React.FC<Props> = ({isOpen,onClose}) => {
     {id:'resident_pay',label:t.navPayNow,module:'Pay Now',action:'Can_Create',icon:CreditCard},
     {id:'resident_history',label:t.navPaymentHistory,module:'Payment History',icon:Clock},
     {id:'resident_requests',label:t.navActivityRequests,module:'Activity Requests',icon:Wrench},
-    {id:'resident_notices',label:t.navNoticesGallery,module:'Notices & Gallery',icon:Image}
+    {id:'resident_notices',label:t.navNoticesGallery,module:'Notices & Gallery',icon:Image},
+    {id:'resident_reports',label:'My Reports',module:'Resident Portal',icon:BarChart3}
   ];
   const groups:NavGroup[]=[
     {label:t.navPropertiesResidents,icon:Building2,items:[{id:'properties_all',label:t.navAllProperties,module:'Properties & Residents'},{id:'properties_owners',label:t.navOwnerDirectory,module:'Owner Management'},{id:'properties_history',label:t.navOwnershipHistory,module:'Ownership History'},{id:'properties_tenants',label:t.navTenantDetails,module:'Tenant Management'}]},

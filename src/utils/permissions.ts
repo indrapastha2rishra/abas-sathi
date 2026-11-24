@@ -31,7 +31,7 @@ const TAB_MODULES: Record<string,string> = {
   expenses_add:'Expenses', expenses_register:'Expenses', expenses_categories:'Expenses',
   financial_rv:'Financial Transactions', financial_pv:'Financial Transactions', financial_jv:'Financial Transactions', financial_cv:'Financial Transactions',
   reports_monthly:'Reports', reports_property_due:'Reports', reports_ownership_due:'Reports', reports_balancesheet:'Reports', reports_year_end:'Reports',
-  resident_flat:'My Flat', resident_bills:'My Bills', resident_pay:'Pay Now', resident_history:'Payment History', resident_notices:'Notices & Gallery'
+  resident_flat:'My Flat', resident_bills:'My Bills', resident_pay:'Pay Now', resident_history:'Payment History', resident_notices:'Notices & Gallery', resident_reports:'Resident Portal'
 };
 
 export const moduleForTab = (tab: string) => TAB_MODULES[tab] || '';
