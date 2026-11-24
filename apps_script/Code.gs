@@ -321,7 +321,7 @@ function postOpeningBalances_(session,body){
  * Pure report builder: one row per Ownership_ID, not one row per OwnerID.
  * This preserves historical liability when a flat changes ownership.
  */
-function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows) {
+function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows, receiptRows, billRows) {
   const ownershipById = {};
   (ownershipRows || []).forEach(x => { if (x.Ownership_ID) ownershipById[String(x.Ownership_ID)] = x; });
   const propertyById = {};
@@ -330,20 +330,13 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
   (ownerRows || []).forEach(x => { if (x.OwnerID) ownerById[String(x.OwnerID)] = x; });
   const grouped = {};
   let unlinkedInvoiceCount = 0;
-  (invoiceRows || []).forEach(inv => {
-    if (String(inv.Invoice_Status || "") === "Cancelled") return;
-    const net = Number(inv.Net_Charge_Amount || 0);
-    const paid = Number(inv.Paid_Amount || 0);
-    const rawDue = inv.Outstanding_Amount;
-    const dueValue = rawDue === "" || rawDue === null || rawDue === undefined
-      ? Math.max(0, net - paid)
-      : Math.max(0, Number(rawDue || 0));
-    if (!(dueValue > 0)) return;
+  invoiceDueDetails_(invoiceRows, receiptRows || [], billRows || []).forEach(({ inv, excluded, net, paid, due }) => {
+    if (excluded) return;
     const ownershipId = String(inv.Ownership_ID || "");
     const propertyId = String(inv.PropertyID || "");
     const ownerId = String(inv.OwnerID || "");
     const key = ownershipId || ("UNLINKED:" + propertyId + ":" + ownerId);
-    if (!ownershipId) unlinkedInvoiceCount++;
+    if (!ownershipId && due > 0) unlinkedInvoiceCount++;
     const history = ownershipById[ownershipId] || {};
     const property = propertyById[propertyId] || {};
     const owner = ownerById[ownerId] || {};
@@ -365,12 +358,14 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
       };
     }
     grouped[key].Invoice_Count++;
-    grouped[key].Total_Billed += net;
-    grouped[key].Total_Paid += paid;
-    grouped[key].Outstanding += dueValue;
+    grouped[key].Total_Billed = fundMoney_(grouped[key].Total_Billed + net);
+    grouped[key].Total_Paid = fundMoney_(grouped[key].Total_Paid + paid);
+    grouped[key].Outstanding = fundMoney_(grouped[key].Outstanding + due);
   });
-  const data = Object.values(grouped).sort((a,b) => b.Outstanding - a.Outstanding);
-  const totalOutstanding = data.reduce((sum,x) => sum + x.Outstanding, 0);
+  const data = Object.values(grouped)
+    .filter(x => x.Outstanding > 0)
+    .sort((a,b) => b.Outstanding - a.Outstanding);
+  const totalOutstanding = fundMoney_(data.reduce((sum,x) => sum + x.Outstanding, 0));
   return {
     data,
     summary: {
@@ -533,20 +528,27 @@ function finalizeYearEndClosing_(session,body){
 function invoiceDueDetails_(invoiceRows, receiptRows, billRows) {
   const confirmedTxn = {};
   (receiptRows || []).forEach(r => {
-    if (String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed" && r.Transaction_ID) {
-      confirmedTxn[String(r.Transaction_ID)] = true;
+    const txnId = String(r.Transaction_ID || "").trim();
+    if (String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed" && txnId) {
+      confirmedTxn[txnId] = true;
     }
+  });
+  const invoiceIdByNumber = {};
+  (invoiceRows || []).forEach(inv => {
+    const id = String(inv.InvoiceID || "").trim();
+    const num = String(inv.Invoice_Number || "").trim();
+    if (id && num) invoiceIdByNumber[num] = id;
   });
   const allocatedByInvoice = {};
   (billRows || []).forEach(b => {
-    if (!confirmedTxn[String(b.Transaction_ID || "")]) return;
-    const id = String(b.InvoiceID || "");
-    if (id) allocatedByInvoice[id] = (allocatedByInvoice[id] || 0) + fundMoney_(b.Allocated_Amount);
+    if (!confirmedTxn[String(b.Transaction_ID || "").trim()]) return;
+    const id = String(b.InvoiceID || "").trim() || invoiceIdByNumber[String(b.Invoice_Number || "").trim()] || "";
+    if (id) allocatedByInvoice[id] = fundMoney_((allocatedByInvoice[id] || 0) + fundMoney_(b.Allocated_Amount));
   });
   return (invoiceRows || []).map(inv => {
     const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
     const excluded = ["cancelled", "draft", "pending_approval", "pending approval"].includes(statusRaw);
-    const id = String(inv.InvoiceID || "");
+    const id = String(inv.InvoiceID || "").trim();
     const net = fundMoney_(inv.Net_Charge_Amount);
     const hasAlloc = Object.prototype.hasOwnProperty.call(allocatedByInvoice, id);
     const paid = excluded ? 0 : Math.min(net, Math.max(0, hasAlloc ? allocatedByInvoice[id] : fundMoney_(inv.Paid_Amount)));
@@ -714,11 +716,14 @@ function getReports_(session, body) {
     return json_({status:"success",reportType:type,data,summary:{ownerCount:data.length,totalOutstanding:fundMoney_(data.reduce((a,x)=>a+x.Outstanding,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="ownershipOutstanding") {
-    const invoiceRows = sheetObjects_(societySheet_(session,"Invoice_Register").sh);
+    const invCtx = societySheet_(session,"Invoice_Register");
+    const invoiceRows = sheetObjects_(invCtx.sh);
     const ownershipRows = sheetObjects_(societySheet_(session,"Ownership History").sh);
     const propertyRows = sheetObjects_(societySheet_(session,"Property Master").sh);
     const ownerRows = sheetObjects_(societySheet_(session,"Owner Master").sh);
-    const result = buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows);
+    const receiptRows = sheetObjects_(invCtx.ss.getSheetByName("Fund Inflow Register"));
+    const billRows = sheetObjects_(invCtx.ss.getSheetByName("Bill Wise Details"));
+    const result = buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows, receiptRows, billRows);
     return json_({
       status:"success",
       reportType:type,
@@ -726,7 +731,7 @@ function getReports_(session, body) {
       summary:result.summary,
       generatedAt:new Date().toISOString(),
       auditStatus:"system-generated",
-      note:"Outstanding is grouped by the Ownership_ID stored on each invoice. Unlinked legacy invoices are shown separately and require manual ownership verification."
+      note:"Outstanding is grouped by Ownership_ID with Paid amounts linked to Confirmed receipts in Fund Inflow Register and allocations in Bill Wise Details. Unlinked legacy invoices are shown separately and require manual ownership verification."
     });
   }
   if(type==="expenseSummary") {

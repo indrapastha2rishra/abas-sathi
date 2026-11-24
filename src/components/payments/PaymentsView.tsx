@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   CreditCard,
@@ -17,6 +17,7 @@ import {
   Search,
   ArrowRight,
   FileCheck,
+  PlusCircle,
 } from 'lucide-react';
 import { PaymentMode, FundInflowRegister } from '../../types/database';
 import { formatDateDisplay } from '../../utils/dateFormat';
@@ -25,11 +26,25 @@ interface Props {
   initialSubTab?: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record';
 }
 
+const toAmt = (v: unknown): number => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  const cleaned = String(v ?? '').replace(/[^0-9.-]/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const fmtAmt = (v: unknown): string => toAmt(v).toFixed(2);
+
 export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) => {
   const {
     activeRole,
+    setActiveTab,
+    canAccessTab,
     hasPermission,
     residentProperty,
+    properties,
+    owners,
+    ownerships,
     invoices,
     receipts,
     billAllocations,
@@ -45,18 +60,43 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     initialSubTab
   );
 
+  useEffect(() => {
+    setSubTab(initialSubTab);
+  }, [initialSubTab, activeRole]);
+
+  const handleSelectSubTab = (nextTab: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record') => {
+    setSubTab(nextTab);
+    if (activeRole === 'Resident') return;
+    const navTabMap: Partial<Record<'receipts' | 'allocation' | 'advances' | 'record', string>> = {
+      record: 'payments_record',
+      receipts: 'payments_receipts',
+      allocation: 'payments_allocation',
+      advances: 'payments_advances',
+    };
+    const targetNavTab = navTabMap[nextTab as 'receipts' | 'allocation' | 'advances' | 'record'];
+    if (targetNavTab && canAccessTab(targetNavTab)) {
+      setActiveTab(targetNavTab);
+    }
+  };
+
   // Resident data is scoped to the authenticated flat/property in the UI; backend authorization must enforce the same scope.
-  const residentScopedReceipts = activeRole === 'Resident' ? receipts.filter(r => r.PropertyID === residentProperty?.PropertyID) : receipts;
-  const residentScopedAllocations = activeRole === 'Resident' ? billAllocations.filter(a => a.PropertyID === residentProperty?.PropertyID) : billAllocations;
-  useEffect(() => { setSubTab(initialSubTab); }, [initialSubTab, activeRole]);
+  const residentScopedReceipts = useMemo(
+    () => (activeRole === 'Resident' ? receipts.filter(r => r.PropertyID === residentProperty?.PropertyID) : receipts),
+    [activeRole, receipts, residentProperty?.PropertyID]
+  );
+  const residentScopedAllocations = useMemo(
+    () => (activeRole === 'Resident' ? billAllocations.filter(a => a.PropertyID === residentProperty?.PropertyID) : billAllocations),
+    [activeRole, billAllocations, residentProperty?.PropertyID]
+  );
 
   // Resident "Pay Now" flow state
-  const myInvoices = invoices.filter(
-    (i) => i.PropertyID === residentProperty?.PropertyID && i.Outstanding_Amount > 0
+  const myInvoices = useMemo(
+    () => invoices.filter((i) => i.PropertyID === residentProperty?.PropertyID && toAmt(i.Outstanding_Amount) > 0),
+    [invoices, residentProperty?.PropertyID]
   );
 
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>(
-    myInvoices.map((i) => i.InvoiceID)
+    () => myInvoices.map((i) => i.InvoiceID)
   );
   const [payMode, setPayMode] = useState<PaymentMode>('UPI');
   const [payRef, setPayRef] = useState('');
@@ -71,10 +111,105 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     }
   }, [myInvoices]);
 
+  // Admin / Accountant "Record Payment" flow state
+  const [recordPropertyId, setRecordPropertyId] = useState<string>(() => properties[0]?.PropertyID || '');
+  const [recordInvoiceIds, setRecordInvoiceIds] = useState<string[]>([]);
+  const [recordAmount, setRecordAmount] = useState<string>('');
+  const [recordMode, setRecordMode] = useState<PaymentMode>('UPI');
+  const [recordRef, setRecordRef] = useState('');
+  const [recordBankAccount, setRecordBankAccount] = useState<string>(() => bankAccounts[0]?.BankAccount_ID || '');
+  const [recordRemarks, setRecordRemarks] = useState('');
+  const [recordSuccess, setRecordSuccess] = useState('');
+  const [recordingPayment, setRecordingPayment] = useState(false);
+
+  useEffect(() => {
+    if (!recordPropertyId && properties.length > 0) {
+      setRecordPropertyId(properties[0].PropertyID);
+    }
+  }, [properties, recordPropertyId]);
+
+  useEffect(() => {
+    if (!recordBankAccount && bankAccounts.length > 0) {
+      setRecordBankAccount(bankAccounts[0].BankAccount_ID);
+    }
+  }, [bankAccounts, recordBankAccount]);
+
+  const recordPropertyInvoices = useMemo(
+    () =>
+      invoices.filter(
+        (inv) =>
+          String(inv.PropertyID || '') === String(recordPropertyId || '') &&
+          String(inv.Invoice_Status || '').toLowerCase() !== 'cancelled' &&
+          toAmt(inv.Outstanding_Amount) > 0
+      ),
+    [invoices, recordPropertyId]
+  );
+
+  const selectedRecordOwnership = useMemo(
+    () =>
+      ownerships.find(
+        (o) =>
+          String(o.PropertyID || '') === String(recordPropertyId || '') &&
+          String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
+      ) || ownerships.find((o) => String(o.PropertyID || '') === String(recordPropertyId || '')),
+    [ownerships, recordPropertyId]
+  );
+
+  const selectedRecordOwner = useMemo(
+    () => owners.find((o) => String(o.OwnerID || '') === String(selectedRecordOwnership?.OwnerID || '')),
+    [owners, selectedRecordOwnership?.OwnerID]
+  );
+
+  const handleToggleRecordInvoice = (invoiceId: string) => {
+    setRecordInvoiceIds((prev) => {
+      const next = prev.includes(invoiceId) ? prev.filter((id) => id !== invoiceId) : [...prev, invoiceId];
+      const selectedTotal = recordPropertyInvoices
+        .filter((inv) => next.includes(inv.InvoiceID))
+        .reduce((sum, inv) => sum + toAmt(inv.Outstanding_Amount), 0);
+      setRecordAmount(selectedTotal > 0 ? selectedTotal.toFixed(2) : '');
+      return next;
+    });
+  };
+
+  const handleAdminRecordPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numericAmount = toAmt(recordAmount);
+    if (!recordPropertyId || numericAmount <= 0 || recordingPayment) return;
+    setRecordingPayment(true);
+    try {
+      const created = await submitResidentPayment({
+        propertyId: recordPropertyId,
+        invoiceIds: recordInvoiceIds,
+        amount: numericAmount,
+        mode: recordMode,
+        reference: recordRef,
+        bankAccount: recordBankAccount,
+        remarks: recordRemarks,
+      });
+      setRecordSuccess(`Payment recorded (Transaction ID: ${created.Transaction_ID}) with status "Pending Verification". Verify & allocate it from Receipt Register.`);
+      setRecordRef('');
+      setRecordRemarks('');
+      setRecordInvoiceIds([]);
+      setRecordAmount('');
+    } catch (error: any) {
+      window.alert(error?.message || 'Payment could not be recorded.');
+    } finally {
+      setRecordingPayment(false);
+    }
+  };
+
+  const advanceReceipts = useMemo(
+    () =>
+      receipts.filter(
+        (r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && toAmt(r.Unallocated_Amount) > 0
+      ),
+    [receipts]
+  );
+
   // Selected invoices total sum
   const payableTotal = myInvoices
     .filter((inv) => selectedInvoiceIds.includes(inv.InvoiceID))
-    .reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
+    .reduce((sum, inv) => sum + toAmt(inv.Outstanding_Amount), 0);
 
   const handleToggleInvoice = (id: string) => {
     setSelectedInvoiceIds((prev) =>
@@ -158,8 +293,21 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
             </>
           ) : (
             <>
+              {hasPermission('Payments', 'Can_Create') && (
+                <button
+                  onClick={() => handleSelectSubTab('record')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    subTab === 'record'
+                      ? 'bg-white text-[#536B4D] shadow-xs'
+                      : 'text-[#29352D]/70 hover:text-[#29352D]'
+                  }`}
+                >
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  Record Payment
+                </button>
+              )}
               <button
-                onClick={() => setSubTab('receipts')}
+                onClick={() => handleSelectSubTab('receipts')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   subTab === 'receipts'
                     ? 'bg-white text-[#536B4D] shadow-xs'
@@ -168,8 +316,8 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
               >
                 Receipt Register ({receipts.length})
               </button>
-              {hasPermission('Bill Wise Details','Can_Edit') && <button
-                onClick={() => setSubTab('allocation')}
+              {(hasPermission('Bill Wise Details','Can_Edit') || subTab === 'allocation') && <button
+                onClick={() => handleSelectSubTab('allocation')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   subTab === 'allocation'
                     ? 'bg-white text-[#536B4D] shadow-xs'
@@ -179,19 +327,198 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 Bill Allocations ({billAllocations.length})
               </button>}
               <button
-                onClick={() => setSubTab('advances')}
+                onClick={() => handleSelectSubTab('advances')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   subTab === 'advances'
                     ? 'bg-white text-[#536B4D] shadow-xs'
                     : 'text-[#29352D]/70 hover:text-[#29352D]'
                 }`}
               >
-                Advance Balances
+                Advance Balances ({advanceReceipts.length})
               </button>
             </>
           )}
         </div>
       </div>
+
+      {/* SUBTAB 0: ADMIN / ACCOUNTANT RECORD PAYMENT */}
+      {subTab === 'record' && activeRole !== 'Resident' && (
+        <div className="max-w-3xl mx-auto rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs space-y-5">
+          <div className="border-b border-[#E8E1D4] pb-3">
+            <h2 className="text-lg font-bold text-[#29352D] flex items-center gap-2">
+              <PlusCircle className="h-5 w-5 text-[#536B4D]" />
+              Record Society Payment / পেমেন্ট এন্ট্রি
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Record a flat owner payment into Fund Inflow Register for bank verification and bill-wise allocation.
+            </p>
+          </div>
+
+          {recordSuccess && (
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                {recordSuccess}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleSelectSubTab('receipts')}
+                className="px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer shrink-0"
+              >
+                Open Receipt Register
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleAdminRecordPayment} className="space-y-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block font-semibold text-[#29352D] mb-1">Select Flat / Property:</label>
+                <select
+                  value={recordPropertyId}
+                  onChange={(e) => {
+                    setRecordPropertyId(e.target.value);
+                    setRecordInvoiceIds([]);
+                    setRecordAmount('');
+                  }}
+                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2.5 font-medium text-[#29352D]"
+                  required
+                >
+                  {properties.map((p) => (
+                    <option key={p.PropertyID} value={p.PropertyID}>
+                      Flat {p.Flat_No} ({p.Block_Tower || p.PropertyID})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Owner: {selectedRecordOwner?.Owner_Name || '—'} | Ownership: {selectedRecordOwnership?.Ownership_ID || '—'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-[#29352D] mb-1">Bank Account:</label>
+                <select
+                  value={recordBankAccount}
+                  onChange={(e) => setRecordBankAccount(e.target.value)}
+                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2.5 text-[#29352D]"
+                >
+                  <option value="">Select Bank Account (Optional)</option>
+                  {bankAccounts
+                    .filter((b) => String(b.Status || 'Active') === 'Active')
+                    .map((b) => (
+                      <option key={b.BankAccount_ID} value={b.BankAccount_ID}>
+                        {b.Bank_Name} ({b.Account_Type})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            {recordPropertyInvoices.length > 0 && (
+              <div className="rounded-xl border border-[#E8E1D4] bg-[#F7F4EC]/60 p-3.5 space-y-2">
+                <span className="block font-semibold text-[#29352D]">Pending Invoices (Optional selection to auto-fill amount):</span>
+                <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                  {recordPropertyInvoices.map((inv) => {
+                    const checked = recordInvoiceIds.includes(inv.InvoiceID);
+                    return (
+                      <label
+                        key={inv.InvoiceID}
+                        className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer ${
+                          checked ? 'border-[#536B4D] bg-white' : 'border-[#E8E1D4] bg-white/70'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleToggleRecordInvoice(inv.InvoiceID)}
+                            className="h-3.5 w-3.5"
+                          />
+                          <span className="font-semibold text-[#29352D]">{inv.Invoice_Number}</span>
+                          <span className="text-gray-500">({inv.Purpose} • Due {formatDateDisplay(inv.Due_Date, '—')})</span>
+                        </span>
+                        <span className="font-bold text-red-700">₹{fmtAmt(inv.Outstanding_Amount)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block font-semibold text-[#29352D] mb-1">Amount Received (₹):</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.01"
+                  required
+                  placeholder="e.g. 3700"
+                  value={recordAmount}
+                  onChange={(e) => setRecordAmount(e.target.value)}
+                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 font-bold text-[#29352D]"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-[#29352D] mb-1">Payment Mode:</label>
+                <select
+                  value={recordMode}
+                  onChange={(e) => setRecordMode(e.target.value as PaymentMode)}
+                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"
+                >
+                  <option value="UPI">UPI</option>
+                  <option value="NEFT">NEFT</option>
+                  <option value="IMPS">IMPS</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Cash">Cash</option>
+                  <option value="Card">Card</option>
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-[#29352D] mb-1">
+                  UTR / Cheque Ref {recordMode === 'Cash' ? '(Optional)' : '(Required)'}:
+                </label>
+                <input
+                  type="text"
+                  required={recordMode !== 'Cash'}
+                  placeholder="e.g. UTR123456"
+                  value={recordRef}
+                  onChange={(e) => setRecordRef(e.target.value)}
+                  className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 font-mono text-[#29352D]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-[#29352D] mb-1">Remarks:</label>
+              <input
+                type="text"
+                placeholder="Optional receipt remarks..."
+                value={recordRemarks}
+                onChange={(e) => setRecordRemarks(e.target.value)}
+                className="w-full rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-[#29352D]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-[#E8E1D4]">
+              <button
+                type="button"
+                onClick={() => handleSelectSubTab('receipts')}
+                className="px-4 py-2.5 rounded-xl border border-[#E8E1D4] text-[#29352D] hover:bg-neutral-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={recordingPayment || !recordPropertyId || toAmt(recordAmount) <= 0}
+                className="px-6 py-2.5 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A] shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                {recordingPayment ? 'Recording Payment…' : 'Record Payment'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* SUBTAB 1: RESIDENT "PAY NOW" FLOW (SECTION 12) */}
       {subTab === 'pay_now' && (
@@ -254,7 +581,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                         </div>
                         <div className="text-right">
                           <span className="font-bold text-sm text-[#29352D]">
-                            ₹{inv.Outstanding_Amount.toFixed(2)}
+                            ₹{fmtAmt(inv.Outstanding_Amount)}
                           </span>
                           <span className="block text-[10px] text-red-600 font-semibold">
                             {inv.Invoice_Status}
@@ -407,17 +734,17 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                       {rec.Received_Mode} • {rec.Received_Reference}
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                      ₹{rec.Received_Amount.toFixed(2)}
+                      ₹{fmtAmt(rec.Received_Amount)}
                     </td>
                     <td className="px-4 py-3 text-right font-semibold text-amber-700">
-                      ₹{rec.Unallocated_Amount.toFixed(2)}
+                      ₹{fmtAmt(rec.Unallocated_Amount)}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span
                         className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                           rec.Receipt_Status === 'Confirmed'
                             ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-amber-100 text-amber-800 animate-pulse'
+                            : 'bg-amber-100 text-amber-800'
                         }`}
                       >
                         {rec.Receipt_Status}
@@ -444,9 +771,9 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                           {residentScopedAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).map(a => (
                             <span key={a.Allocation_ID} className="rounded-lg border border-[#E8E1D4] bg-white px-3 py-2 text-[11px]">
                               <strong className="block text-[#29352D]">{a.Invoice_Number}</strong>
-                              <span className="block text-gray-500">Invoice: ₹{Number(a.Invoice_Amount || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                              <span className="block text-emerald-700">Allocated: ₹{Number(a.Allocated_Amount || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                              <span className="block text-amber-700">Balance After: ₹{Number(a.Outstanding_After || 0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                              <span className="block text-gray-500">Invoice: ₹{toAmt(a.Invoice_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                              <span className="block text-emerald-700">Allocated: ₹{toAmt(a.Allocated_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                              <span className="block text-amber-700">Balance After: ₹{toAmt(a.Outstanding_After).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                             </span>
                           ))}
                         </div>
@@ -455,6 +782,13 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                   )}
                   </React.Fragment>
                 ))}
+                {residentScopedReceipts.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-gray-500 italic">
+                      No receipts recorded yet.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -492,16 +826,23 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                     <td className="px-4 py-3 font-bold text-[#29352D]">{a.Invoice_Number}</td>
                     <td className="px-4 py-3 font-mono text-[#536B4D]">{a.PropertyID}</td>
                     <td className="px-4 py-3 text-gray-600">{formatDateDisplay(a.Allocation_Date, '—')}</td>
-                    <td className="px-4 py-3 text-right">₹{a.Invoice_Amount.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right text-gray-500">₹{a.Outstanding_Before.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-right">₹{fmtAmt(a.Invoice_Amount)}</td>
+                    <td className="px-4 py-3 text-right text-gray-500">₹{fmtAmt(a.Outstanding_Before)}</td>
                     <td className="px-4 py-3 text-right font-bold text-emerald-700">
-                      +₹{a.Allocated_Amount.toFixed(2)}
+                      +₹{fmtAmt(a.Allocated_Amount)}
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                      ₹{a.Outstanding_After.toFixed(2)}
+                      ₹{fmtAmt(a.Outstanding_After)}
                     </td>
                   </tr>
                 ))}
+                {billAllocations.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-8 text-center text-gray-500 italic">
+                      No bill-wise allocations recorded yet.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -517,7 +858,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
           </div>
 
           <div className="p-6 space-y-4">
-            {receipts.filter((r) => r.Receipt_Status === 'Confirmed' && r.Unallocated_Amount > 0).map((rec) => (
+            {advanceReceipts.map((rec) => (
               <div
                 key={rec.Transaction_ID}
                 className="flex items-center justify-between p-4 rounded-xl bg-amber-50/60 border border-amber-200 text-xs"
@@ -525,16 +866,16 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 <div>
                   <span className="font-bold text-amber-900 text-sm">Flat {rec.Flat_No} • {rec.Owner_Name}</span>
                   <p className="text-gray-600 mt-0.5">
-                    Receipt: {rec.Receipt_Number} | Received: ₹{rec.Received_Amount.toFixed(2)} via {rec.Received_Mode}
+                    Receipt: {rec.Receipt_Number || rec.Transaction_ID} | Received: ₹{fmtAmt(rec.Received_Amount)} via {rec.Received_Mode}
                   </p>
                 </div>
                 <div className="text-right">
                   <span className="text-[10px] text-gray-500 block">Available Advance Credit</span>
-                  <span className="text-lg font-bold text-amber-900">₹{rec.Unallocated_Amount.toFixed(2)}</span>
+                  <span className="text-lg font-bold text-amber-900">₹{fmtAmt(rec.Unallocated_Amount)}</span>
                 </div>
               </div>
             ))}
-            {receipts.filter((r) => r.Unallocated_Amount > 0).length === 0 && (
+            {advanceReceipts.length === 0 && (
               <p className="text-xs text-gray-500 italic text-center p-6">No advance balances remaining.</p>
             )}
           </div>
@@ -549,7 +890,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
               Confirm Receipt & Allocate / পেমেন্ট যাচাই ও সমন্বয়
             </h3>
             <p className="text-[#29352D]/80">
-              Confirm bank realization of <strong>₹{confirmingReceipt.Received_Amount.toFixed(2)}</strong> from{' '}
+              Confirm bank realization of <strong>₹{fmtAmt(confirmingReceipt.Received_Amount)}</strong> from{' '}
               <strong>{confirmingReceipt.Owner_Name}</strong> (Flat {confirmingReceipt.Flat_No}).
             </p>
             <div className="p-3 rounded-xl bg-[#F7F4EC] space-y-1 font-mono text-[11px]">

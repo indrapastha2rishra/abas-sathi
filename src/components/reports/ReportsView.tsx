@@ -384,14 +384,22 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   );
 
   const ownershipDuesRows = useMemo(() => {
-    if (activeReport === 'ownership_due' && Array.isArray(serverReport?.data)) {
+    if (
+      activeReport === 'ownership_due' &&
+      serverReport?.reportType === 'ownershipOutstanding' &&
+      Array.isArray(serverReport?.data)
+    ) {
       return serverReport.data;
     }
     return clientOwnershipDues.data;
   }, [activeReport, serverReport, clientOwnershipDues.data]);
 
   const ownershipDuesSummary = useMemo(() => {
-    if (activeReport === 'ownership_due' && serverReport?.summary) {
+    if (
+      activeReport === 'ownership_due' &&
+      serverReport?.reportType === 'ownershipOutstanding' &&
+      serverReport?.summary
+    ) {
       return serverReport.summary;
     }
     return clientOwnershipDues.summary;
@@ -1136,7 +1144,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                 Ownership-period-wise Outstanding Report / মালিকানা মেয়াদভিত্তিক বকেয়া
               </h3>
               <p className="text-xs text-gray-500">
-                Preserves liability separation across flat ownership transfers using Ownership_ID
+                Preserves liability separation across flat ownership transfers using Ownership_ID • Paid linked to Confirmed Fund Inflow Register &amp; Bill Wise Details
               </p>
             </div>
             <button
@@ -1232,7 +1240,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
             </table>
           </div>
           <p className="text-[11px] text-amber-700">
-            {serverReport?.note || 'Outstanding is grouped by the Ownership_ID saved on each invoice.'}
+            {(serverReport?.reportType === 'ownershipOutstanding' && serverReport?.note) ||
+              'Outstanding is grouped by Ownership_ID with Paid amounts linked to Confirmed receipts in Fund Inflow Register and allocations in Bill Wise Details.'}
           </p>
         </div>
       )}

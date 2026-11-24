@@ -125,6 +125,7 @@ interface AppContextType {
     bankAccount: string;
     remarks?: string;
     proofFileName?: string;
+    propertyId?: string;
   }) => Promise<FundInflowRegister>;
 
   confirmAndAllocatePayment: (receiptId: string, customAllocations?: { invoiceId: string; amount: number }[]) => Promise<FundInflowRegister>;
@@ -426,7 +427,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
           value = basisAliases[basis] || value;
         }
-        if (typeof value === 'string' && value.trim() !== '' && /^-?\d+(\\.\d+)?$/.test(value.trim())) {
+        if (typeof value === 'string' && value.trim() !== '' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
           value = Number(value);
         }
         out[normalized] = value;
@@ -878,16 +879,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Submit resident payment to the server. No local receipt is created before confirmation.
   const submitResidentPayment = async (params: {
     invoiceIds: string[]; amount: number; mode: PaymentMode; reference: string; bankAccount: string;
-    remarks?: string; proofFileName?: string;
+    remarks?: string; proofFileName?: string; propertyId?: string;
   }): Promise<FundInflowRegister> => {
-    const prop = residentProperty || properties[0];
+    const prop =
+      (params.propertyId
+        ? properties.find(p => String(p.PropertyID || '').trim() === String(params.propertyId).trim())
+        : null) ||
+      residentProperty ||
+      properties[0];
     if (!prop) throw new Error('No property is linked to this account.');
-    const ownership = ownerships.find(o => o.PropertyID === prop.PropertyID && o.Ownership_Status === 'Current');
+    const ownership =
+      ownerships.find(
+        o =>
+          String(o.PropertyID || '').trim() === String(prop.PropertyID || '').trim() &&
+          String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
+      ) ||
+      ownerships.find(o => String(o.PropertyID || '').trim() === String(prop.PropertyID || '').trim());
     if (!ownership) throw new Error('Current ownership record is not available.');
     const result: any = await apiCall('submitPayment', {
       propertyId: prop.PropertyID, ownershipId: ownership.Ownership_ID,
       ownerId: ownership.OwnerID, amount: params.amount, mode: params.mode, reference: params.reference,
-      bankAccount: params.bankAccount, remarks: params.remarks || `Submitted against invoices: ${params.invoiceIds.join(', ')}`,
+      bankAccount: params.bankAccount, remarks: params.remarks || (params.invoiceIds.length ? `Submitted against invoices: ${params.invoiceIds.join(', ')}` : 'Society payment recorded'),
       fileReference: params.proofFileName || '', invoiceIds: params.invoiceIds,
     });
     const receipt = result.data?.receipt as FundInflowRegister | undefined;
@@ -905,7 +917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let allocations = customAllocations || [];
     if (!customAllocations) {
       let remaining = Number(receipt.Received_Amount || 0);
-      allocations = invoices.filter(i => i.PropertyID === receipt.PropertyID && i.Ownership_ID === receipt.Ownership_ID && i.Outstanding_Amount > 0)
+      allocations = invoices.filter(i => i.PropertyID === receipt.PropertyID && i.Ownership_ID === receipt.Ownership_ID && Number(i.Outstanding_Amount || 0) > 0)
         .sort((a,b) => String(a.Due_Date).localeCompare(String(b.Due_Date)))
         .map(i => { const amount = Math.min(remaining, Number(i.Outstanding_Amount || 0)); remaining -= amount; return { invoiceId: i.InvoiceID, amount }; })
         .filter(x => x.amount > 0);

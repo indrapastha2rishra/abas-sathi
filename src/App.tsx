@@ -31,6 +31,42 @@ import { ExpenseVoucherModal } from './components/modals/ExpenseVoucherModal';
 import { AdminUsersView, ProfileView } from './components/settings/AccountViews';
 import { FinancialTransactionsView } from './components/reports/FinancialTransactionsView';
 
+class ViewErrorBoundary extends React.Component<
+  { resetKey: string; children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { resetKey: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'Unexpected view error.' };
+  }
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false, message: '' });
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-2xl border border-red-200 bg-white p-6 text-center space-y-3">
+          <h2 className="text-base font-bold text-red-700">Unable to display this view</h2>
+          <p className="text-xs text-gray-600">{this.state.message}</p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, message: '' })}
+            className="px-4 py-2 rounded-xl bg-[#536B4D] text-white text-xs font-semibold cursor-pointer"
+          >
+            Retry View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const MainLayout: React.FC = () => {
   const { activeTab, activeRole, canAccessTab, isResidentMode, actualRole, permissionsReady } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -155,7 +191,7 @@ const MainLayout: React.FC = () => {
         {/* Main Content Area */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 max-w-7xl mx-auto w-full pb-20 md:pb-8 overflow-x-hidden">
           {isResidentMode && <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-800">Resident Preview Mode — actual role remains {actualRole}; resident-scoped view is active.</div>}
-          {renderContent()}
+          <ViewErrorBoundary resetKey={`${activeTab}:${activeRole}`}>{renderContent()}</ViewErrorBoundary>
         </main>
       </div>
 

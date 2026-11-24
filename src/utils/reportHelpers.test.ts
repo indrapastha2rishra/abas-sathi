@@ -154,3 +154,53 @@ test('resolveFYRangeForMonth matches Financial Year Master or Indian FY fallback
   assert.equal(fallback.startDate, '2024-04-01');
   assert.equal(fallback.endDate, '2025-03-31');
 });
+
+test('computeOwnershipOutstandingClient links Paid to Confirmed Fund Inflow Register and Bill Wise Details', () => {
+  const res = computeOwnershipOutstandingClient({
+    invoices: [
+      {
+        InvoiceID: 'I1',
+        Invoice_Number: 'INV-101',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-1',
+        OwnerID: 'O1',
+        Owner_Name: 'Owner One',
+        Flat_Number: '101',
+        Net_Charge_Amount: 3700,
+        Paid_Amount: 0,
+        Outstanding_Amount: 3700,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      {
+        InvoiceID: 'I2',
+        Invoice_Number: 'INV-102',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-1',
+        OwnerID: 'O1',
+        Owner_Name: 'Owner One',
+        Flat_Number: '101',
+        Net_Charge_Amount: 3700,
+        Paid_Amount: 0,
+        Outstanding_Amount: 3700,
+        Invoice_Status: 'Unpaid',
+      } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'TXN-1', Receipt_Status: 'Confirmed', Received_Amount: 3700 } as any,
+      { Transaction_ID: 'TXN-2', Receipt_Status: 'Pending Verification', Received_Amount: 1500 } as any,
+    ],
+    billAllocations: [
+      { Allocation_ID: 'ALL-1', Transaction_ID: 'TXN-1', InvoiceID: 'I1', Allocated_Amount: 3700 } as any,
+      { Allocation_ID: 'ALL-2', Transaction_ID: 'TXN-2', InvoiceID: 'I2', Allocated_Amount: 1500 } as any,
+    ],
+    ownerships: [{ Ownership_ID: 'OSH-1', Ownership_Status: 'Current', Ownership_Start_Date: '2025-04-01' } as any],
+    properties: [],
+    owners: [],
+  });
+  assert.equal(res.data.length, 1);
+  assert.equal(res.data[0].Total_Billed, 7400);
+  assert.equal(res.data[0].Total_Paid, 3700);
+  assert.equal(res.data[0].Outstanding, 3700);
+  assert.equal(res.summary.totalOutstanding, 3700);
+});
+

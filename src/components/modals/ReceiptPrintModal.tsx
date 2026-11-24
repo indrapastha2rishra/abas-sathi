@@ -86,7 +86,7 @@ export const ReceiptPrintModal: React.FC = () => {
           <div className="my-6 p-5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs md:text-sm leading-relaxed">
             <p>
               Received with thanks from <strong>{previewReceipt.Owner_Name}</strong> (Flat No: <strong>{previewReceipt.Flat_No}</strong>, Property ID: {previewReceipt.PropertyID})
-              the sum of <strong className="text-base text-emerald-900">₹{previewReceipt.Received_Amount.toLocaleString('en-IN')}</strong>{' '}
+              the sum of <strong className="text-base text-emerald-900">₹{Number(previewReceipt.Received_Amount || 0).toLocaleString('en-IN')}</strong>{' '}
               (Rupees in figures) via <strong>{previewReceipt.Received_Mode}</strong> (Ref: {previewReceipt.Received_Reference}).
             </p>
             {previewReceipt.Remarks && (
@@ -115,10 +115,10 @@ export const ReceiptPrintModal: React.FC = () => {
                     {allocations.map((a) => (
                       <tr key={a.Allocation_ID}>
                         <td className="px-3 py-2 font-medium">{a.Invoice_Number}</td>
-                        <td className="px-3 py-2 text-right">₹{a.Invoice_Amount.toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right">₹{a.Outstanding_Before.toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right font-bold text-emerald-700">₹{a.Allocated_Amount.toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right">₹{a.Outstanding_After.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{Number(a.Invoice_Amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{Number(a.Outstanding_Before || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-emerald-700">₹{Number(a.Allocated_Amount || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{Number(a.Outstanding_After || 0).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -130,10 +130,10 @@ export const ReceiptPrintModal: React.FC = () => {
               </p>
             )}
 
-            {previewReceipt.Unallocated_Amount > 0 && (
+            {Number(previewReceipt.Unallocated_Amount || 0) > 0 && (
               <div className="mt-3 flex justify-between items-center text-xs p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
                 <span className="font-medium">Unallocated Advance Balance (to be adjusted against future bills):</span>
-                <span className="font-bold text-sm">₹{previewReceipt.Unallocated_Amount.toFixed(2)}</span>
+                <span className="font-bold text-sm">₹{Number(previewReceipt.Unallocated_Amount || 0).toFixed(2)}</span>
               </div>
             )}
           </div>
