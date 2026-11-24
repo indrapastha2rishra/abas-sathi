@@ -47,12 +47,34 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     cancelInvoice,
     setPreviewInvoice,
     activeRole,
+    setActiveTab,
+    canAccessTab,
     hasPermission,
     t,
   } = useApp();
 
   const residentSafeTab = activeRole === 'Resident' ? 'register' : initialTab;
   const [activeSubTab, setActiveSubTab] = useState<'register' | 'generate' | 'rates' | 'outstanding'>(residentSafeTab);
+
+  useEffect(() => {
+    setActiveSubTab(activeRole === 'Resident' ? 'register' : initialTab);
+  }, [initialTab, activeRole]);
+
+  const handleSelectSubTab = (nextTab: 'register' | 'generate' | 'rates' | 'outstanding') => {
+    const safeTab = activeRole === 'Resident' ? 'register' : nextTab;
+    setActiveSubTab(safeTab);
+    if (activeRole === 'Resident') return;
+    const navTabMap: Record<'register' | 'generate' | 'rates' | 'outstanding', string> = {
+      generate: 'invoices_generate',
+      register: 'invoices_register',
+      rates: 'invoices_rates',
+      outstanding: 'invoices_outstanding',
+    };
+    const targetNavTab = navTabMap[safeTab];
+    if (canAccessTab(targetNavTab)) {
+      setActiveTab(targetNavTab);
+    }
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
 
@@ -100,7 +122,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     setTimeout(() => {
       setSuccessMessage('');
       setPreviewInvoice(newInv);
-      setActiveSubTab('register');
+      handleSelectSubTab('register');
     }, 1200);
     } catch (error:any) { window.alert(error?.message || 'Invoice could not be saved. Please retry.'); }
   };
@@ -141,7 +163,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
 
         <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
           <button
-            onClick={() => setActiveSubTab('register')}
+            onClick={() => handleSelectSubTab('register')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'register'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -152,7 +174,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
           </button>
           {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_Create') && (
             <button
-              onClick={() => setActiveSubTab('generate')}
+              onClick={() => handleSelectSubTab('generate')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 activeSubTab === 'generate'
                   ? 'bg-white text-[#536B4D] shadow-xs'
@@ -164,7 +186,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
             </button>
           )}
           {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
-            onClick={() => setActiveSubTab('rates')}
+            onClick={() => handleSelectSubTab('rates')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'rates'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -174,7 +196,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
             Rate Master
           </button>}
           {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
-            onClick={() => setActiveSubTab('outstanding')}
+            onClick={() => handleSelectSubTab('outstanding')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'outstanding'
                 ? 'bg-white text-red-700 shadow-xs'
@@ -463,7 +485,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                   Calculation Snapshot Preview
                 </span>
                 <p className="text-xs text-[#29352D] mt-0.5">
-                  Base Charge ({previewArea} sq.ft × ₹{currentRate?.Rate_Per_SqFt_Unit}): <strong>₹{baseCharge.toFixed(2)}</strong>
+                  Base Charge ({previewArea} sq.ft × ₹{Number(currentRate?.Rate_Per_SqFt_Unit || 0)}): <strong>₹{baseCharge.toFixed(2)}</strong>
                 </p>
                 <p className="text-[11px] text-gray-500">
                   Late Fee (+₹{lateFee}) - Discount (-₹{discount}) + Adjustment (₹{adjustment})
@@ -490,7 +512,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
             <div className="flex justify-end gap-3 pt-3 border-t border-[#E8E1D4]">
               <button
                 type="button"
-                onClick={() => setActiveSubTab('register')}
+                onClick={() => handleSelectSubTab('register')}
                 className="rounded-xl border border-[#E8E1D4] px-4 py-2.5 text-xs font-semibold text-[#29352D] hover:bg-neutral-100 transition-colors cursor-pointer"
               >
                 Cancel
@@ -541,7 +563,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                     <td className="px-4 py-3 font-medium">{rate.Calculation_Method}</td>
                     <td className="px-4 py-3 text-gray-600">{rate.Area_Basis}</td>
                     <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                      ₹{rate.Rate_Per_SqFt_Unit.toFixed(2)}
+                      ₹{Number(rate.Rate_Per_SqFt_Unit || 0).toFixed(2)}
                     </td>
                     <td className="px-4 py-3 text-gray-500">{formatDateDisplay(rate.Effective_From, '—')}</td>
                     <td className="px-4 py-3 text-gray-600">{rate.Approved_By}</td>

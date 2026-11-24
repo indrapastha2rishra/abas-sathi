@@ -19,7 +19,11 @@ import {
 } from 'lucide-react';
 import { ExpenseRegister, PaymentMode } from '../../types/database';
 
-export const ExpensesView: React.FC = () => {
+interface Props {
+  initialTab?: 'register' | 'add' | 'categories' | 'pending';
+}
+
+export const ExpensesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   const {
     expenses,
     expenseCategories,
@@ -30,11 +34,30 @@ export const ExpensesView: React.FC = () => {
     uploadPrivateFile,
     setPreviewVoucher,
     activeRole,
+    setActiveTab,
+    canAccessTab,
     hasPermission,
     t,
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'register' | 'add' | 'categories' | 'pending'>('register');
+  const [activeSubTab, setActiveSubTab] = useState<'register' | 'add' | 'categories' | 'pending'>(initialTab);
+
+  useEffect(() => {
+    setActiveSubTab(initialTab);
+  }, [initialTab]);
+
+  const handleSelectSubTab = (nextTab: 'register' | 'add' | 'categories' | 'pending') => {
+    setActiveSubTab(nextTab);
+    const navTabMap: Partial<Record<'register' | 'add' | 'categories' | 'pending', string>> = {
+      add: 'expenses_add',
+      register: 'expenses_register',
+      categories: 'expenses_categories',
+    };
+    const targetNavTab = navTabMap[nextTab];
+    if (targetNavTab && canAccessTab(targetNavTab)) {
+      setActiveTab(targetNavTab);
+    }
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
 
@@ -91,7 +114,7 @@ export const ExpensesView: React.FC = () => {
     setTimeout(() => {
       setFormSuccess('');
       setPreviewVoucher(newExp);
-      setActiveSubTab('register');
+      handleSelectSubTab('register');
     }, 1200);
     } catch (error:any) { window.alert(error?.message || 'Expense could not be saved.'); }
     finally { setSavingExpense(false); }
@@ -99,9 +122,9 @@ export const ExpensesView: React.FC = () => {
 
   const filteredExpenses = expenses.filter((exp) => {
     const matchesSearch =
-      exp.Voucher_No.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      exp.Payee_Name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      exp.Particulars.toLowerCase().includes(searchTerm.toLowerCase());
+      String(exp.Voucher_No || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(exp.Payee_Name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(exp.Particulars || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesCat = categoryFilter === 'All' || exp.Expense_Category === categoryFilter;
 
@@ -132,7 +155,7 @@ export const ExpensesView: React.FC = () => {
 
         <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
           <button
-            onClick={() => setActiveSubTab('register')}
+            onClick={() => handleSelectSubTab('register')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
               activeSubTab === 'register' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
             }`}
@@ -140,7 +163,7 @@ export const ExpensesView: React.FC = () => {
             Expense Register ({expenses.length})
           </button>
           {hasPermission('Expenses','Can_Create') && <button
-            onClick={() => setActiveSubTab('add')}
+            onClick={() => handleSelectSubTab('add')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1 ${
               activeSubTab === 'add' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
             }`}
@@ -148,16 +171,16 @@ export const ExpensesView: React.FC = () => {
             <PlusCircle className="h-3.5 w-3.5" />
             Add Expense
           </button>}
-          {activeRole==='Admin' && <button
-            onClick={() => setActiveSubTab('categories')}
+          {(activeRole === 'Admin' || hasPermission('Expenses', 'Can_View')) && <button
+            onClick={() => handleSelectSubTab('categories')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
               activeSubTab === 'categories' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
-            Categories Master (13)
+            Categories Master ({expenseCategories.length})
           </button>}
           {hasPermission('Expenses','Can_Approve') && <button
-            onClick={() => setActiveSubTab('pending')}
+            onClick={() => handleSelectSubTab('pending')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
               activeSubTab === 'pending' ? 'bg-white text-amber-700 shadow-xs' : 'text-[#29352D]/70'
             }`}
@@ -430,7 +453,7 @@ export const ExpensesView: React.FC = () => {
             <div className="flex justify-end gap-3 pt-3 border-t border-[#E8E1D4]">
               <button
                 type="button"
-                onClick={() => setActiveSubTab('register')}
+                onClick={() => handleSelectSubTab('register')}
                 className="px-4 py-2.5 rounded-xl border border-[#E8E1D4] text-[#29352D] hover:bg-neutral-100"
               >
                 Cancel

@@ -91,7 +91,17 @@ const MainLayout: React.FC = () => {
 
     // 6. Expenses
     if (activeTab.startsWith('expenses')) {
-      return <ExpensesView />;
+      return (
+        <ExpensesView
+          initialTab={
+            activeTab === 'expenses_add'
+              ? 'add'
+              : activeTab === 'expenses_categories'
+              ? 'categories'
+              : 'register'
+          }
+        />
+      );
     }
 
     // Financial Transactions

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatDateDisplay } from '../../utils/dateFormat';
 import {
@@ -19,6 +19,36 @@ import {
   Home,
 } from 'lucide-react';
 
+type PropertySubTab = 'all' | 'owners' | 'history' | 'tenants';
+
+const resolvePropertySubTab = (subtab?: string): PropertySubTab => {
+  switch (subtab) {
+    case 'properties_owners':
+      return 'owners';
+    case 'properties_history':
+      return 'history';
+    case 'properties_tenants':
+      return 'tenants';
+    case 'properties_all':
+    default:
+      return 'all';
+  }
+};
+
+const tabForPropertySubTab = (sub: PropertySubTab): string => {
+  switch (sub) {
+    case 'owners':
+      return 'properties_owners';
+    case 'history':
+      return 'properties_history';
+    case 'tenants':
+      return 'properties_tenants';
+    case 'all':
+    default:
+      return 'properties_all';
+  }
+};
+
 const formatAreaFromDatabase = (value: unknown): string => {
   if (value === null || value === undefined || value === '') return '—';
   const numeric = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
@@ -27,28 +57,34 @@ const formatAreaFromDatabase = (value: unknown): string => {
 
 
 export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'properties_all' }) => {
-  const { properties, owners, ownerships, tenants, t } = useApp();
+  const { properties, owners, ownerships, tenants, setActiveTab, canAccessTab, t } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'all' | 'owners' | 'history' | 'tenants'>(
-    subtab === 'properties_owners'
-      ? 'owners'
-      : subtab === 'properties_history'
-      ? 'history'
-      : subtab === 'properties_tenants'
-      ? 'tenants'
-      : 'all'
-  );
+  const [activeSubTab, setActiveSubTab] = useState<PropertySubTab>(() => resolvePropertySubTab(subtab));
+
+  useEffect(() => {
+    setActiveSubTab(resolvePropertySubTab(subtab));
+  }, [subtab]);
+
+  const handleSelectSubTab = (next: PropertySubTab) => {
+    setActiveSubTab(next);
+    const targetTab = tabForPropertySubTab(next);
+    if (canAccessTab(targetTab)) {
+      setActiveTab(targetTab);
+    }
+  };
 
   const [searchTerm, setSearchTerm] = useState('');
   const [towerFilter, setTowerFilter] = useState('All');
   const [occupancyFilter, setOccupancyFilter] = useState('All');
+  const normalizedQuery = searchTerm.trim().toLowerCase();
 
   // Filter properties
   const filteredProperties = properties.filter((p) => {
     const matchesSearch =
-      p.Flat_No.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.PropertyID.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.Block_Tower.toLowerCase().includes(searchTerm.toLowerCase());
+      !normalizedQuery ||
+      String(p.Flat_No || '').toLowerCase().includes(normalizedQuery) ||
+      String(p.PropertyID || '').toLowerCase().includes(normalizedQuery) ||
+      String(p.Block_Tower || '').toLowerCase().includes(normalizedQuery);
     const matchesTower = towerFilter === 'All' || p.Block_Tower === towerFilter;
     const matchesOcc = occupancyFilter === 'All' || p.Occupancy_Status === occupancyFilter;
     return matchesSearch && matchesTower && matchesOcc;
@@ -56,12 +92,43 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
 
   // Filter owners
   const filteredOwners = owners.filter((o) => {
+    if (!normalizedQuery) return true;
     return (
-      o.Owner_Name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      o.Mobile_No.includes(searchTerm) ||
-      o.Email_ID.toLowerCase().includes(searchTerm.toLowerCase())
+      String(o.Owner_Name || '').toLowerCase().includes(normalizedQuery) ||
+      String(o.OwnerID || '').toLowerCase().includes(normalizedQuery) ||
+      String(o.Mobile_No || '').toLowerCase().includes(normalizedQuery) ||
+      String(o.Email_ID || '').toLowerCase().includes(normalizedQuery)
     );
   });
+
+  // Filter ownership history
+  const filteredOwnerships = ownerships.filter((osh) => {
+    if (!normalizedQuery) return true;
+    const property = properties.find((p) => p.PropertyID === osh.PropertyID);
+    const owner = owners.find((o) => o.OwnerID === osh.OwnerID);
+    return (
+      String(osh.Ownership_ID || '').toLowerCase().includes(normalizedQuery) ||
+      String(osh.PropertyID || '').toLowerCase().includes(normalizedQuery) ||
+      String(property?.Flat_No || '').toLowerCase().includes(normalizedQuery) ||
+      String(owner?.Owner_Name || '').toLowerCase().includes(normalizedQuery) ||
+      String(osh.Deed_No || '').toLowerCase().includes(normalizedQuery)
+    );
+  });
+
+  // Filter tenants
+  const filteredTenants = tenants.filter((ten) => {
+    if (!normalizedQuery) return true;
+    const property = properties.find((p) => p.PropertyID === ten.PropertyID);
+    return (
+      String(ten.Tenant_ID || '').toLowerCase().includes(normalizedQuery) ||
+      String(ten.Tenant_Name || '').toLowerCase().includes(normalizedQuery) ||
+      String(ten.PropertyID || '').toLowerCase().includes(normalizedQuery) ||
+      String(property?.Flat_No || '').toLowerCase().includes(normalizedQuery) ||
+      String(ten.Mobile_No || '').toLowerCase().includes(normalizedQuery)
+    );
+  });
+
+  const towerOptions = Array.from(new Set(properties.map((p) => String(p.Block_Tower || '').trim()).filter(Boolean))).sort();
 
   return (
     <div className="space-y-6">
@@ -80,7 +147,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
         {/* Sub-tab pills */}
         <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
           <button
-            onClick={() => setActiveSubTab('all')}
+            onClick={() => handleSelectSubTab('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'all'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -90,7 +157,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
             All Flats ({properties.length})
           </button>
           <button
-            onClick={() => setActiveSubTab('owners')}
+            onClick={() => handleSelectSubTab('owners')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'owners'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -100,7 +167,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
             Owners ({owners.length})
           </button>
           <button
-            onClick={() => setActiveSubTab('history')}
+            onClick={() => handleSelectSubTab('history')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'history'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -110,7 +177,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
             Ownership History ({ownerships.length})
           </button>
           <button
-            onClick={() => setActiveSubTab('tenants')}
+            onClick={() => handleSelectSubTab('tenants')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               activeSubTab === 'tenants'
                 ? 'bg-white text-[#536B4D] shadow-xs'
@@ -143,8 +210,9 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
               className="rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-2 text-xs font-medium text-[#29352D] focus:border-[#536B4D] focus:outline-hidden cursor-pointer"
             >
               <option value="All">All Towers</option>
-              <option value="Block A">Block A</option>
-              <option value="Block B">Block B</option>
+              {towerOptions.map((tower) => (
+                <option key={tower} value={tower}>{tower}</option>
+              ))}
             </select>
 
             <select
@@ -280,7 +348,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {ownerships.map((osh) => {
+                {filteredOwnerships.map((osh) => {
                   const property = properties.find((p) => p.PropertyID === osh.PropertyID);
                   const owner = owners.find((o) => o.OwnerID === osh.OwnerID);
                   return (
@@ -326,7 +394,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {tenants.map((ten) => (
+                {filteredTenants.map((ten) => (
                   <tr key={ten.Tenant_ID} className="hover:bg-neutral-50 transition-colors">
                     <td className="px-4 py-3 font-mono text-gray-500">{ten.Tenant_ID}</td>
                     <td className="px-4 py-3 font-bold text-[#536B4D]">{ten.PropertyID}</td>
