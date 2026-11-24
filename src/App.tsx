@@ -30,10 +30,12 @@ import { AdminUsersView, ProfileView } from './components/settings/AccountViews'
 import { FinancialTransactionsView } from './components/reports/FinancialTransactionsView';
 
 const MainLayout: React.FC = () => {
-  const { activeTab, activeRole, canAccessTab, isResidentMode, actualRole } = useApp();
+  const { activeTab, activeRole, canAccessTab, isResidentMode, actualRole, rolePermissionsLoading, rolePermissionsError, refreshRolePermissions } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const renderContent = () => {
+    if (rolePermissionsLoading) return <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center"><div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-[#536B4D]"/><h2 className="font-semibold text-slate-700">Loading access permissions…</h2><p className="text-sm text-slate-500 mt-1">Please wait while your role permissions are verified.</p></div>;
+    if (rolePermissionsError) return <div className="rounded-2xl border border-amber-200 bg-white p-6 md:p-10 text-center space-y-2"><h2 className="text-lg font-bold text-amber-700">Unable to Load Permissions</h2><p className="text-sm text-slate-600">{rolePermissionsError}. Access is temporarily unavailable; no permission is granted until verification succeeds.</p><button onClick={()=>refreshRolePermissions()} className="mt-3 px-4 py-2 rounded-lg bg-[#536B4D] text-white text-sm font-semibold">Retry</button></div>;
     if (!canAccessTab(activeTab)) return <div className="rounded-2xl border border-red-200 bg-white p-6 md:p-10 text-center space-y-2"><h2 className="text-lg font-bold text-red-700">Access Denied</h2><p className="text-sm text-slate-600">Role_Permission configuration does not allow viewing this module. Missing permission defaults to DENY.</p><button onClick={()=>window.location.replace(window.location.pathname)} className="mt-3 px-4 py-2 rounded-lg bg-[#536B4D] text-white text-sm font-semibold">Return to Dashboard</button></div>;
     if (activeTab === 'profile') return <ProfileView />;
     if (activeTab === 'settings_users') return <AdminUsersView />;

@@ -53,6 +53,8 @@ interface AppContextType {
   hasPermission: (moduleName: string, action?: PermissionAction) => boolean;
   canAccessTab: (tab: string) => boolean;
   rolePermissions: RolePermissionRecord[];
+  rolePermissionsLoading: boolean;
+  rolePermissionsError: string;
   refreshRolePermissions: () => Promise<void>;
   deleteRolePermission: (permissionId: string) => Promise<void>;
   setActiveRole: (role: UserRole) => void;
@@ -173,6 +175,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const actualRole: UserRole = currentUser.Role || 'Resident';
   const [isResidentMode, setIsResidentMode] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionRecord[]>([]);
+  const [rolePermissionsLoading, setRolePermissionsLoading] = useState(true);
+  const [rolePermissionsError, setRolePermissionsError] = useState('');
 
   // Database collections
   const [properties, setProperties] = useState<PropertyMaster[]>([]);
@@ -494,6 +498,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('dashboard');
     return true;
   };
+  // Fetch role permissions independently of dashboard/module data. The former
+  // implementation waited for all dashboard datasets before setting permissions,
+  // causing a transient (sometimes prolonged) DENY on first login.
+  useEffect(() => {
+    let cancelled = false;
+    const baseUrl = googleConfig.appsScriptWebAppUrl.trim();
+    let session: any = {};
+    try { session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
+    setRolePermissionsLoading(true);
+    setRolePermissionsError('');
+    if (!session.token || !baseUrl) {
+      setRolePermissions([]);
+      setRolePermissionsLoading(false);
+      setRolePermissionsError('Permission configuration could not be loaded: session or backend URL is missing.');
+      return () => { cancelled = true; };
+    }
+    (async () => {
+      try {
+        const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body: JSON.stringify({action: actualRole === 'Admin' && !isResidentMode ? 'getModuleData' : 'getMyPermissions', token:session.token, module:'rolePermissions', page:1, limit:200, viewAsResident:isResidentMode}) });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (result.status !== 'success' || !Array.isArray(result.data)) throw new Error(result.message || 'Invalid permission response');
+        if (!cancelled) { setRolePermissions(result.data); setRolePermissionsLoading(false); }
+      } catch (err:any) {
+        if (!cancelled) { setRolePermissions([]); setRolePermissionsError(err?.message || 'Permission fetch failed'); setRolePermissionsLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [googleConfig.appsScriptWebAppUrl, actualRole, isResidentMode]);
+
   const hasPermission = (moduleName: string, action: PermissionAction = 'Can_View') => {
     const effectiveRole = isResidentMode ? 'Resident' : actualRole;
     return permissionGranted(rolePermissions, effectiveRole, moduleName, action);
@@ -506,10 +541,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return moduleName ? hasPermission(moduleName, 'Can_View') && hasPermission(moduleName, actionForTab(tab)) : false;
   };
   const refreshRolePermissions = async () => {
-    const saved:any = (()=>{try{return JSON.parse(localStorage.getItem('abasSathiSession')||'{}')}catch{return {}}})();
-    if(!saved.token)return;
-    const res:any=await apiCall(actualRole==='Admin'?'getModuleData':'getMyPermissions',{module:'rolePermissions',viewAsResident:isResidentMode,page:1,limit:200});
-    setRolePermissions(Array.isArray(res.data)?res.data:[]);
+    setRolePermissionsLoading(true); setRolePermissionsError('');
+    try {
+      const saved:any = (()=>{try{return JSON.parse(localStorage.getItem('abasSathiSession')||'{}')}catch{return {}}})();
+      if(!saved.token) throw new Error('Session is missing. Please sign in again.');
+      const res:any=await apiCall(actualRole==='Admin'&&!isResidentMode?'getModuleData':'getMyPermissions',{module:'rolePermissions',viewAsResident:isResidentMode,page:1,limit:200});
+      const rows=Array.isArray(res.data)?res.data:[];
+      setRolePermissions(rows); setRolePermissionsLoading(false); return rows;
+    } catch(err:any) { setRolePermissions([]); setRolePermissionsError(err?.message||'Permission refresh failed'); setRolePermissionsLoading(false); throw err; }
   };
   const deleteRolePermission = async (permissionId:string) => {
     await apiCall('deleteRolePermission',{permissionId});
@@ -715,6 +754,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         hasPermission,
         canAccessTab,
         rolePermissions,
+        rolePermissionsLoading,
+        rolePermissionsError,
         refreshRolePermissions,
         deleteRolePermission,
         setActiveRole: handleRoleChange,
