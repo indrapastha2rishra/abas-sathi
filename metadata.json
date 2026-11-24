@@ -1,7 +1,7 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "version": "5.6.5",
-  "description": "ABAS SATHI Version 5.6.5 — resident dashboard balance/payment history, My Receipts navigation and printable resident bills. Previous release details: login row-index cache acceleration, login-path timing diagnostics and reduced header-repair work, targeted login lookup, reduced upload lock contention, cached private Drive folder resolution, keyed operation lookup and lighter dashboard bootstrap.",
+  "version": "6.0.2",
+  "description": "ABAS SATHI 6.0.2 — resident data mapping correction candidate; includes tolerant normalization for actual Property Master headers while preserving existing Google Sheets columns.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",

@@ -306,10 +306,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let cancelled = false;
     setPermissionsReady(false);
 
-    const keyOf = (header: string) => header.trim()
-      .replace(/[./()-]/g, '')
+    // Canonicalize the real-world sheet headers without changing the source sheets.
+    // Handles punctuation, spaces, slash, hyphen and common spelling variants.
+    const keyOf = (header: string) => String(header || '').trim()
+      .replace(/[.\/()-]/g, ' ')
       .replace(/\s+/g, '_')
-      .replace(/_+/g, '_');
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
 
     const normalizeRows = (rows: any[]) => (Array.isArray(rows) ? rows : []).map((row) => {
       const out: Record<string, any> = {};
@@ -319,7 +322,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // while the distinct header "Super Built-up Area" maps to Super_Built_up_Area.
         // keyOf removes punctuation, so preserve this important distinction before aliasing.
         const rawHeader = String(key).trim().toLowerCase().replace(/\s+/g, '_');
-        if (rawHeader === 'super_built-up_area') normalized = 'Super_Built_up_Area';
+        // Distinguish structural/super-buildup area from super built-up total area.
+        if (/^super_built[- ]?up_area$/.test(rawHeader)) normalized = 'Super_Built_up_Area';
         // Preserve the exact TypeScript field names expected by existing screens.
         const aliases: Record<string,string> = {
           Flat_No:'Flat_No', Flat_No_:'Flat_No', Floor_No:'Floor_No',
@@ -468,7 +472,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Find resident's property
   const residentProperty = currentUser.PropertyID
-    ? properties.find((p) => p.PropertyID === currentUser.PropertyID) || null
+    ? properties.find((p) => String(p.PropertyID || '').trim() === String(currentUser.PropertyID || '').trim()) || null
     : (activeRole === 'Resident' ? null : (properties[0] || null));
 
   const switchUser = (userId: string) => {

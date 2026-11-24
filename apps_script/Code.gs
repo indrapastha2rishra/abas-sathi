@@ -855,17 +855,20 @@ function authorizeModuleRead_(session,key,viewAsResident){
 }
 
 function residentModuleRecords_(session,key,ss,sheet){
-  const propertyId=String(session.propertyId||""),ownershipId=String(session.ownershipId||""),ownerId=String(session.ownerId||"");
-  if(!propertyId||!ownershipId)return [];
-  const currentRows=findRowsByHeaderValue_(ss.getSheetByName("Ownership History"),"PropertyID",propertyId).filter(r=>String(r.Ownership_Status||"")==="Current"&&String(r.Ownership_ID||"")===ownershipId&&(!ownerId||String(r.OwnerID||"")===ownerId));
+  const norm=v=>String(v==null?"":v).trim().toUpperCase();
+  const propertyId=String(session.propertyId||"").trim(),ownershipId=String(session.ownershipId||"").trim(),ownerId=String(session.ownerId||"").trim();
+  if(!propertyId||!ownershipId||!sheet)return [];
+  const ownershipSheet=ss.getSheetByName("Ownership History");
+  if(!ownershipSheet)return [];
+  const currentRows=findRowsByHeaderValue_(ownershipSheet,"PropertyID",propertyId).filter(r=>norm(r.Ownership_Status)==="CURRENT"&&norm(r.Ownership_ID)===norm(ownershipId)&&(!ownerId||norm(r.OwnerID)===norm(ownerId)));
   if(!currentRows.length)return [];
   const currentIds=currentRows.map(r=>String(r.Ownership_ID||"")),currentOwnerIds=currentRows.map(r=>String(r.OwnerID||""));
   if(["properties","propertyUtilityDetails","invoices","receipts","billWiseDetails","ownershipHistory","tenants","activityRequests"].includes(key)){
     let rows=findRowsByHeaderValue_(sheet,"PropertyID",propertyId);
-    if(key==="ownershipHistory")return rows.filter(r=>String(r.Ownership_Status||"")==="Current"&&currentIds.includes(String(r.Ownership_ID||"")));
+    if(key==="ownershipHistory")return rows.filter(r=>norm(r.Ownership_Status)==="CURRENT"&&currentIds.some(id=>norm(id)===norm(r.Ownership_ID)));
     if(key==="tenants")return rows.filter(r=>String(r.Status||"").toLowerCase()==="active");
-    if(key==="activityRequests")return rows.filter(r=>String(r.Requested_By||"")===session.userId);
-    if(["invoices","receipts","billWiseDetails"].includes(key))return rows.filter(r=>currentIds.includes(String(r.Ownership_ID||"")));
+    if(key==="activityRequests")return rows.filter(r=>norm(r.Requested_By)===norm(session.userId));
+    if(["invoices","receipts","billWiseDetails"].includes(key))return rows.filter(r=>currentIds.some(id=>norm(id)===norm(r.Ownership_ID)));
     return rows;
   }
   if(key==="owners")return currentOwnerIds.flatMap(id=>findRowsByHeaderValue_(sheet,"OwnerID",id));
@@ -887,7 +890,7 @@ function scopeRecords_(session,key,records,ss) {
     return records.filter(r=>ids.includes(String(r.OwnerID||"")));
   }
   if (key === "tenants") return records.filter(r=>String(r.PropertyID||"")===propertyId&&String(r.Status||"").toLowerCase()==="active");
-  if (key === "activityRequests") return records.filter(r=>String(r.PropertyID||"")===propertyId&&String(r.Requested_By||"")===session.userId);
+  if (key === "activityRequests") return records.filter(r=>String(r.PropertyID||"")===propertyId&&norm(r.Requested_By)===norm(session.userId));
   if (key === "notices") return records.filter(r=>{
     const visibility=String(r.Visibility||"");
     if (visibility==="All"||visibility==="All Residents"||visibility==="Residents Only") return true;
