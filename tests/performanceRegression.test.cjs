@@ -79,3 +79,27 @@ test('login row-index cache stores only indexes and validates cached Society/Log
   assert.match(fn, /createTextFinder\(String\(loginId\)\)/);
   assert.doesNotMatch(fn, /Password_Hash|Password_Salt/);
 });
+
+test('V6.0.3 shares in-flight module reads and keeps module cache across read-only API calls', () => {
+  assert.match(context, /const inFlightReads = useRef\(new Map<string,Promise<any>>\(\)\)/);
+  assert.match(context, /const pending = inFlightReads\.current\.get\(cacheKey\)/);
+  assert.match(context, /inFlightReads\.current\.set\(cacheKey, task\)/);
+  assert.match(context, /readCacheTtlMs = 30000/);
+  assert.match(context, /if \(!readActions\.has\(action\)\)/);
+});
+
+test('V6.0.3 uses dashboard summary endpoint and records privacy-safe timing metrics', () => {
+  assert.match(context, /apiCall<any>\('getDashboardSummary'/);
+  const login = fs.readFileSync(path.join(root, 'src/components/auth/Login.tsx'), 'utf8');
+  assert.match(login, /ABAS SATHI login timing/);
+  assert.match(context, /ABAS SATHI module timing/);
+  assert.match(context, /ABAS SATHI screen load timing/);
+  assert.match(backend, /ABAS_SATHI_BACKEND_TIMING/);
+});
+
+test('V6.0.3 retains server-side resident ownership validation and default-deny permissions', () => {
+  assert.match(backend, /function authorizeModuleRead_\(session,key,viewAsResident\)/);
+  assert.match(backend, /requirePermission_\(session,moduleName,"Can_View",effectiveRole\)/);
+  assert.match(backend, /function residentModuleRecords_\(session,key,ss,sheet\)/);
+  assert.match(backend, /norm\(r\.Ownership_ID\)===norm\(ownershipId\)/);
+});

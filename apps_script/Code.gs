@@ -55,9 +55,12 @@ function doGet(e) {
 
 function doPost(e) {
   let requestId = "";
+  const backendStartedAt = Date.now();
+  let actionName = "unknown";
   try {
     const body = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
     requestId = cleanText_(body.requestId || Utilities.getUuid(),100);
+    actionName = String(body.action || 'unknown');
     switch (body.action) {
       case "login": return login_(body);
       case "forgotPasswordRequest": return forgotPasswordRequest_(body);
@@ -127,11 +130,12 @@ function doPost(e) {
       default: return json_({status:"error",code:"UNSUPPORTED_ACTION",requestId,message:"Unsupported action"});
     }
   } catch (err) { return json_({status:"error",code:errorCode_(err),requestId,message:safeError_(err)}); }
+  finally { try { console.log('ABAS_SATHI_BACKEND_TIMING ' + JSON.stringify({action:actionName,elapsedMs:Date.now()-backendStartedAt})); } catch (logError) {} }
 }
 
 
 // -----------------------------------------------------------------------------
-// Version 5.3 read API: selective, paginated and server-authorized.
+// Version 6.0.3 read API: selective, paginated and server-authorized; request timing is logged.
 // Financial writes are intentionally NOT routed through generic CRUD.
 // They require dedicated locked/idempotent transaction handlers.
 // -----------------------------------------------------------------------------

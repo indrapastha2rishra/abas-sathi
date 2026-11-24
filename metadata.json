@@ -1,7 +1,7 @@
 {
   "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "version": "6.0.2",
-  "description": "ABAS SATHI 6.0.2 — resident data mapping correction candidate; includes tolerant normalization for actual Property Master headers while preserving existing Google Sheets columns.",
+  "version": "6.0.3",
+  "description": "ABAS SATHI 6.0.3 — performance adaptation candidate with shared in-flight reads, module cache retention, dashboard summary bootstrap, and privacy-safe API/backend timing logs. Existing permissions and accounting logic retained.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",

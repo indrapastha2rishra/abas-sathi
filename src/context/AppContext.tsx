@@ -250,6 +250,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const pendingRequestIds = useRef(new Map<string,string>());
   const moduleDataCache = useRef(new Map<string,{at:number;data:any[]}>());
+  // In-flight read registry: concurrent components/navigation share one backend request.
+  const inFlightReads = useRef(new Map<string,Promise<any>>());
+  const readCacheTtlMs = 30000;
   const apiCall = async <T = any,>(action: string, payload: Record<string, unknown> = {}): Promise<T> => {
     let saved: any = {};
     try { saved = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
@@ -261,6 +264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pendingRequestIds.current.set(fingerprint, requestId);
     if (pendingRequestIds.current.size > 100) pendingRequestIds.current.delete(pendingRequestIds.current.keys().next().value as string);
     const request = { action, token: saved.token, ...requestPayload, requestId, viewAsResident:isResidentMode };
+    const apiStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     // Only retry writes whose backend handlers persist requestId in the operation
     // ledger. Reusing the same ID makes an ambiguous network retry idempotent.
     const idempotentActions = new Set([
@@ -279,8 +283,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         result = await authRequest<T>(request);
       }
       pendingRequestIds.current.delete(fingerprint);
-      // Any successful API operation may change server data; invalidate module snapshots.
-      moduleDataCache.current.clear();
+      const apiElapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - apiStartedAt);
+      console.info('ABAS SATHI API timing', { action, elapsedMs: apiElapsed, role: saved.user?.role || 'unknown' });
+      // Invalidate snapshots only after writes; reads must not evict warm module caches.
+      const readActions = new Set(['getModuleData','getMyPermissions','getDashboardData','getDashboardSummary','getReports','getFundBalanceSummary','getYearEndClosingPreview','listReportSnapshots']);
+      if (!readActions.has(action)) {
+        const affected = typeof requestPayload.module === 'string' ? requestPayload.module : '';
+        if (affected) { for (const key of moduleDataCache.current.keys()) if (key.endsWith(':' + affected)) moduleDataCache.current.delete(key); }
+        else moduleDataCache.current.clear();
+      }
       // Mirror the backend's sliding six-hour session TTL so an actively used
       // session is not discarded by an old client-side expiry timestamp.
       try {
@@ -384,7 +395,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const loadOne = async (module: string) => {
           const cacheKey = `${session.societyCode || ''}:${session.user?.userId || ''}:${session.user?.role || ''}:${isResidentMode ? 'resident-preview' : 'staff'}:${module}`;
           const cached = moduleDataCache.current.get(cacheKey);
-          if (cached && Date.now() - cached.at < 15000) return cached.data;
+          if (cached && Date.now() - cached.at < readCacheTtlMs) return cached.data;
+          const pending = inFlightReads.current.get(cacheKey);
+          if (pending) return pending;
+          const moduleStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+          const task = (async () => {
           const all: any[] = []; let page = 1; let pages = 1;
           do {
             const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
@@ -397,10 +412,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (page > 100) throw new Error(`Safety limit reached while loading ${module}`);
           } while (page <= pages);
           moduleDataCache.current.set(cacheKey,{at:Date.now(),data:all});
+          console.info('ABAS SATHI module timing', { module, elapsedMs: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - moduleStartedAt), rows: all.length, pages, role: activeRole });
           return all;
+          })();
+          inFlightReads.current.set(cacheKey, task);
+          try { return await task; } finally { inFlightReads.current.delete(cacheKey); }
         };
         const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'
           ? await Promise.all([
+              apiCall<any>('getDashboardSummary', { viewAsResident:isResidentMode }).then(result => {
+                try { sessionStorage.setItem(`abasSathiDashboardSummary:${session.societyCode}:${session.user?.userId}`, JSON.stringify({ at:Date.now(), summary:result.summary || {}, society:result.society || {} })); } catch {}
+                console.info('ABAS SATHI dashboard summary timing', { role: activeRole, status: result.status || 'unknown' });
+                return [] as Array<readonly [string, any[]]>;
+              }),
               apiCall<any>('getDashboardData', { viewAsResident:isResidentMode }).then(result => Object.entries(result.data || {}).map(([key,value]) => [key,normalizeRows(value as any[])] as const)),
               loadOne('rolePermissions').then(rows => [['rolePermissions',normalizeRows(rows)] as const])
             ]).then(parts=>parts.flat())
@@ -440,7 +464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           try { localStorage.setItem(`abasSathiRolePermissions:${session.societyCode}:${session.user?.role}`, JSON.stringify({savedAt:Date.now(),rows:freshPermissions})); } catch {}
         }
         setPermissionsReady(true);
-        console.info(`ABAS SATHI: selectively loaded ${permittedRequested.join(', ') || 'no modules'} for ${activeTab}.`);
+        console.info('ABAS SATHI screen load timing', { tab: activeTab, role: activeRole, modules: permittedRequested.length });
       } catch (error:any) {
         setPermissionsReady(true);
         console.error('ABAS SATHI selective database load failed:', error);
