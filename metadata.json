@@ -1,7 +1,7 @@
 {
-  "name": "ABAS SATHI (আবাসসাথী) - Apartment Management",
-  "version": "6.0.3",
-  "description": "ABAS SATHI 6.0.3 — performance adaptation candidate with shared in-flight reads, module cache retention, dashboard summary bootstrap, and privacy-safe API/backend timing logs. Existing permissions and accounting logic retained.",
+  "name": "ABAS SATHI (\u0986\u09ac\u09be\u09b8\u09b8\u09be\u09a5\u09c0) - Apartment Management",
+  "version": "6.0.4",
+  "description": "ABAS SATHI 6.0.3 \u2014 performance adaptation candidate with shared in-flight reads, module cache retention, dashboard summary bootstrap, and privacy-safe API/backend timing logs. Existing permissions and accounting logic retained.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "Authenticated Google Sheets CRUD",
@@ -36,5 +36,6 @@
     "Six-hour cached private society Drive folder reference",
     "Operation ledger lookup optimized to read only the matching operation row",
     "File conversion uses ArrayBuffer to avoid an extra Data URL copy"
-  ]
+  ],
+  "releaseLabel": "ABAS SATHI Version 6.0.4 Staging"
 }

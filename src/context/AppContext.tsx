@@ -286,7 +286,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const apiElapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - apiStartedAt);
       console.info('ABAS SATHI API timing', { action, elapsedMs: apiElapsed, role: saved.user?.role || 'unknown' });
       // Invalidate snapshots only after writes; reads must not evict warm module caches.
-      const readActions = new Set(['getModuleData','getMyPermissions','getDashboardData','getDashboardSummary','getReports','getFundBalanceSummary','getYearEndClosingPreview','listReportSnapshots']);
+      const readActions = new Set(['getModuleData','getMyPermissions','getDashboardData','getRoleDashboardData','getDashboardSummary','getReports','getFundBalanceSummary','getYearEndClosingPreview','listReportSnapshots']);
       if (!readActions.has(action)) {
         const affected = typeof requestPayload.module === 'string' ? requestPayload.module : '';
         if (affected) { for (const key of moduleDataCache.current.keys()) if (key.endsWith(':' + affected)) moduleDataCache.current.delete(key); }
@@ -419,16 +419,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           try { return await task; } finally { inFlightReads.current.delete(cacheKey); }
         };
         const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'
-          ? await Promise.all([
+          ? await Promise.allSettled([
               apiCall<any>('getDashboardSummary', { viewAsResident:isResidentMode }).then(result => {
                 try { sessionStorage.setItem(`abasSathiDashboardSummary:${session.societyCode}:${session.user?.userId}`, JSON.stringify({ at:Date.now(), summary:result.summary || {}, society:result.society || {} })); } catch {}
                 console.info('ABAS SATHI dashboard summary timing', { role: activeRole, status: result.status || 'unknown' });
                 return [] as Array<readonly [string, any[]]>;
               }),
-              apiCall<any>('getDashboardData', { viewAsResident:isResidentMode }).then(result => Object.entries(result.data || {}).map(([key,value]) => [key,normalizeRows(value as any[])] as const)),
+              apiCall<any>('getRoleDashboardData', { viewAsResident:isResidentMode }).then(result => Object.entries(result.data || {}).map(([key,value]) => [key,normalizeRows(value as any[])] as const)),
               loadOne('rolePermissions').then(rows => [['rolePermissions',normalizeRows(rows)] as const])
-            ]).then(parts=>parts.flat())
-          : await Promise.all(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const));
+            ]).then(results=>results.flatMap((r,i)=> {
+              if(r.status==='fulfilled') return r.value;
+              const label=['Dashboard Summary','Role Dashboard Data','Role Permissions'][i];
+              console.error('ABAS SATHI module load error', {module:label,role:activeRole,error:String(r.reason||'Unknown error')});
+              return [];
+            }))
+          : await Promise.allSettled(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const)).then(results=>results.flatMap((r,i)=>{
+              if(r.status==='fulfilled') return [r.value];
+              const module=permittedRequested[i];
+              console.error('ABAS SATHI module load error', {module,role:activeRole,error:String(r.reason||'Unknown error')});
+              return [[module,[]] as const];
+            }));
         if (cancelled) return;
         const data: Record<string, any[]> = Object.fromEntries(loaded);
         const rows = (key: string) => data[key] || [];

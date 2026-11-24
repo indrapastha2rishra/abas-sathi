@@ -82,6 +82,7 @@ function doPost(e) {
       case "getModuleSchema": return getModuleSchema_(session, body);
       case "getDashboardSummary": requirePermission_(session,"Dashboard","Can_View"); return getDashboardSummary_(session);
       case "getDashboardData": return getDashboardData_(session, body);
+      case "getRoleDashboardData": return getRoleDashboardData_(session, body);
       case "getReports": return getReports_(session, body);
       case "getFundBalanceSummary": requirePermission_(session,"Reports","Can_View"); return getFundBalanceSummary_(session, body);
       case "getYearEndClosingPreview": requirePermission_(session,"Reports","Can_View"); return getYearEndClosingPreview_(session, body);
@@ -727,6 +728,18 @@ function sheetObjectsTail_(sh,limit) {
  * A short role-scoped cache removes duplicate full dashboard reads during rapid
  * navigation/reload. Cache entries are bypassed automatically when too large.
  */
+
+/** V6.0.4 role-aware dashboard endpoint. Role is derived from authenticated session only. */
+function getRoleDashboardData_(session, body) {
+  const started=Date.now();
+  const role=String(session.role||"");
+  const allowed=["Admin","Committee","Accountant","Resident"];
+  if(!allowed.includes(role)) throw new Error("Unsupported authenticated role for dashboard.");
+  const result=getDashboardData_(session,body||{});
+  console.info("ABAS_ROLE_DASHBOARD_TIMING",JSON.stringify({role:role,elapsedMs:Date.now()-started}));
+  return result;
+}
+
 function getDashboardData_(session,body) {
   const viewSession=residentViewSession_(session,body&&body.viewAsResident);
   const role = String(viewSession.role || "Resident");
@@ -743,7 +756,12 @@ function getDashboardData_(session,body) {
        ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts"] : [])];
   const recentLimits={activityRequests:250,notices:150,gallery:30,preventiveMaintenance:250};
   const data = {};
-  keys=keys.filter(function(key){return rolePermission_(session,PERMISSION_MODULE_MAP_[key]||key,"Can_View",role);});
+  keys=keys.filter(function(key){
+    const moduleName=PERMISSION_MODULE_MAP_[key]||key;
+    const granted=rolePermission_(session,moduleName,"Can_View",role);
+    if(!granted) console.warn("ABAS_PERMISSION_AUDIT",JSON.stringify({role:role,module:key,permission:"Can_View",result:"DENIED",reason:"Role permission not granted",societyCode:session.societyCode||""}));
+    return granted;
+  });
   keys.forEach(function(key) {
     authorizeModuleRead_(session, key, Boolean(body&&body.viewAsResident));
     const sheetName = MODULE_SHEETS[key];
@@ -865,7 +883,11 @@ function residentModuleRecords_(session,key,ss,sheet){
   const ownershipSheet=ss.getSheetByName("Ownership History");
   if(!ownershipSheet)return [];
   const currentRows=findRowsByHeaderValue_(ownershipSheet,"PropertyID",propertyId).filter(r=>norm(r.Ownership_Status)==="CURRENT"&&norm(r.Ownership_ID)===norm(ownershipId)&&(!ownerId||norm(r.OwnerID)===norm(ownerId)));
-  if(!currentRows.length)return [];
+  if(!currentRows.length){
+    console.warn("ABAS_RESIDENT_MAPPING_AUDIT",JSON.stringify({userId:session.userId||"",propertyId:propertyId,ownerId:ownerId,ownershipId:ownershipId,result:"DENIED",reason:"No matching current ownership mapping"}));
+    return [];
+  }
+  console.info("ABAS_RESIDENT_MAPPING_AUDIT",JSON.stringify({userId:session.userId||"",propertyId:propertyId,ownerId:ownerId,ownershipId:ownershipId,result:"VALID"}));
   const currentIds=currentRows.map(r=>String(r.Ownership_ID||"")),currentOwnerIds=currentRows.map(r=>String(r.OwnerID||""));
   if(["properties","propertyUtilityDetails","invoices","receipts","billWiseDetails","ownershipHistory","tenants","activityRequests"].includes(key)){
     let rows=findRowsByHeaderValue_(sheet,"PropertyID",propertyId);
