@@ -30,7 +30,7 @@ const TAB_MODULES: Record<string,string> = {
   requests_all:'Activity Requests', requests_pending:'Activity Requests', resident_requests:'Activity Requests',
   expenses_add:'Expenses', expenses_register:'Expenses', expenses_categories:'Expenses',
   financial_rv:'Financial Transactions', financial_pv:'Financial Transactions', financial_jv:'Financial Transactions', financial_cv:'Financial Transactions',
-  reports_monthly:'Reports', reports_property_due:'Reports', reports_ownership_due:'Reports', reports_balancesheet:'Reports', reports_year_end:'Reports',
+  reports_monthly:'Reports', reports_fy:'Reports', reports_expense_summary:'Reports', reports_property_due:'Reports', reports_owner_due:'Reports', reports_ownership_due:'Reports', reports_balancesheet:'Reports', reports_year_end:'Reports',
   resident_flat:'My Flat', resident_bills:'My Bills', resident_pay:'Pay Now', resident_history:'Payment History', resident_notices:'Notices & Gallery', resident_reports:'Resident Portal'
 };
 

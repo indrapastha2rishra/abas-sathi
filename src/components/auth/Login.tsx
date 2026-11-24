@@ -3,7 +3,7 @@ import {
   Building2, LockKeyhole, Languages, ShieldCheck, ArrowLeft, LoaderCircle,
   Eye, EyeOff, Zap, UserRound, Trash2, Mail, KeyRound, CheckCircle2
 } from 'lucide-react';
-import { authRequest, BackendRequestError } from '../../utils/authClient';
+import { authRequest, backendUrl, BackendRequestError } from '../../utils/authClient';
 import { isStrongPassword } from '../../utils/authValidation';
 
 type Props = { onLogin: (session: any) => void };
@@ -32,13 +32,28 @@ function friendlyLoginError(error: unknown, language: Language): string {
   if (error instanceof BackendRequestError) {
     if (error.code === 'AUTH_ERROR' || error.code === 'VALIDATION_ERROR') {
       return bn
-        ? 'লগইন করা যায়নি। তথ্য যাচাই করুন অথবা সোসাইটি অ্যাডমিনের সঙ্গে যোগাযোগ করুন।'
-        : 'Unable to sign in. Check your details or contact your society administrator.';
+        ? 'লগইন করা যায়নি। আপনার সোসাইটি কোড, লগইন আইডি ও পাসওয়ার্ড যাচাই করুন অথবা সোসাইটি অ্যাডমিনের সঙ্গে যোগাযোগ করুন।'
+        : 'Unable to sign in. Check your Society Code, Login ID, and Password, or contact your society administrator.';
+    }
+    if (error.code === 'PERMISSION_DENIED') {
+      return bn
+        ? 'এই অ্যাকাউন্টের জন্য প্রবেশাধিকার নেই। অনুগ্রহ করে সোসাইটি অ্যাডমিনের সঙ্গে যোগাযোগ করুন।'
+        : 'Access denied for this account. Please contact your society administrator.';
     }
     if (error.code === 'RATE_LIMITED') {
       return bn
         ? 'অনেকবার চেষ্টা করা হয়েছে। ১৫ মিনিট পরে আবার চেষ্টা করুন।'
         : 'Too many sign-in attempts. Please wait 15 minutes and try again.';
+    }
+    if (error.code === 'TIMEOUT') {
+      return bn
+        ? 'সার্ভার থেকে উত্তর আসতে বেশি সময় লাগছে। কিছুক্ষণ অপেক্ষা করে আবার লগইন করার চেষ্টা করুন।'
+        : 'The server took too long to respond. Please wait a moment and try signing in again.';
+    }
+    if (error.code === 'INVALID_RESPONSE') {
+      return bn
+        ? 'সোসাইটি সার্ভার থেকে অপ্রত্যাশিত উত্তর পাওয়া গেছে। ব্যাকএন্ড ডিপ্লয়মেন্ট যাচাই করে আবার চেষ্টা করুন।'
+        : 'Received an unexpected response from the society server. Please verify the backend deployment and try again.';
     }
     if (error.code === 'SERVER_ERROR') {
       return bn
@@ -47,8 +62,8 @@ function friendlyLoginError(error: unknown, language: Language): string {
     }
     if (error.retryable) {
       return bn
-        ? 'সার্ভারের সঙ্গে সংযোগ করা যাচ্ছে না। ইন্টারনেট পরীক্ষা করে আবার চেষ্টা করুন।'
-        : 'Could not connect to the server. Check your internet connection and try again.';
+        ? 'সার্ভারের সঙ্গে সংযোগ করা যাচ্ছে না। ইন্টারনেট সংযোগ বা সার্ভারের ঠিকানা পরীক্ষা করে আবার চেষ্টা করুন।'
+        : 'Could not reach the authentication server. Check your internet connection and try again.';
     }
   }
   const message = String((error as any)?.message || '');
@@ -58,8 +73,8 @@ function friendlyLoginError(error: unknown, language: Language): string {
       : 'Too many sign-in attempts. Please wait 15 minutes and try again.';
   }
   return bn
-    ? 'লগইন সম্পন্ন হয়নি। সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।'
-    : 'Sign-in could not be completed. Check your connection and try again.';
+    ? 'লগইন সম্পন্ন করা যায়নি। আপনার তথ্য যাচাই করে আবার চেষ্টা করুন, অথবা সমস্যা অব্যাহত থাকলে সোসাইটি অ্যাডমিনের সঙ্গে যোগাযোগ করুন।'
+    : 'Sign-in could not be completed. Please verify your details and try again, or contact your society administrator if the issue persists.';
 }
 
 export const Login: React.FC<Props> = ({ onLogin }) => {
@@ -93,6 +108,18 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
       setHasSavedLogin(true);
       // Focus the password field after the returning-user values are populated.
       window.setTimeout(() => passwordRef.current?.focus(), 80);
+    }
+    // Pre-warm the Apps Script container and TLS connection while the user enters credentials.
+    const url = backendUrl();
+    if (url) {
+      void fetch(`${url}${url.includes('?') ? '&' : '?'}action=ping`, {
+        method: 'GET',
+        mode: 'cors',
+        credentials: 'omit',
+        redirect: 'follow',
+        referrerPolicy: 'no-referrer',
+        cache: 'no-store',
+      }).catch(() => undefined);
     }
   }, []);
 
@@ -170,7 +197,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
       // Central Master lookup on every successful login.
       const result: any = await authRequest(
         { action: 'login', societyCode: code, loginId: id, password },
-        { timeoutMs: 20000 }
+        { timeoutMs: 25000 }
       );
 
       if (!result?.token || !result?.user?.userId || !result?.user?.role) {
@@ -209,8 +236,10 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         setHasSavedLogin(false);
       }
       localStorage.setItem('abasSathiSession', JSON.stringify(session));
-      // Non-blocking metadata write: open the authenticated UI immediately.
-      void authRequest({ action: 'updateLoginActivity', token: session.token }, { timeoutMs: 8000 }).catch(() => undefined);
+      // Defer non-blocking login metadata write so it does not compete with dashboard bootstrap.
+      window.setTimeout(() => {
+        void authRequest({ action: 'updateLoginActivity', token: session.token }, { timeoutMs: 8000 }).catch(() => undefined);
+      }, 2000);
       setPassword('');
       onLogin(session);
     } catch (caught) {

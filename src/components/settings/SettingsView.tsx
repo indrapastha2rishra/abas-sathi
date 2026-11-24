@@ -9,6 +9,7 @@ import { DocumentCenter } from './DocumentCenter';
 import { BackupManager } from './BackupManager';
 import { RolePermissionManager } from './RolePermissionManager';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay, formatDateTimeDisplay } from '../../utils/dateFormat';
 import {
   Settings,
   CloudCog,
@@ -358,8 +359,8 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
                     <td className="px-4 py-3 font-medium text-[#536B4D]">{p.Maintenance_Category}</td>
                     <td className="px-4 py-3">{p.Service_Provider}</td>
                     <td className="px-4 py-3 text-gray-600">{p.Frequency}</td>
-                    <td className="px-4 py-3 text-gray-500">{p.Last_Service_Date}</td>
-                    <td className="px-4 py-3 font-bold text-[#C97958]">{p.Next_Service_Date}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDateDisplay(p.Last_Service_Date, '—')}</td>
+                    <td className="px-4 py-3 font-bold text-[#C97958]">{formatDateDisplay(p.Next_Service_Date, '—')}</td>
                     <td className="px-4 py-3 text-center">
                       <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
                         {p.Maintenance_Status}
@@ -400,7 +401,7 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
                 {auditLogs.map((log) => (
                   <tr key={log.Log_ID} className="hover:bg-neutral-50">
                     <td className="px-4 py-3 font-mono text-gray-400">{log.Log_ID}</td>
-                    <td className="px-4 py-3 font-mono text-[11px] text-gray-500">{log.Action_DateTime}</td>
+                    <td className="px-4 py-3 font-mono text-[11px] text-gray-500">{formatDateTimeDisplay(log.Action_DateTime, '—')}</td>
                     <td className="px-4 py-3">
                       <span
                         className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-bold ${

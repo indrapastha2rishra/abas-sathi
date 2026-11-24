@@ -20,6 +20,7 @@ import {
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
 import type { InvoiceRegister } from '../../types/database';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
+import { formatDateDisplay } from '../../utils/dateFormat';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
@@ -267,9 +268,9 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                       <td className="px-4 py-3 font-medium">{inv.Owner_Name || '—'}</td>
                       <td className="px-4 py-3 font-mono text-gray-500">{inv.Ownership_ID || '—'}</td>
                       <td className="px-4 py-3 text-gray-600">{inv.Purpose}</td>
-                      <td className="px-4 py-3 text-gray-500">{inv.Billing_Date || '—'}</td>
-                      <td className="px-4 py-3 text-gray-500">{inv.Bill_Period_From || '—'} to {inv.Bill_Period_To || '—'}</td>
-                      <td className="px-4 py-3 text-gray-500">{inv.Due_Date || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Billing_Date, '—')}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Bill_Period_From, '—')} to {formatDateDisplay(inv.Bill_Period_To, '—')}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Due_Date, '—')}</td>
                       <td className="px-4 py-3 text-right">₹{Number(inv.Charge_Amount || 0).toFixed(2)}</td>
                       <td className="px-4 py-3 text-right">₹{Number(inv.Late_Fee || 0).toFixed(2)}</td>
                       <td className="px-4 py-3 text-right">₹{Number(inv.Discount_Amount || 0).toFixed(2)}</td>
@@ -542,7 +543,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                     <td className="px-4 py-3 text-right font-bold text-[#29352D]">
                       ₹{rate.Rate_Per_SqFt_Unit.toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-gray-500">{rate.Effective_From}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDateDisplay(rate.Effective_From, '—')}</td>
                     <td className="px-4 py-3 text-gray-600">{rate.Approved_By}</td>
                     <td className="px-4 py-3 text-center">
                       <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">

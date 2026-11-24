@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { authRequest } from '../../utils/authClient';
+import { formatDateDisplay } from '../../utils/dateFormat';
 
 const CATEGORIES = ['Owner Document','Expense Voucher','Gallery Photo','Notice Attachment','Activity Request Attachment','Payment Proof','Invoice PDF'];
 export const DocumentCenter: React.FC = () => {
@@ -49,7 +50,7 @@ export const DocumentCenter: React.FC = () => {
     <div className="rounded-xl border border-[#E8E1D4] bg-white overflow-hidden">
       <div className="p-4 flex justify-between items-center"><h3 className="font-bold text-sm">Document Registry</h3><button onClick={()=>void refresh()} className="text-xs font-bold text-[#536B4D]">Refresh</button></div>
       <div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">File</th><th className="p-2">Category</th><th className="p-2">Property</th><th className="p-2">Uploaded</th><th className="p-2">Action</th></tr></thead>
-        <tbody>{rows.map(r=><tr key={r.File_ID} className="border-b"><td className="p-2">{r.File_Name||r.File_ID}</td><td className="p-2">{r.Category}</td><td className="p-2">{r.PropertyID||'—'}</td><td className="p-2">{String(r.Created_At||'').slice(0,10)}</td><td className="p-2"><button disabled={busy} onClick={()=>void download(r)} className="font-bold text-[#536B4D]">Download</button></td></tr>)}</tbody>
+        <tbody>{rows.map(r=><tr key={r.File_ID} className="border-b"><td className="p-2">{r.File_Name||r.File_ID}</td><td className="p-2">{r.Category}</td><td className="p-2">{r.PropertyID||'—'}</td><td className="p-2">{formatDateDisplay(r.Created_At,'—')}</td><td className="p-2"><button disabled={busy} onClick={()=>void download(r)} className="font-bold text-[#536B4D]">Download</button></td></tr>)}</tbody>
       </table>{!rows.length&&<p className="p-5 text-center text-xs text-gray-500">{busy?'Loading…':'No documents registered.'}</p>}</div>
     </div>
   </div>;

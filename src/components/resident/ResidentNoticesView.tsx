@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import { Bell, Calendar, Image as ImageIcon, Download, Tag } from 'lucide-react';
 
 export const ResidentNoticesView: React.FC = () => {
@@ -66,7 +67,7 @@ export const ResidentNoticesView: React.FC = () => {
               <div className="pt-3 border-t border-[#E8E1D4] flex items-center justify-between text-[11px] text-gray-500">
                 <span className="flex items-center gap-1">
                   <Calendar className="h-3.5 w-3.5 text-[#536B4D]" />
-                  Published: {notice.Publish_Date}
+                  Published: {formatDateDisplay(notice.Publish_Date, '—')}
                 </span>
                 {(notice.Attachment || (notice as any).Attachment_File_ID) && (
                   <button onClick={()=>void downloadAttachment(String((notice as any).Attachment_File_ID||notice.Attachment),notice.Notice_Title||'notice-attachment')} className="font-semibold text-[#536B4D] underline cursor-pointer">
@@ -104,7 +105,7 @@ export const ResidentNoticesView: React.FC = () => {
                   className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-black/60 text-white text-[10px] backdrop-blur-xs">
-                  {item.Event_Date}
+                  {formatDateDisplay(item.Event_Date, '—')}
                 </span>
               </div>
               <div className="p-4 space-y-1">

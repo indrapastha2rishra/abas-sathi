@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import {
   Building2,
   Users,
@@ -24,22 +25,6 @@ const formatAreaFromDatabase = (value: unknown): string => {
   return Number.isFinite(numeric) ? numeric.toFixed(2) : String(value);
 };
 
-const formatLeaseDate = (value: unknown): string => {
-  if (value === null || value === undefined || value === '') return '';
-  const raw = String(value).trim();
-  // Keep date-only values timezone-neutral (Google Sheets may serialize them as ISO strings).
-  const match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  let date: Date;
-  if (match) {
-    date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  } else {
-    date = new Date(raw);
-  }
-  if (Number.isNaN(date.getTime())) return raw;
-  return new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit', month: 'short', year: 'numeric'
-  }).format(date).replace(/ /g, '-');
-};
 
 export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'properties_all' }) => {
   const { properties, owners, ownerships, tenants, t } = useApp();
@@ -348,7 +333,7 @@ export const PropertiesView: React.FC<{ subtab?: string }> = ({ subtab = 'proper
                     <td className="px-4 py-3 font-bold text-[#29352D] text-sm">{ten.Tenant_Name}</td>
                     <td className="px-4 py-3 font-mono">{ten.Mobile_No}</td>
                     <td className="px-4 py-3 text-gray-600">
-                      {formatLeaseDate(ten.Occupancy_Start_Date) || '—'} to {formatLeaseDate(ten.Occupancy_End_Date) || 'Ongoing'}
+                      {formatDateDisplay(ten.Occupancy_Start_Date) || '—'} to {formatDateDisplay(ten.Occupancy_End_Date) || 'Ongoing'}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-[#536B4D] underline">
                       {ten.Tenant_Document}

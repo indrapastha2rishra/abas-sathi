@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import { Printer, X, FileText } from 'lucide-react';
 
 export const ExpenseVoucherModal: React.FC = () => {
@@ -69,7 +70,7 @@ export const ExpenseVoucherModal: React.FC = () => {
                 EXPENSE PAYMENT VOUCHER / খরচের ভাউচার
               </span>
               <p className="mt-2 text-base font-bold text-[#29352D]">{previewVoucher.Voucher_No}</p>
-              <p className="text-xs text-gray-500">Date: {previewVoucher.Payment_Date}</p>
+              <p className="text-xs text-gray-500">Date: {formatDateDisplay(previewVoucher.Payment_Date, '—')}</p>
               <span className={`inline-block mt-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border ${
                 previewVoucher.Expense_Status === 'Paid'
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-200'

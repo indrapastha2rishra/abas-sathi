@@ -19,6 +19,7 @@ import {
   FileCheck,
 } from 'lucide-react';
 import { PaymentMode, FundInflowRegister } from '../../types/database';
+import { formatDateDisplay } from '../../utils/dateFormat';
 
 interface Props {
   initialSubTab?: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record';
@@ -247,7 +248,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                               {inv.Invoice_Number} ({inv.Purpose})
                             </span>
                             <span className="text-[11px] text-gray-500">
-                              Period: {inv.Bill_Period_From} to {inv.Bill_Period_To} | Due: {inv.Due_Date}
+                              Period: {formatDateDisplay(inv.Bill_Period_From, '—')} to {formatDateDisplay(inv.Bill_Period_To, '—')} | Due: {formatDateDisplay(inv.Due_Date, '—')}
                             </span>
                           </div>
                         </div>
@@ -399,7 +400,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                   <React.Fragment key={rec.Transaction_ID}>
                   <tr className="hover:bg-neutral-50 transition-colors">
                     <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</td>
-                    <td className="px-4 py-3 text-gray-500">{rec.Date_Of_Received}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDateDisplay(rec.Date_Of_Received, '—')}</td>
                     <td className="px-4 py-3 font-bold text-[#536B4D]">{rec.Flat_No}</td>
                     <td className="px-4 py-3 font-medium">{rec.Owner_Name}</td>
                     <td className="px-4 py-3 font-mono text-[11px] text-gray-600">
@@ -490,7 +491,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                     <td className="px-4 py-3 font-mono text-gray-500">{a.Allocation_ID}</td>
                     <td className="px-4 py-3 font-bold text-[#29352D]">{a.Invoice_Number}</td>
                     <td className="px-4 py-3 font-mono text-[#536B4D]">{a.PropertyID}</td>
-                    <td className="px-4 py-3 text-gray-600">{a.Allocation_Date}</td>
+                    <td className="px-4 py-3 text-gray-600">{formatDateDisplay(a.Allocation_Date, '—')}</td>
                     <td className="px-4 py-3 text-right">₹{a.Invoice_Amount.toFixed(2)}</td>
                     <td className="px-4 py-3 text-right text-gray-500">₹{a.Outstanding_Before.toFixed(2)}</td>
                     <td className="px-4 py-3 text-right font-bold text-emerald-700">

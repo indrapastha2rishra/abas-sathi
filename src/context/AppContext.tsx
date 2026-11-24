@@ -31,6 +31,16 @@ import {
 import { Language, translations } from '../utils/i18n';
 import { authRequest, BackendRequestError } from '../utils/authClient';
 import { permissionGranted, moduleForTab, actionForTab, type PermissionAction, type RolePermissionRecord } from '../utils/permissions';
+import {
+  buildScopeKey,
+  clearAllUserDataCaches,
+  clearFundBalanceCache,
+  invalidateScopedSnapshotModules,
+  readCachedPermissions,
+  readScopedSnapshot,
+  writeCachedPermissions,
+  writeScopedSnapshotModules,
+} from '../utils/localDataCache';
 
 export interface GoogleBackendConfig {
   spreadsheetId: string;
@@ -166,35 +176,48 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const initialSession = (() => {
+    try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch { return {}; }
+  })();
+  const initialRole: UserRole = initialSession?.user?.role || 'Resident';
+  const initialScopeKey = initialSession?.token
+    ? buildScopeKey(initialSession.societyCode, initialSession.user?.userId, initialRole, false)
+    : '';
+  const initialSnapshot = initialScopeKey ? readScopedSnapshot(initialScopeKey) : null;
+  const initialModules = initialSnapshot?.modules || {};
+  const initialPermissions = initialSession?.token
+    ? readCachedPermissions(initialSession.societyCode, initialRole)
+    : [];
+
   const [language, setLanguage] = useState<Language>('en');
   const [users, setUsers] = useState<UserMaster[]>([]);
-  const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:u.role || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
-  const [activeRole, setActiveRole] = useState<UserRole>(() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}').user?.role || 'Resident'; } catch { return 'Resident'; } });
+  const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = initialSession; const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:u.role || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:u.ownershipId || null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
+  const [activeRole, setActiveRole] = useState<UserRole>(initialRole);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const actualRole: UserRole = currentUser.Role || 'Resident';
   const [isResidentMode, setIsResidentMode] = useState(false);
-  const [rolePermissions, setRolePermissions] = useState<RolePermissionRecord[]>([]);
-  const [permissionsReady, setPermissionsReady] = useState(false);
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionRecord[]>(initialPermissions);
+  const [permissionsReady, setPermissionsReady] = useState<boolean>(initialPermissions.length > 0);
 
-  // Database collections
-  const [properties, setProperties] = useState<PropertyMaster[]>([]);
-  const [owners, setOwners] = useState<OwnerMaster[]>([]);
-  const [ownerships, setOwnerships] = useState<OwnershipHistory[]>([]);
-  const [tenants, setTenants] = useState<TenantMaster[]>([]);
-  const [rates, setRates] = useState<RateMaster[]>([]);
-  const [invoices, setInvoices] = useState<InvoiceRegister[]>([]);
-  const [receipts, setReceipts] = useState<FundInflowRegister[]>([]);
-  const [billAllocations, setBillAllocations] = useState<BillWiseDetails[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseRegister[]>([]);
-  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryMaster[]>([]);
-  const [bankAccounts, setBankAccounts] = useState<BankAccountMaster[]>([]);
-  const [activityRequests, setActivityRequests] = useState<ActivityRequestRegister[]>([]);
-  const [notices, setNotices] = useState<NoticeMaster[]>([]);
-  const [gallery, setGallery] = useState<GalleryMaster[]>([]);
-  const [preventiveMaintenance, setPreventiveMaintenance] = useState<PreventiveMaintenanceMaster[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>([]);
-  const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>([]);
+  // Database collections (synchronously hydrated from scoped local snapshot for <1ms UI boot)
+  const [properties, setProperties] = useState<PropertyMaster[]>(() => (initialModules.properties?.data || []) as PropertyMaster[]);
+  const [owners, setOwners] = useState<OwnerMaster[]>(() => (initialModules.owners?.data || []) as OwnerMaster[]);
+  const [ownerships, setOwnerships] = useState<OwnershipHistory[]>(() => (initialModules.ownershipHistory?.data || []) as OwnershipHistory[]);
+  const [tenants, setTenants] = useState<TenantMaster[]>(() => (initialModules.tenants?.data || []) as TenantMaster[]);
+  const [rates, setRates] = useState<RateMaster[]>(() => (initialModules.rates?.data || []) as RateMaster[]);
+  const [invoices, setInvoices] = useState<InvoiceRegister[]>(() => (initialModules.invoices?.data || []) as InvoiceRegister[]);
+  const [receipts, setReceipts] = useState<FundInflowRegister[]>(() => (initialModules.receipts?.data || []) as FundInflowRegister[]);
+  const [billAllocations, setBillAllocations] = useState<BillWiseDetails[]>(() => (initialModules.billWiseDetails?.data || []) as BillWiseDetails[]);
+  const [expenses, setExpenses] = useState<ExpenseRegister[]>(() => (initialModules.expenses?.data || []) as ExpenseRegister[]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryMaster[]>(() => (initialModules.expenseCategories?.data || []) as ExpenseCategoryMaster[]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccountMaster[]>(() => (initialModules.bankAccounts?.data || []) as BankAccountMaster[]);
+  const [activityRequests, setActivityRequests] = useState<ActivityRequestRegister[]>(() => (initialModules.activityRequests?.data || []) as ActivityRequestRegister[]);
+  const [notices, setNotices] = useState<NoticeMaster[]>(() => (initialModules.notices?.data || []) as NoticeMaster[]);
+  const [gallery, setGallery] = useState<GalleryMaster[]>(() => (initialModules.gallery?.data || []) as GalleryMaster[]);
+  const [preventiveMaintenance, setPreventiveMaintenance] = useState<PreventiveMaintenanceMaster[]>(() => (initialModules.preventiveMaintenance?.data || []) as PreventiveMaintenanceMaster[]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => (initialModules.auditLogs?.data || []) as AuditLog[]);
+  const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>(() => (initialModules.financialYears?.data || []) as FinancialYearMaster[]);
+  const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>(() => (initialModules.accountHeads?.data || []) as AccountHeadMaster[]);
 
   // Document preview modals
   const [previewInvoice, setPreviewInvoice] = useState<InvoiceRegister | null>(null);
@@ -250,6 +273,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const pendingRequestIds = useRef(new Map<string,string>());
   const moduleDataCache = useRef(new Map<string,{at:number;data:any[]}>());
+  // Seed in-memory cache once from the synchronous local snapshot so recent reloads skip redundant reads.
+  const cacheSeededRef = useRef(false);
+  if (!cacheSeededRef.current && initialScopeKey) {
+    cacheSeededRef.current = true;
+    Object.entries(initialModules).forEach(([mod, entry]) => {
+      if (entry && Array.isArray(entry.data)) {
+        moduleDataCache.current.set(`${initialScopeKey}:${mod}`, { at: Number(entry.at || 0), data: entry.data });
+      }
+    });
+  }
   // In-flight read registry: concurrent components/navigation share one backend request.
   const inFlightReads = useRef(new Map<string,Promise<any>>());
   const readCacheTtlMs = 30000;
@@ -289,8 +322,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const readActions = new Set(['getModuleData','getMyPermissions','getDashboardData','getRoleDashboardData','getDashboardSummary','getReports','getFundBalanceSummary','getYearEndClosingPreview','listReportSnapshots']);
       if (!readActions.has(action)) {
         const affected = typeof requestPayload.module === 'string' ? requestPayload.module : '';
-        if (affected) { for (const key of moduleDataCache.current.keys()) if (key.endsWith(':' + affected)) moduleDataCache.current.delete(key); }
-        else moduleDataCache.current.clear();
+        const scopeKey = buildScopeKey(saved.societyCode, saved.user?.userId, saved.user?.role, isResidentMode);
+        if (affected) {
+          for (const key of moduleDataCache.current.keys()) if (key.endsWith(':' + affected)) moduleDataCache.current.delete(key);
+          invalidateScopedSnapshotModules(scopeKey, [affected]);
+        } else {
+          moduleDataCache.current.clear();
+          invalidateScopedSnapshotModules(scopeKey);
+        }
+        if (['confirmPayment','markExpensePaid','cancelExpense','postOpeningBalances','finalizeYearEndClosing'].includes(action)) {
+          clearFundBalanceCache(saved.societyCode, saved.user?.userId);
+        }
+        try { sessionStorage.removeItem(`abasSathiDashboardSummary:${saved.societyCode}:${saved.user?.userId}`); } catch {}
       }
       // Mirror the backend's sliding six-hour session TTL so an actively used
       // session is not discarded by an old client-side expiry timestamp.
@@ -308,14 +351,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Load only the modules required by the active screen.
+  // Load only the modules required by the active screen, hydrating immediately from cache and refreshing progressively.
   useEffect(() => {
     const baseUrl = googleConfig.appsScriptWebAppUrl.trim();
     let session: any = {};
     try { session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
     if (!session.token || !baseUrl) { setPermissionsReady(true); return; }
     let cancelled = false;
-    setPermissionsReady(false);
+
+    const scopeKey = buildScopeKey(session.societyCode, session.user?.userId, session.user?.role, isResidentMode);
+    const cachedPerms = readCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : session.user?.role);
+    if (cachedPerms.length > 0) {
+      setRolePermissions(cachedPerms);
+      setPermissionsReady(true);
+    } else if (rolePermissions.length === 0) {
+      setPermissionsReady(false);
+    }
+
+    // Hydrate local snapshot immediately when switching modes/scopes.
+    const localSnapshot = readScopedSnapshot(scopeKey);
+    if (localSnapshot?.modules) {
+      Object.entries(localSnapshot.modules).forEach(([mod, entry]) => {
+        if (entry && Array.isArray(entry.data)) {
+          const cacheKey = `${scopeKey}:${mod}`;
+          if (!moduleDataCache.current.has(cacheKey)) {
+            moduleDataCache.current.set(cacheKey, { at: Number(entry.at || 0), data: entry.data });
+          }
+        }
+      });
+    }
 
     // Canonicalize the real-world sheet headers without changing the source sheets.
     // Handles punctuation, spaces, slash, hyphen and common spelling variants.
@@ -356,8 +420,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             'cover area':'Carpet_Area', 'cover':'Carpet_Area',
             'corridor area':'Allocated_Common_Area', 'corridor':'Allocated_Common_Area',
             'super builtup area':'Structural_Area', 'super built up area':'Structural_Area',
-            'structural area':'Structural_Area', 'super built-up area':'Super_Built-up_Area',
-            'total area':'Super_Built-up_Area', 'allocated common area':'Allocated_Common_Area',
+            'structural area':'Structural_Area', 'super built-up area':'Super_Built_up_Area',
+            'total area':'Super_Built_up_Area', 'allocated common area':'Allocated_Common_Area',
             'carpet area':'Carpet_Area', 'not applicable':'None', 'none':'None'
           };
           value = basisAliases[basis] || value;
@@ -369,6 +433,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return out;
     });
+
+    const applyModuleRows = (key: string, normalizedRows: any[]) => {
+      if (cancelled) return;
+      switch (key) {
+        case 'properties':
+          setProperties(normalizedRows.map((r: any) => ({
+            ...r,
+            PropertyID: String(r.PropertyID || ''), Flat_No: String(r.Flat_No || ''), Block_Tower: String(r.Block_Tower || ''),
+            Floor_No: Number(r.Floor_No || 0),
+            Carpet_Area: r.Carpet_Area === '' || r.Carpet_Area == null ? null : Number(r.Carpet_Area),
+            Allocated_Common_Area: r.Allocated_Common_Area === '' || r.Allocated_Common_Area == null ? null : Number(r.Allocated_Common_Area),
+            Structural_Area: r.Structural_Area === '' || r.Structural_Area == null ? null : Number(r.Structural_Area),
+            Super_Built_up_Area: r.Super_Built_up_Area === '' || r.Super_Built_up_Area == null ? null : Number(r.Super_Built_up_Area),
+            Occupancy_Status: r.Occupancy_Status === 'Occupied' ? 'Self Occupied' : (r.Occupancy_Status || 'Vacant'),
+            Property_Status: r.Property_Status || 'Active',
+          })) as PropertyMaster[]);
+          break;
+        case 'owners': setOwners(normalizedRows as OwnerMaster[]); break;
+        case 'ownershipHistory': setOwnerships(normalizedRows as OwnershipHistory[]); break;
+        case 'tenants': setTenants(normalizedRows as TenantMaster[]); break;
+        case 'rates': setRates(normalizedRows as RateMaster[]); break;
+        case 'invoices': setInvoices(normalizedRows as InvoiceRegister[]); break;
+        case 'receipts': setReceipts(normalizedRows as FundInflowRegister[]); break;
+        case 'billWiseDetails': setBillAllocations(normalizedRows as BillWiseDetails[]); break;
+        case 'expenses': setExpenses(normalizedRows as ExpenseRegister[]); break;
+        case 'expenseCategories': setExpenseCategories(normalizedRows as ExpenseCategoryMaster[]); break;
+        case 'bankAccounts': setBankAccounts(normalizedRows as BankAccountMaster[]); break;
+        case 'activityRequests': setActivityRequests(normalizedRows as ActivityRequestRegister[]); break;
+        case 'notices': setNotices(normalizedRows as NoticeMaster[]); break;
+        case 'gallery': setGallery(normalizedRows as GalleryMaster[]); break;
+        case 'preventiveMaintenance': setPreventiveMaintenance(normalizedRows as PreventiveMaintenanceMaster[]); break;
+        case 'financialYears': setFinancialYears(normalizedRows as FinancialYearMaster[]); break;
+        case 'accountHeads': setAccountHeads(normalizedRows as AccountHeadMaster[]); break;
+        case 'auditLogs': setAuditLogs(normalizedRows as AuditLog[]); break;
+        case 'rolePermissions': {
+          const freshPermissions = normalizedRows as RolePermissionRecord[];
+          setRolePermissions(freshPermissions);
+          writeCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : session.user?.role, freshPermissions);
+          setPermissionsReady(true);
+          break;
+        }
+      }
+    };
 
     const modulePlan: Record<string, string[]> = {
       dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance'],
@@ -383,102 +490,216 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       resident_bills: ['invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory'], resident_history: ['receipts','billWiseDetails'],
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
-      expenses_categories: ['expenseCategories','expenses','bankAccounts'], reports_monthly: ['invoices','receipts','expenses','properties'],
-      reports_property_due: ['invoices','properties','owners'], reports_ownership_due: ['invoices','properties','owners','ownershipHistory'], reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads'], reports_year_end: ['financialYears','bankAccounts'],
+      expenses_categories: ['expenseCategories','expenses','bankAccounts'],
+      reports_monthly: ['invoices','receipts','expenses','properties','owners','billWiseDetails','bankAccounts','financialYears'],
+      reports_fy: ['invoices','receipts','expenses','properties','owners','billWiseDetails','bankAccounts','financialYears'],
+      reports_expense_summary: ['expenses','expenseCategories','bankAccounts'],
+      reports_property_due: ['invoices','receipts','billWiseDetails','properties','owners','ownershipHistory'],
+      reports_owner_due: ['invoices','receipts','billWiseDetails','properties','owners','ownershipHistory'],
+      reports_ownership_due: ['invoices','receipts','billWiseDetails','properties','owners','ownershipHistory'],
+      reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads','financialYears'],
+      reports_year_end: ['financialYears','bankAccounts'],
       financial_rv: ['accountHeads','financialYears'], financial_pv: ['accountHeads','financialYears'], financial_jv: ['accountHeads','financialYears'], financial_cv: ['accountHeads','financialYears'],
       resident_notices: ['notices','gallery'], resident_reports: ['properties','owners','ownershipHistory','invoices','receipts','billWiseDetails','activityRequests','notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
     const load = async () => {
       try {
+        const permModuleMap: Record<string, string> = {
+          properties: 'Properties & Residents', owners: 'Owner Management', ownershipHistory: 'Ownership History',
+          tenants: 'Tenant Management', rates: 'Maintenance & Invoices', invoices: 'Maintenance & Invoices',
+          receipts: 'Payments', billWiseDetails: 'Bill Wise Details', expenses: 'Expenses',
+          expenseCategories: 'Expenses', bankAccounts: 'Bank Accounts', activityRequests: 'Activity Requests',
+          notices: 'Notices', gallery: 'Gallery', preventiveMaintenance: 'Preventive Maintenance',
+          ratePropertyMapping: 'Maintenance & Invoices', propertyUtilityDetails: 'Properties & Residents',
+          financialYears: 'Financial Year Management', accountHeads: 'Account Heads', auditLogs: 'Audit Log',
+        };
+        const effectiveRoleForLoad = isResidentMode ? 'Resident' : actualRole;
         const requested = Array.from(new Set([...(modulePlan[activeTab] || []), 'rolePermissions'])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(activeRole)) && (key !== 'expenses' || activeRole !== 'Resident'));
-        const permittedRequested = requested.filter(key => key !== 'auditLogs' || ['Admin','Accountant'].includes(activeRole));
-        const loadOne = async (module: string) => {
-          const cacheKey = `${session.societyCode || ''}:${session.user?.userId || ''}:${session.user?.role || ''}:${isResidentMode ? 'resident-preview' : 'staff'}:${module}`;
+        const permittedRequested = requested.filter(key => {
+          if (key === 'auditLogs' && !['Admin','Accountant'].includes(activeRole)) return false;
+          if (key === 'rolePermissions') return true;
+          if (rolePermissions.length === 0) return true;
+          const modName = permModuleMap[key];
+          if (!modName) return true;
+          if (key === 'receipts') {
+            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Payments', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View');
+          }
+          return permissionGranted(rolePermissions, effectiveRoleForLoad, modName, 'Can_View');
+        });
+
+        const fetchModulePage = async (module: string, page: number) => {
+          const response = await fetch(baseUrl, {
+            method: 'POST',
+            mode: 'cors',
+            credentials: 'omit',
+            redirect: 'follow',
+            referrerPolicy: 'no-referrer',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: module === 'rolePermissions' && actualRole !== 'Admin' ? 'getMyPermissions' : 'getModuleData',
+              token: session.token,
+              module,
+              page,
+              limit: 200,
+              viewAsResident: isResidentMode,
+            }),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const result = await response.json();
+          if (result.status !== 'success') throw new Error(result.message || `Could not load ${module}`);
+          return result;
+        };
+
+        const loadOne = async (module: string, forceRefresh = false) => {
+          const cacheKey = `${scopeKey}:${module}`;
           const cached = moduleDataCache.current.get(cacheKey);
-          if (cached && Date.now() - cached.at < readCacheTtlMs) return cached.data;
+          if (!forceRefresh && cached && Date.now() - cached.at < readCacheTtlMs) return cached.data;
           const pending = inFlightReads.current.get(cacheKey);
           if (pending) return pending;
           const moduleStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
           const task = (async () => {
-          const all: any[] = []; let page = 1; let pages = 1;
-          do {
-            const response = await fetch(baseUrl, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-              body: JSON.stringify({action:module==='rolePermissions'&&actualRole!=='Admin'?'getMyPermissions':'getModuleData', token:session.token, module, page, limit:200, viewAsResident:isResidentMode}) });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const result = await response.json();
-            if (result.status !== 'success') throw new Error(result.message || `Could not load ${module}`);
-            all.push(...(Array.isArray(result.data) ? result.data : []));
-            pages = Number(result.pagination?.totalPages || 1); page += 1;
-            if (page > 100) throw new Error(`Safety limit reached while loading ${module}`);
-          } while (page <= pages);
-          moduleDataCache.current.set(cacheKey,{at:Date.now(),data:all});
-          console.info('ABAS SATHI module timing', { module, elapsedMs: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - moduleStartedAt), rows: all.length, pages, role: activeRole });
-          return all;
+            const firstResult = await fetchModulePage(module, 1);
+            const all: any[] = Array.isArray(firstResult.data) ? [...firstResult.data] : [];
+            const pages = Math.min(100, Math.max(1, Number(firstResult.pagination?.totalPages || 1)));
+            if (pages > 1) {
+              const restPages = Array.from({ length: pages - 1 }, (_, i) => i + 2);
+              const restResults = await Promise.all(restPages.map(p => fetchModulePage(module, p)));
+              restResults.forEach((res) => {
+                if (Array.isArray(res.data)) all.push(...res.data);
+              });
+            }
+            const normalized = normalizeRows(all);
+            const now = Date.now();
+            moduleDataCache.current.set(cacheKey, { at: now, data: normalized });
+            if (module !== 'rolePermissions') {
+              writeScopedSnapshotModules(scopeKey, { [module]: normalized }, now);
+            }
+            console.info('ABAS SATHI module timing', { module, elapsedMs: Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - moduleStartedAt), rows: normalized.length, pages, role: activeRole });
+            return normalized;
           })();
           inFlightReads.current.set(cacheKey, task);
           try { return await task; } finally { inFlightReads.current.delete(cacheKey); }
         };
-        const loaded: Array<readonly [string, any[]]> = activeTab === 'dashboard'
-          ? await Promise.allSettled([
-              apiCall<any>('getDashboardSummary', { viewAsResident:isResidentMode }).then(result => {
-                try { sessionStorage.setItem(`abasSathiDashboardSummary:${session.societyCode}:${session.user?.userId}`, JSON.stringify({ at:Date.now(), summary:result.summary || {}, society:result.society || {} })); } catch {}
-                console.info('ABAS SATHI dashboard summary timing', { role: activeRole, status: result.status || 'unknown' });
-                return [] as Array<readonly [string, any[]]>;
-              }),
-              apiCall<any>('getRoleDashboardData', { viewAsResident:isResidentMode }).then(result => Object.entries(result.data || {}).map(([key,value]) => [key,normalizeRows(value as any[])] as const)),
-              loadOne('rolePermissions').then(rows => [['rolePermissions',normalizeRows(rows)] as const])
-            ]).then(results=>results.flatMap((r,i)=> {
-              if(r.status==='fulfilled') return r.value;
-              const label=['Dashboard Summary','Role Dashboard Data','Role Permissions'][i];
-              console.error('ABAS SATHI module load error', {module:label,role:activeRole,error:String(r.reason||'Unknown error')});
-              return [];
-            }))
-          : await Promise.allSettled(permittedRequested.map(async key => [key, normalizeRows(await loadOne(key))] as const)).then(results=>results.flatMap((r,i)=>{
-              if(r.status==='fulfilled') return [r.value];
-              const module=permittedRequested[i];
-              console.error('ABAS SATHI module load error', {module,role:activeRole,error:String(r.reason||'Unknown error')});
-              return [[module,[]] as const];
-            }));
-        if (cancelled) return;
-        const data: Record<string, any[]> = Object.fromEntries(loaded);
-        const rows = (key: string) => data[key] || [];
-        if (requested.includes('properties')) setProperties(rows('properties').map((r:any) => ({...r,
-          PropertyID:String(r.PropertyID||''), Flat_No:String(r.Flat_No||''), Block_Tower:String(r.Block_Tower||''),
-          Floor_No:Number(r.Floor_No||0),
-          Carpet_Area:r.Carpet_Area === '' || r.Carpet_Area == null ? null : Number(r.Carpet_Area),
-          Allocated_Common_Area:r.Allocated_Common_Area === '' || r.Allocated_Common_Area == null ? null : Number(r.Allocated_Common_Area),
-          Structural_Area:r.Structural_Area === '' || r.Structural_Area == null ? null : Number(r.Structural_Area),
-          Super_Built_up_Area:r.Super_Built_up_Area === '' || r.Super_Built_up_Area == null ? null : Number(r.Super_Built_up_Area),
-          Occupancy_Status:r.Occupancy_Status==='Occupied'?'Self Occupied':(r.Occupancy_Status||'Vacant'), Property_Status:r.Property_Status||'Active'
-        })) as PropertyMaster[]);
-        if (requested.includes('owners')) setOwners(rows('owners') as OwnerMaster[]);
-        if (requested.includes('ownershipHistory')) setOwnerships(rows('ownershipHistory') as OwnershipHistory[]);
-        if (requested.includes('tenants')) setTenants(rows('tenants') as TenantMaster[]);
-        if (requested.includes('rates')) setRates(rows('rates') as RateMaster[]);
-        if (requested.includes('invoices')) setInvoices(rows('invoices') as InvoiceRegister[]);
-        if (requested.includes('receipts')) setReceipts(rows('receipts') as FundInflowRegister[]);
-        if (requested.includes('billWiseDetails')) setBillAllocations(rows('billWiseDetails') as BillWiseDetails[]);
-        if (requested.includes('expenses')) setExpenses(rows('expenses') as ExpenseRegister[]);
-        if (requested.includes('expenseCategories')) setExpenseCategories(rows('expenseCategories') as ExpenseCategoryMaster[]);
-        if (requested.includes('bankAccounts')) setBankAccounts(rows('bankAccounts') as BankAccountMaster[]);
-        if (requested.includes('activityRequests')) setActivityRequests(rows('activityRequests') as ActivityRequestRegister[]);
-        if (requested.includes('notices')) setNotices(rows('notices') as NoticeMaster[]);
-        if (requested.includes('gallery')) setGallery(rows('gallery') as GalleryMaster[]);
-        if (requested.includes('preventiveMaintenance')) setPreventiveMaintenance(rows('preventiveMaintenance') as PreventiveMaintenanceMaster[]);
-        if (requested.includes('financialYears')) setFinancialYears(rows('financialYears') as FinancialYearMaster[]);
-        if (requested.includes('accountHeads')) setAccountHeads(rows('accountHeads') as AccountHeadMaster[]);
-        if (permittedRequested.includes('auditLogs')) setAuditLogs(rows('auditLogs') as AuditLog[]);
-        if (requested.includes('rolePermissions')) {
-          const freshPermissions = rows('rolePermissions') as RolePermissionRecord[];
-          setRolePermissions(freshPermissions);
-          try { localStorage.setItem(`abasSathiRolePermissions:${session.societyCode}:${session.user?.role}`, JSON.stringify({savedAt:Date.now(),rows:freshPermissions})); } catch {}
+
+        // Instantly hydrate any cached/stale module arrays into React state (<1ms UI response) before background network fetches.
+        permittedRequested.forEach((mod) => {
+          const cached = moduleDataCache.current.get(`${scopeKey}:${mod}`);
+          if (cached && Array.isArray(cached.data)) {
+            applyModuleRows(mod, cached.data);
+          }
+        });
+
+        const loadPermissionsFast = () => {
+          const permCacheKey = `${scopeKey}:rolePermissions`;
+          const permCached = moduleDataCache.current.get(permCacheKey);
+          if (permCached && Date.now() - permCached.at < readCacheTtlMs) {
+            applyModuleRows('rolePermissions', permCached.data);
+            return Promise.resolve();
+          }
+          return loadOne('rolePermissions')
+            .then(rows => applyModuleRows('rolePermissions', rows))
+            .catch(err => {
+              console.error('ABAS SATHI module load error', { module: 'Role Permissions', role: activeRole, error: String(err || 'Unknown error') });
+              if (!cancelled) setPermissionsReady(true);
+            });
+        };
+
+        if (activeTab === 'dashboard') {
+          // Check if dashboard modules are already warm (<30s); otherwise fetch getRoleDashboardData once and populate all module caches.
+          const dashCoreModules = activeRole === 'Resident'
+            ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery']
+            : ['properties','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','preventiveMaintenance'];
+          const allDashWarm = dashCoreModules.every((mod) => {
+            const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
+            return c && Date.now() - c.at < readCacheTtlMs;
+          });
+
+          const permsPromise = loadPermissionsFast();
+
+          const dashDataPromise = allDashWarm
+            ? Promise.resolve()
+            : apiCall<any>('getRoleDashboardData', { viewAsResident: isResidentMode })
+                .then((result) => {
+                  const entries = Object.entries(result.data || {});
+                  const now = Date.now();
+                  const snapshotUpdates: Record<string, any[]> = {};
+                  entries.forEach(([key, value]) => {
+                    const normalized = normalizeRows(value as any[]);
+                    moduleDataCache.current.set(`${scopeKey}:${key}`, { at: now, data: normalized });
+                    snapshotUpdates[key] = normalized;
+                    applyModuleRows(key, normalized);
+                  });
+                  writeScopedSnapshotModules(scopeKey, snapshotUpdates, now);
+                })
+                .catch((err) => {
+                  console.error('ABAS SATHI module load error', { module: 'Role Dashboard Data', role: activeRole, error: String(err || 'Unknown error') });
+                });
+
+          // Keep dashboard summary cache populated non-blockingly without competing with primary dashboard data.
+          const summaryCacheKey = `abasSathiDashboardSummary:${session.societyCode}:${session.user?.userId}`;
+          let hasFreshSummary = false;
+          try {
+            const cachedSummary = JSON.parse(sessionStorage.getItem(summaryCacheKey) || 'null');
+            if (cachedSummary && Date.now() - Number(cachedSummary.at || 0) < 60000) hasFreshSummary = true;
+          } catch {}
+          const summaryPromise = hasFreshSummary
+            ? Promise.resolve()
+            : dashDataPromise.then(() =>
+                apiCall<any>('getDashboardSummary', { viewAsResident: isResidentMode })
+                  .then((result) => {
+                    try { sessionStorage.setItem(summaryCacheKey, JSON.stringify({ at: Date.now(), summary: result.summary || {}, society: result.society || {} })); } catch {}
+                    console.info('ABAS SATHI dashboard summary timing', { role: activeRole, status: result.status || 'unknown' });
+                  })
+                  .catch((err) => {
+                    console.error('ABAS SATHI module load error', { module: 'Dashboard Summary', role: activeRole, error: String(err || 'Unknown error') });
+                  })
+              );
+
+          await Promise.allSettled([permsPromise, dashDataPromise]);
+
+          // Silently pre-warm commonly visited secondary master modules so subsequent tab switches load in 0ms.
+          if (!cancelled) {
+            const prefetchCandidates = activeRole === 'Resident'
+              ? ['propertyUtilityDetails']
+              : ['owners', 'ownershipHistory', 'rates', 'expenseCategories', 'financialYears'];
+            const missingPrefetch = prefetchCandidates.filter((mod) => {
+              const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
+              return !c || Date.now() - c.at >= readCacheTtlMs;
+            });
+            if (missingPrefetch.length > 0) {
+              void Promise.allSettled(
+                missingPrefetch.map((mod) =>
+                  loadOne(mod)
+                    .then((rows) => applyModuleRows(mod, rows))
+                    .catch(() => undefined)
+                )
+              );
+            }
+          }
+          void summaryPromise;
+        } else {
+          // Progressive per-module loading: each screen updates as soon as each module resolves.
+          const tasks = permittedRequested.map((mod) => {
+            if (mod === 'rolePermissions') return loadPermissionsFast();
+            return loadOne(mod)
+              .then((rows) => applyModuleRows(mod, rows))
+              .catch((err) => {
+                console.error('ABAS SATHI module load error', { module: mod, role: activeRole, error: String(err || 'Unknown error') });
+              });
+          });
+          await Promise.allSettled(tasks);
         }
+
+        if (cancelled) return;
         setPermissionsReady(true);
         console.info('ABAS SATHI screen load timing', { tab: activeTab, role: activeRole, modules: permittedRequested.length });
       } catch (error:any) {
         setPermissionsReady(true);
         console.error('ABAS SATHI selective database load failed:', error);
         if (String(error?.message || '').toLowerCase().includes('session')) {
+          clearAllUserDataCaches();
           localStorage.removeItem('abasSathiSession'); window.location.reload();
         }
       }
@@ -517,6 +738,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('dashboard');
   };
 
+  // Keep currentUser.Ownership_ID synchronized from Ownership History if PropertyID is linked.
+  useEffect(() => {
+    if (!currentUser.PropertyID || currentUser.Ownership_ID || ownerships.length === 0) return;
+    const match = ownerships.find(
+      (o) =>
+        String(o.PropertyID || '').trim() === String(currentUser.PropertyID || '').trim() &&
+        String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
+    );
+    if (match?.Ownership_ID) {
+      setCurrentUser((prev) => (prev.Ownership_ID ? prev : { ...prev, Ownership_ID: String(match.Ownership_ID) }));
+    }
+  }, [currentUser.PropertyID, currentUser.Ownership_ID, ownerships]);
+
   const handleRoleChange = (role: UserRole) => {
     // UI display mode only. This never changes the authenticated user's actual role.
     if (role === 'Resident' && ['Committee','Accountant'].includes(actualRole)) {
@@ -532,7 +766,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
   const toggleResidentMode = () => {
     if (!['Committee','Accountant'].includes(actualRole)) return false;
-    if (!currentUser.PropertyID || !currentUser.Ownership_ID) return false;
+    const matchedOwnershipId =
+      currentUser.Ownership_ID ||
+      ownerships.find(
+        (o) =>
+          String(o.PropertyID || '').trim() === String(currentUser.PropertyID || '').trim() &&
+          String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
+      )?.Ownership_ID ||
+      null;
+    if (matchedOwnershipId && !currentUser.Ownership_ID) {
+      setCurrentUser((prev) => ({ ...prev, Ownership_ID: String(matchedOwnershipId) }));
+    }
+    if (!currentUser.PropertyID || (!currentUser.Ownership_ID && !matchedOwnershipId)) return false;
     setIsResidentMode(prev => {
       const next = !prev;
       setActiveRole(next ? 'Resident' : actualRole);
@@ -556,7 +801,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const saved:any = (()=>{try{return JSON.parse(localStorage.getItem('abasSathiSession')||'{}')}catch{return {}}})();
     if(!saved.token)return;
     const res:any=await apiCall(actualRole==='Admin'?'getModuleData':'getMyPermissions',{module:'rolePermissions',viewAsResident:isResidentMode,page:1,limit:200});
-    setRolePermissions(Array.isArray(res.data)?res.data:[]);
+    const rows = Array.isArray(res.data)?res.data:[];
+    setRolePermissions(rows);
+    writeCachedPermissions(saved.societyCode, isResidentMode ? 'Resident' : saved.user?.role, rows);
+    const scopeKey = buildScopeKey(saved.societyCode, saved.user?.userId, saved.user?.role, isResidentMode);
+    moduleDataCache.current.set(`${scopeKey}:rolePermissions`, { at: Date.now(), data: rows });
   };
   const deleteRolePermission = async (permissionId:string) => {
     await apiCall('deleteRolePermission',{permissionId});

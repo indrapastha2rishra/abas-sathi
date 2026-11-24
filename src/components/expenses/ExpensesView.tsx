@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import {
   TrendingDown,
   PlusCircle,
@@ -223,7 +224,7 @@ export const ExpensesView: React.FC = () => {
                   {filteredExpenses.map((exp) => (
                     <tr key={exp.Expense_ID} className="hover:bg-neutral-50 transition-colors">
                       <td className="px-4 py-3 font-bold text-[#29352D]">{exp.Voucher_No}</td>
-                      <td className="px-4 py-3 text-gray-500">{exp.Payment_Date}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDateDisplay(exp.Payment_Date, '—')}</td>
                       <td className="px-4 py-3 font-semibold text-[#536B4D]">{exp.Expense_Category}</td>
                       <td className="px-4 py-3 font-medium text-[#29352D]">{exp.Payee_Name}</td>
                       <td className="px-4 py-3 text-gray-600 truncate max-w-xs">{exp.Particulars}</td>

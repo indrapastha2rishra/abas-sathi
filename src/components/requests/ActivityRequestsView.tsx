@@ -18,6 +18,7 @@ import {
   Check,
 } from 'lucide-react';
 import { ActivityRequestRegister } from '../../types/database';
+import { formatDateDisplay } from '../../utils/dateFormat';
 
 export const ActivityRequestsView: React.FC = () => {
   const {
@@ -248,7 +249,7 @@ export const ActivityRequestsView: React.FC = () => {
               </div>
               <div>
                 <span>Date Logged:</span>
-                <p className="font-medium text-[#29352D]">{req.Request_Date}</p>
+                <p className="font-medium text-[#29352D]">{formatDateDisplay(req.Request_Date, '—')}</p>
               </div>
             </div>
 

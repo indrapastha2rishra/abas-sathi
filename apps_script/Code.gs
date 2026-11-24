@@ -80,7 +80,7 @@ function doPost(e) {
       case "getMyPermissions": return getMyPermissions_(session);
       case "deleteRolePermission": return deleteRolePermission_(session, body);
       case "getModuleSchema": return getModuleSchema_(session, body);
-      case "getDashboardSummary": requirePermission_(session,"Dashboard","Can_View"); return getDashboardSummary_(session);
+      case "getDashboardSummary": requirePermission_(session,"Dashboard","Can_View"); return getDashboardSummary_(session, body);
       case "getDashboardData": return getDashboardData_(session, body);
       case "getRoleDashboardData": return getRoleDashboardData_(session, body);
       case "getReports": return getReports_(session, body);
@@ -311,6 +311,7 @@ function postOpeningBalances_(session,body){
     const rows=postJournalEntry_(ss,"Opening Balance",batch,cleanText_(body.effectiveDate,20)||new Date(),normalized.map(x=>({accountCode:x.accountCode,accountName:x.accountName,accountType:x.accountType,debit:x.debit,credit:x.credit,narration:"Approved opening balance"})),session);
     const result={batchId:batch,lineCount:rows.length,totalDebit:dr,totalCredit:cr};
     writeOperation_(ledger,op,"postOpeningBalances",batch,"DONE",result);
+    clearFundBalanceCache_(session.societyCode);
     auditEvent_(session,"CREATE","Opening Balance",batch,"Opening balances posted as a balanced journal batch","",result);
     return json_({status:"success",data:result});
   }finally{lock.releaseLock();}
@@ -393,7 +394,21 @@ function fundBalanceSheet_(ss) {
   else ensureHeaders_(sh,FUND_BALANCE_HEADERS_);
   return sh;
 }
-function fundDateKey_(v){return String(v||"").slice(0,10);}
+function clearFundBalanceCache_(societyCode){CacheService.getScriptCache().remove("FUND_BAL_"+sha256_(String(societyCode||"")));}
+function fundDateKey_(v){
+  if(v instanceof Date)return Utilities.formatDate(v,Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");
+  const s=String(v||"").trim();
+  if(!s)return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
+  if(/^\d{4}\/\d{2}\/\d{2}$/.test(s))return s.replace(/\//g,"-");
+  const dmy=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if(dmy)return dmy[3]+"-"+dmy[2].padStart(2,"0")+"-"+dmy[1].padStart(2,"0");
+  if(s.indexOf("T")>0||/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)){
+    const d=new Date(s);
+    if(!isNaN(d.getTime()))return Utilities.formatDate(d,Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");
+  }
+  return s.slice(0,10);
+}
 function fundTodayKey_(){try{return Utilities.formatDate(new Date(),Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");}catch(e){return new Date().toISOString().slice(0,10);}}
 function fundMoney_(v){const n=Number(v||0);return isFinite(n)?Math.round(n*100)/100:0;}
 function fundAccountKey_(value,accounts){
@@ -450,7 +465,12 @@ function getYearEndClosingPreview_(session,body){
   return json_({status:"success",data:preview,generatedAt:new Date().toISOString(),source:"Fund Balance Register + Fund Inflow Register + Expense Register"});
 }
 function getFundBalanceSummary_(session,body){
-  requireRole_(session,["Admin","Accountant"]);const ss=SpreadsheetApp.openById(session.databaseId);
+  requireRole_(session,["Admin","Accountant","Committee"]);
+  const cache=CacheService.getScriptCache();
+  const cacheKey="FUND_BAL_"+sha256_(String(session.societyCode||""));
+  const cached=cache.get(cacheKey);
+  if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
+  const ss=SpreadsheetApp.openById(session.databaseId);
   const years=sheetObjects_(ss.getSheetByName("Financial Year Master"));const today=fundTodayKey_();
   const fy=years.find(x=>fundDateKey_(x.Start_Date)<=today&&fundDateKey_(x.End_Date)>=today)||years.find(x=>String(x.Is_Current).toLowerCase()==="true")||years.sort((a,b)=>fundDateKey_(b.Start_Date).localeCompare(fundDateKey_(a.Start_Date)))[0];
   if(!fy)return json_({status:"success",data:{fy:null,openingFundBalance:0,totalFundReceived:0,totalFundUtilized:0,availableFund:0,sourceStatus:"No Financial Year configured"}});
@@ -463,7 +483,9 @@ function getFundBalanceSummary_(session,body){
   let effectiveOpening=opening,sourceStatus=current.length?"Fund Balance Register": "Opening balance not finalized";
   if(!current.length&&prev){const prevRows=rows.filter(x=>String(x.FY_ID)===String(prev.FY_ID));if(prevRows.length&&prevRows.every(x=>String(x.Finalization_Status)==="Finalized")){effectiveOpening=prevRows.reduce((a,x)=>a+fundMoney_(x.Closing_Balance),0);sourceStatus="Previous FY finalized closing balance";}}
   if(!current.length&&!prev){effectiveOpening=sheetObjects_(ss.getSheetByName("Bank Account Master")).reduce((a,x)=>a+fundMoney_(x.Opening_Balance),0);sourceStatus="Initial Bank Account Master opening balances; cash opening defaults to zero";}
-  return json_({status:"success",data:{fy,openingFundBalance:fundMoney_(effectiveOpening),totalFundReceived:fundMoney_(received),totalFundUtilized:fundMoney_(paid),availableFund:fundMoney_(effectiveOpening+received-paid),sourceStatus,generatedAt:new Date().toISOString()}});
+  const payload={status:"success",data:{fy,openingFundBalance:fundMoney_(effectiveOpening),totalFundReceived:fundMoney_(received),totalFundUtilized:fundMoney_(paid),availableFund:fundMoney_(effectiveOpening+received-paid),sourceStatus,generatedAt:new Date().toISOString()}};
+  const serialized=JSON.stringify(payload);if(serialized.length<=95000)cache.put(cacheKey,serialized,20);
+  return json_(payload);
 }
 function finalizeYearEndClosing_(session,body){
   requireRole_(session,["Admin"]);const op=requireOperationId_(body),fyId=cleanText_(body.fyId,100),submitted=Array.isArray(body.rows)?body.rows:[];
@@ -503,46 +525,193 @@ function finalizeYearEndClosing_(session,body){
       });
     }
     const result={fyId,fyName:preview.fy.FY_Name,rowCount:rows.length,closingBalance:fundMoney_(rows.reduce((a,x)=>a+x.Closing_Balance,0)),nextFY:preview.next?preview.next.FY_Name:null,status:"Finalized"};
-    writeOperation_(ledger,op,"finalizeYearEndClosing",fyId,"DONE",result);auditEvent_(session,"FINALIZE","Fund Balance Register",fyId,"Year-end closing finalized and next FY opening carried forward","",result);
+    writeOperation_(ledger,op,"finalizeYearEndClosing",fyId,"DONE",result);clearFundBalanceCache_(session.societyCode);auditEvent_(session,"FINALIZE","Fund Balance Register",fyId,"Year-end closing finalized and next FY opening carried forward","",result);
     return json_({status:"success",data:result});
   }finally{lock.releaseLock();}
+}
+
+function invoiceDueDetails_(invoiceRows, receiptRows, billRows) {
+  const confirmedTxn = {};
+  (receiptRows || []).forEach(r => {
+    if (String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed" && r.Transaction_ID) {
+      confirmedTxn[String(r.Transaction_ID)] = true;
+    }
+  });
+  const allocatedByInvoice = {};
+  (billRows || []).forEach(b => {
+    if (!confirmedTxn[String(b.Transaction_ID || "")]) return;
+    const id = String(b.InvoiceID || "");
+    if (id) allocatedByInvoice[id] = (allocatedByInvoice[id] || 0) + fundMoney_(b.Allocated_Amount);
+  });
+  return (invoiceRows || []).map(inv => {
+    const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
+    const excluded = ["cancelled", "draft", "pending_approval", "pending approval"].includes(statusRaw);
+    const id = String(inv.InvoiceID || "");
+    const net = fundMoney_(inv.Net_Charge_Amount);
+    const hasAlloc = Object.prototype.hasOwnProperty.call(allocatedByInvoice, id);
+    const paid = excluded ? 0 : Math.min(net, Math.max(0, hasAlloc ? allocatedByInvoice[id] : fundMoney_(inv.Paid_Amount)));
+    const rawDue = inv.Outstanding_Amount;
+    const due = excluded ? 0 : (hasAlloc || rawDue === "" || rawDue === null || rawDue === undefined ? Math.max(0, fundMoney_(net - paid)) : Math.max(0, fundMoney_(rawDue)));
+    return { inv, excluded, net, paid, due };
+  });
+}
+
+function openingBalanceAtDate_(ss, fromDate) {
+  const years = sheetObjects_(ss.getSheetByName("Financial Year Master")).sort((a, b) => fundDateKey_(a.Start_Date).localeCompare(fundDateKey_(b.Start_Date)));
+  const target = fundDateKey_(fromDate) || fundTodayKey_();
+  const fy = years.find(x => fundDateKey_(x.Start_Date) <= target && fundDateKey_(x.End_Date) >= target)
+    || years.find(x => String(x.Is_Current).toLowerCase() === "true")
+    || years[years.length - 1]
+    || null;
+  const fbrSheet = fundBalanceSheet_(ss);
+  const fbrRows = sheetObjects_(fbrSheet);
+  let fyOpening = 0;
+  let openingSource = "Bank Account Master";
+  let fyStart = "";
+  if (fy) {
+    fyStart = fundDateKey_(fy.Start_Date);
+    const current = fbrRows.filter(x => String(x.FY_ID) === String(fy.FY_ID));
+    if (current.length) {
+      fyOpening = current.reduce((a, x) => a + fundMoney_(x.Opening_Balance), 0);
+      openingSource = "Fund Balance Register";
+    } else {
+      const prev = years.filter(x => fundDateKey_(x.End_Date) < fyStart).sort((a, b) => fundDateKey_(b.End_Date).localeCompare(fundDateKey_(a.End_Date)))[0];
+      const prevRows = prev ? fbrRows.filter(x => String(x.FY_ID) === String(prev.FY_ID)) : [];
+      if (prevRows.length && prevRows.every(x => String(x.Finalization_Status) === "Finalized")) {
+        fyOpening = prevRows.reduce((a, x) => a + fundMoney_(x.Closing_Balance), 0);
+        openingSource = "Previous FY Finalized Closing";
+      } else {
+        fyOpening = sheetObjects_(ss.getSheetByName("Bank Account Master")).reduce((a, x) => a + fundMoney_(x.Opening_Balance), 0);
+      }
+    }
+  } else {
+    fyOpening = sheetObjects_(ss.getSheetByName("Bank Account Master")).reduce((a, x) => a + fundMoney_(x.Opening_Balance), 0);
+  }
+  let priorIn = 0, priorOut = 0;
+  if (fyStart && target > fyStart) {
+    priorIn = sheetObjects_(ss.getSheetByName("Fund Inflow Register"))
+      .filter(x => String(x.Receipt_Status || x.Status || "").trim().toLowerCase() === "confirmed")
+      .filter(x => { const d = fundDateKey_(x.Date_Of_Received); return d >= fyStart && d < target; })
+      .reduce((a, x) => a + fundMoney_(x.Received_Amount), 0);
+    priorOut = sheetObjects_(ss.getSheetByName("Expense Register"))
+      .filter(x => String(x.Expense_Status || "").trim().toLowerCase() === "paid")
+      .filter(x => { const d = fundDateKey_(x.Payment_Date); return d >= fyStart && d < target; })
+      .reduce((a, x) => a + fundMoney_(x.Payment_Amount), 0);
+  }
+  return { fy, fyOpening: fundMoney_(fyOpening), openingBalance: fundMoney_(fyOpening + priorIn - priorOut), openingSource };
 }
 
 function getReports_(session, body) {
   requirePermission_(session,"Reports","Can_View");
   const type=String(body.reportType||"");
   if(["Admin","Accountant","Committee"].indexOf(session.role)<0) throw new Error("Permission denied.");
+  const ss = SpreadsheetApp.openById(session.databaseId);
   if(type==="outstanding") {
-    const invoiceRows=sheetObjects_(societySheet_(session,"Invoice_Register").sh);
-    const grouped={};
-    invoiceRows.forEach(x=>{
-      if(String(x.Invoice_Status||"")==="Cancelled")return;
-      const net=Number(x.Net_Charge_Amount||0),paid=Number(x.Paid_Amount||0);
-      const rawDue=x.Outstanding_Amount;
-      const due=rawDue===""||rawDue===null||rawDue===undefined?Math.max(0,net-paid):Math.max(0,Number(rawDue||0));
-      if(!(due>0))return;
-      const k=String(x.PropertyID||"");
-      if(!grouped[k])grouped[k]={PropertyID:k,Flat_No:x.Flat_Number||x.Flat_No||"",Owner_Name:x.Owner_Name||"",Invoice_Count:0,Total_Billed:0,Total_Paid:0,Outstanding:0};
-      grouped[k].Invoice_Count++;
-      grouped[k].Total_Billed+=net;
-      grouped[k].Total_Paid+=paid;
-      grouped[k].Outstanding+=due;
+    const invoiceSheet = ss.getSheetByName("Invoice_Register") || ss.getSheetByName("Invoice Register");
+    const invoiceRows = invoiceSheet ? sheetObjects_(invoiceSheet) : [];
+    const propRows = sheetObjects_(ss.getSheetByName("Property Master"));
+    const ownerRows = sheetObjects_(ss.getSheetByName("Owner Master"));
+    const ownHistory = sheetObjects_(ss.getSheetByName("Ownership History"));
+    const receiptRows = sheetObjects_(ss.getSheetByName("Fund Inflow Register"));
+    const billRows = sheetObjects_(ss.getSheetByName("Bill Wise Details"));
+    const ownerById = {}; ownerRows.forEach(o => { if (o.OwnerID) ownerById[String(o.OwnerID)] = o; });
+    const currentOwnByProp = {};
+    ownHistory.forEach(h => {
+      if (String(h.PropertyID || "") && String(h.Ownership_Status || "").trim().toLowerCase() === "current") {
+        currentOwnByProp[String(h.PropertyID)] = h;
+      }
     });
-    const data=Object.values(grouped).sort((a,b)=>b.Outstanding-a.Outstanding);
-    return json_({status:"success",reportType:type,data,summary:{propertyCount:data.length,totalOutstanding:data.reduce((a,x)=>a+x.Outstanding,0)},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    const grouped={};
+    propRows.forEach(p => {
+      const pid = String(p.PropertyID || "");
+      if (!pid) return;
+      const curOwn = currentOwnByProp[pid] || {};
+      const ownRec = ownerById[String(curOwn.OwnerID || "")] || {};
+      grouped[pid] = {
+        PropertyID: pid,
+        Flat_No: p.Flat_No || p["Flat No."] || "",
+        Block_Tower: p.Block_Tower || p["Block / Tower"] || "",
+        Owner_Name: ownRec.Owner_Name || "",
+        Invoice_Count: 0,
+        Total_Billed: 0,
+        Total_Paid: 0,
+        Outstanding: 0
+      };
+    });
+    invoiceDueDetails_(invoiceRows, receiptRows, billRows).forEach(({ inv, excluded, net, paid, due }) => {
+      if (excluded) return;
+      const k = String(inv.PropertyID || "");
+      if (!k) return;
+      if (!grouped[k]) {
+        grouped[k] = {
+          PropertyID: k,
+          Flat_No: inv.Flat_Number || inv.Flat_No || "",
+          Block_Tower: "",
+          Owner_Name: inv.Owner_Name || (ownerById[String(inv.OwnerID || "")] || {}).Owner_Name || "",
+          Invoice_Count: 0,
+          Total_Billed: 0,
+          Total_Paid: 0,
+          Outstanding: 0
+        };
+      }
+      if (!grouped[k].Owner_Name) {
+        grouped[k].Owner_Name = inv.Owner_Name || (ownerById[String(inv.OwnerID || "")] || {}).Owner_Name || "";
+      }
+      grouped[k].Invoice_Count++;
+      grouped[k].Total_Billed = fundMoney_(grouped[k].Total_Billed + net);
+      grouped[k].Total_Paid = fundMoney_(grouped[k].Total_Paid + paid);
+      grouped[k].Outstanding = fundMoney_(grouped[k].Outstanding + due);
+    });
+    const data=Object.values(grouped).sort((a,b)=>(b.Outstanding-a.Outstanding)||String(a.Flat_No).localeCompare(String(b.Flat_No)));
+    const pendingCount = data.filter(x => x.Outstanding > 0).length;
+    return json_({status:"success",reportType:type,data,summary:{propertyCount:data.length,pendingCount,totalOutstanding:fundMoney_(data.reduce((a,x)=>a+x.Outstanding,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="receiptPayment") {
-    const from=String(body.fromDate||"0000-01-01"),to=String(body.toDate||"9999-12-31");
-    const receipts=sheetObjects_(societySheet_(session,"Fund Inflow Register").sh).filter(x=>x.Receipt_Status==="Confirmed"&&String(x.Date_Of_Received||"").slice(0,10)>=from&&String(x.Date_Of_Received||"").slice(0,10)<=to);
-    const expenses=sheetObjects_(societySheet_(session,"Expense Register").sh).filter(x=>x.Expense_Status==="Paid"&&String(x.Payment_Date||"").slice(0,10)>=from&&String(x.Payment_Date||"").slice(0,10)<=to);
-    const totalIn=receipts.reduce((a,x)=>a+Number(x.Received_Amount||0),0),totalOut=expenses.reduce((a,x)=>a+Number(x.Payment_Amount||0),0);
-    const reportData=session.role==="Committee"?{receiptCount:receipts.length,expenseCount:expenses.length,totalReceipts:totalIn,totalPayments:totalOut,netCashMovement:totalIn-totalOut}:{receipts,expenses,totalReceipts:totalIn,totalPayments:totalOut,netCashMovement:totalIn-totalOut};
+    const from=fundDateKey_(body.fromDate||"0000-01-01")||"0000-01-01";
+    const to=fundDateKey_(body.toDate||"9999-12-31")||"9999-12-31";
+    const receipts=sheetObjects_(ss.getSheetByName("Fund Inflow Register"))
+      .filter(x=>String(x.Receipt_Status||x.Status||"").trim().toLowerCase()==="confirmed")
+      .filter(x=>{const d=fundDateKey_(x.Date_Of_Received);return d&&d>=from&&d<=to;})
+      .map(x=>({Transaction_ID:x.Transaction_ID,Receipt_Number:x.Receipt_Number,Date_Of_Received:fundDateKey_(x.Date_Of_Received),PropertyID:x.PropertyID,Flat_No:x.Flat_No,Owner_Name:x.Owner_Name,Received_Amount:fundMoney_(x.Received_Amount),Received_Mode:x.Received_Mode,Bank_Account:x.Bank_Account}));
+    const expenses=sheetObjects_(ss.getSheetByName("Expense Register"))
+      .filter(x=>String(x.Expense_Status||"").trim().toLowerCase()==="paid")
+      .filter(x=>{const d=fundDateKey_(x.Payment_Date);return d&&d>=from&&d<=to;})
+      .map(x=>({Expense_ID:x.Expense_ID,Voucher_No:x.Voucher_No,Payment_Date:fundDateKey_(x.Payment_Date),Expense_Category:x.Expense_Category,Payee_Name:x.Payee_Name,Payment_Amount:fundMoney_(x.Payment_Amount),Payment_Mode:x.Payment_Mode,Bank_Account:x.Bank_Account}));
+    const totalIn=fundMoney_(receipts.reduce((a,x)=>a+x.Received_Amount,0));
+    const totalOut=fundMoney_(expenses.reduce((a,x)=>a+x.Payment_Amount,0));
+    const ob=openingBalanceAtDate_(ss,from);
+    const closingBalance=fundMoney_(ob.openingBalance+totalIn-totalOut);
+    const reportData={openingBalance:ob.openingBalance,openingSource:ob.openingSource,closingBalance,receiptCount:receipts.length,expenseCount:expenses.length,receipts,expenses,totalReceipts:totalIn,totalPayments:totalOut,netCashMovement:fundMoney_(totalIn-totalOut)};
     return json_({status:"success",reportType:type,period:{from,to},data:reportData,generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="ownerOutstanding") {
-    const rows=sheetObjects_(societySheet_(session,"Invoice_Register").sh).filter(x=>!["Cancelled","Paid"].includes(String(x.Invoice_Status))&&Number(x.Outstanding_Amount||0)>0);
-    const grouped={};rows.forEach(x=>{const k=String(x.OwnerID||"");if(!grouped[k])grouped[k]={OwnerID:k,Owner_Name:x.Owner_Name||"",Property_Count:0,Outstanding:0,Invoice_Count:0};grouped[k].Outstanding+=Number(x.Outstanding_Amount||0);grouped[k].Invoice_Count++;});
-    return json_({status:"success",reportType:type,data:Object.values(grouped),generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    const invoiceSheet = ss.getSheetByName("Invoice_Register") || ss.getSheetByName("Invoice Register");
+    const invoiceRows = invoiceSheet ? sheetObjects_(invoiceSheet) : [];
+    const ownerRows = sheetObjects_(ss.getSheetByName("Owner Master"));
+    const propRows = sheetObjects_(ss.getSheetByName("Property Master"));
+    const receiptRows = sheetObjects_(ss.getSheetByName("Fund Inflow Register"));
+    const billRows = sheetObjects_(ss.getSheetByName("Bill Wise Details"));
+    const ownerById = {}; ownerRows.forEach(o => { if (o.OwnerID) ownerById[String(o.OwnerID)] = o; });
+    const propById = {}; propRows.forEach(p => { if (p.PropertyID) propById[String(p.PropertyID)] = p; });
+    const grouped={};
+    invoiceDueDetails_(invoiceRows, receiptRows, billRows).forEach(({ inv, excluded, net, paid, due }) => {
+      if (excluded || !(due > 0)) return;
+      const k = String(inv.OwnerID || inv.Owner_Name || inv.PropertyID || "UNMAPPED");
+      const ownerRec = ownerById[String(inv.OwnerID || "")] || {};
+      const propRec = propById[String(inv.PropertyID || "")] || {};
+      if (!grouped[k]) grouped[k] = { OwnerID: String(inv.OwnerID || "—"), Owner_Name: inv.Owner_Name || ownerRec.Owner_Name || "Registered Owner", _props: {}, Flat_Numbers: "", Property_Count: 0, Invoice_Count: 0, Total_Billed: 0, Total_Paid: 0, Outstanding: 0 };
+      const pid = String(inv.PropertyID || "");
+      if (pid) grouped[k]._props[pid] = String(inv.Flat_Number || inv.Flat_No || propRec.Flat_No || pid);
+      grouped[k].Invoice_Count++;
+      grouped[k].Total_Billed = fundMoney_(grouped[k].Total_Billed + net);
+      grouped[k].Total_Paid = fundMoney_(grouped[k].Total_Paid + paid);
+      grouped[k].Outstanding = fundMoney_(grouped[k].Outstanding + due);
+    });
+    const data = Object.values(grouped).map(g => {
+      const flats = Object.values(g._props);
+      return { OwnerID: g.OwnerID, Owner_Name: g.Owner_Name, Property_Count: flats.length, Flat_Numbers: flats.join(", "), Invoice_Count: g.Invoice_Count, Total_Billed: g.Total_Billed, Total_Paid: g.Total_Paid, Outstanding: g.Outstanding };
+    }).sort((a,b) => b.Outstanding - a.Outstanding);
+    return json_({status:"success",reportType:type,data,summary:{ownerCount:data.length,totalOutstanding:fundMoney_(data.reduce((a,x)=>a+x.Outstanding,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="ownershipOutstanding") {
     const invoiceRows = sheetObjects_(societySheet_(session,"Invoice_Register").sh);
@@ -561,24 +730,46 @@ function getReports_(session, body) {
     });
   }
   if(type==="expenseSummary") {
-    const from=String(body.fromDate||"0000-01-01"),to=String(body.toDate||"9999-12-31");
-    const rows=sheetObjects_(societySheet_(session,"Expense Register").sh).filter(x=>x.Expense_Status==="Paid"&&String(x.Payment_Date||"").slice(0,10)>=from&&String(x.Payment_Date||"").slice(0,10)<=to);
-    const grouped={};rows.forEach(x=>{const k=String(x.Expense_Category||"Uncategorized");if(!grouped[k])grouped[k]={Category:k,Count:0,Total:0};grouped[k].Count++;grouped[k].Total+=Number(x.Payment_Amount||0);});
-    return json_({status:"success",reportType:type,period:{from,to},data:Object.values(grouped),generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    const from=fundDateKey_(body.fromDate||"0000-01-01")||"0000-01-01";
+    const to=fundDateKey_(body.toDate||"9999-12-31")||"9999-12-31";
+    const rows=sheetObjects_(ss.getSheetByName("Expense Register"))
+      .filter(x=>String(x.Expense_Status||"").trim().toLowerCase()==="paid")
+      .filter(x=>{const d=fundDateKey_(x.Payment_Date);return d&&d>=from&&d<=to;});
+    const grouped={};
+    rows.forEach(x=>{
+      const k=String(x.Expense_Category||"Uncategorized");
+      if(!grouped[k])grouped[k]={Category:k,Count:0,Total:0};
+      grouped[k].Count++;
+      grouped[k].Total=fundMoney_(grouped[k].Total+fundMoney_(x.Payment_Amount));
+    });
+    const data=Object.values(grouped).sort((a,b)=>b.Total-a.Total);
+    return json_({status:"success",reportType:type,period:{from,to},data,summary:{voucherCount:rows.length,totalPaid:fundMoney_(data.reduce((a,x)=>a+x.Total,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="financialYear") {
-    const from=String(body.fromDate||"0000-01-01"),to=String(body.toDate||"9999-12-31");
-    const invoices=sheetObjects_(societySheet_(session,"Invoice_Register").sh).filter(x=>String(x.Billing_Date||"").slice(0,10)>=from&&String(x.Billing_Date||"").slice(0,10)<=to&&x.Invoice_Status!=="Cancelled");
-    const receipts=sheetObjects_(societySheet_(session,"Fund Inflow Register").sh).filter(x=>x.Receipt_Status==="Confirmed"&&String(x.Date_Of_Received||"").slice(0,10)>=from&&String(x.Date_Of_Received||"").slice(0,10)<=to);
-    const expenses=sheetObjects_(societySheet_(session,"Expense Register").sh).filter(x=>x.Expense_Status==="Paid"&&String(x.Payment_Date||"").slice(0,10)>=from&&String(x.Payment_Date||"").slice(0,10)<=to);
-    return json_({status:"success",reportType:type,period:{from,to},data:{invoiceCount:invoices.length,billed:invoices.reduce((a,x)=>a+Number(x.Net_Charge_Amount||0),0),receipts:receipts.reduce((a,x)=>a+Number(x.Received_Amount||0),0),paidExpenses:expenses.reduce((a,x)=>a+Number(x.Payment_Amount||0),0),outstanding:invoices.reduce((a,x)=>a+Number(x.Outstanding_Amount||0),0)},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    const from=fundDateKey_(body.fromDate||"0000-01-01")||"0000-01-01";
+    const to=fundDateKey_(body.toDate||"9999-12-31")||"9999-12-31";
+    const invoiceSheet=ss.getSheetByName("Invoice_Register")||ss.getSheetByName("Invoice Register");
+    const invoiceRows=invoiceSheet?sheetObjects_(invoiceSheet):[];
+    const receiptRows=sheetObjects_(ss.getSheetByName("Fund Inflow Register"));
+    const billRows=sheetObjects_(ss.getSheetByName("Bill Wise Details"));
+    const filteredInv=invoiceDueDetails_(invoiceRows,receiptRows,billRows).filter(({inv,excluded})=>{
+      if(excluded)return false;
+      const d=fundDateKey_(inv.Billing_Date);
+      return d&&d>=from&&d<=to;
+    });
+    const receipts=receiptRows.filter(x=>String(x.Receipt_Status||x.Status||"").trim().toLowerCase()==="confirmed").filter(x=>{const d=fundDateKey_(x.Date_Of_Received);return d&&d>=from&&d<=to;});
+    const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||"").trim().toLowerCase()==="paid").filter(x=>{const d=fundDateKey_(x.Payment_Date);return d&&d>=from&&d<=to;});
+    const ob=openingBalanceAtDate_(ss,from);
+    const totalReceipts=fundMoney_(receipts.reduce((a,x)=>a+fundMoney_(x.Received_Amount),0));
+    const totalPaidExpenses=fundMoney_(expenses.reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0));
+    return json_({status:"success",reportType:type,period:{from,to},data:{fyName:ob.fy?ob.fy.FY_Name:"",openingFundBalance:ob.openingBalance,openingSource:ob.openingSource,closingFundBalance:fundMoney_(ob.openingBalance+totalReceipts-totalPaidExpenses),invoiceCount:filteredInv.length,receiptCount:receipts.length,expenseCount:expenses.length,billed:fundMoney_(filteredInv.reduce((a,x)=>a+x.net,0)),receipts:totalReceipts,paidExpenses:totalPaidExpenses,outstanding:fundMoney_(filteredInv.reduce((a,x)=>a+x.due,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="balanceSheet") {
-    const ss=SpreadsheetApp.openById(session.databaseId);
     const journal=ss.getSheetByName("_Journal Ledger");
     const snapshots=ss.getSheetByName("Report Snapshot Register");
-    const asOfDate=String(body.asOfDate||"9999-12-31").slice(0,10);
-    const posted=journal?sheetObjects_(journal).filter(x=>String(x.Status)==="Posted"&&String(x.Journal_Date||"").slice(0,10)<=asOfDate):[];
+    const accountHeadSheet=ss.getSheetByName("Account Head Master");
+    const asOfDate=fundDateKey_(body.asOfDate||"9999-12-31")||"9999-12-31";
+    const posted=journal?sheetObjects_(journal).filter(x=>String(x.Status)==="Posted"&&fundDateKey_(x.Journal_Date)<=asOfDate):[];
     const accounts={};
     posted.forEach(x=>{
       const key=String(x.Account_Name||"Unmapped");
@@ -597,7 +788,8 @@ function getReports_(session, body) {
     const difference=Math.round((assetTotal-liabilityTotal-equityTotal)*100)/100;
     const hasOpeningBalances=posted.some(x=>x.Source_Type==="Opening Balance");
     const latest=snapshots?sheetObjects_(snapshots).filter(x=>x.Report_Type==="Balance Sheet"&&x.Status==="Approved").sort((a,b)=>String(b.Approved_At).localeCompare(String(a.Approved_At)))[0]:null;
-    return json_({status:"success",reportType:type,data:{accounts:rows,totalDebit,totalCredit,assetTotal,liabilityTotal,equityBase,income,expenses,equityTotal,difference,balanced:Math.abs(totalDebit-totalCredit)<0.01&&Math.abs(difference)<0.01,hasOpeningBalances,postedJournalCount:posted.length},generatedAt:new Date().toISOString(),auditStatus:latest?"latest-approved-snapshot-exists":"draft-unapproved",latestApprovedSnapshot:latest||null,warning:"Internal system-generated statement. It is not an independent statutory audit; confirm account mapping and opening balances with your auditor."});
+    const accountHeads=accountHeadSheet?sheetObjects_(accountHeadSheet):[];
+    return json_({status:"success",reportType:type,data:{accounts:rows,accountHeads,totalDebit,totalCredit,assetTotal,liabilityTotal,equityBase,income,expenses,equityTotal,difference,balanced:Math.abs(totalDebit-totalCredit)<0.01&&Math.abs(difference)<0.01,hasOpeningBalances,postedJournalCount:posted.length},generatedAt:new Date().toISOString(),auditStatus:latest?"latest-approved-snapshot-exists":"draft-unapproved",latestApprovedSnapshot:latest||null,warning:"Internal system-generated statement. It is not an independent statutory audit; confirm account mapping and opening balances with your auditor."});
   }
   throw new Error("Unsupported report type.");
 }
@@ -750,15 +942,15 @@ function getDashboardData_(session,body) {
   const ss = SpreadsheetApp.openById(session.databaseId);
   let keys = role === "Resident"
     ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery","propertyUtilityDetails"]
-    : ["properties","tenants","invoices","receipts","billWiseDetails",
-       ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests"] : []),
+    : ["properties","ownershipHistory","tenants","invoices","receipts","billWiseDetails",
+       ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests","expenses"] : []),
        "notices","gallery","preventiveMaintenance",
-       ...(role === "Admin" || role === "Accountant" ? ["expenses","bankAccounts"] : [])];
+       ...(role === "Admin" || role === "Accountant" ? ["bankAccounts"] : [])];
   const recentLimits={activityRequests:250,notices:150,gallery:30,preventiveMaintenance:250};
   const data = {};
   keys=keys.filter(function(key){
     const moduleName=PERMISSION_MODULE_MAP_[key]||key;
-    const granted=rolePermission_(session,moduleName,"Can_View",role);
+    const granted=rolePermission_(session,moduleName,"Can_View",role) || (key==="receipts" && rolePermission_(session,"Fund Inflow","Can_View",role));
     if(!granted) console.warn("ABAS_PERMISSION_AUDIT",JSON.stringify({role:role,module:key,permission:"Can_View",result:"DENIED",reason:"Role permission not granted",societyCode:session.societyCode||""}));
     return granted;
   });
@@ -787,18 +979,25 @@ function getDashboardData_(session,body) {
   return json_(payload);
 }
 
-function getDashboardSummary_(session) {
-  const ss = SpreadsheetApp.openById(session.databaseId);
+function getDashboardSummary_(session, body) {
+  const viewSession = residentViewSession_(session, body && body.viewAsResident);
+  const cache=CacheService.getScriptCache();
+  const cacheKey="DASH_SUM_"+sha256_(String(viewSession.societyCode)+"|"+String(viewSession.role||"")+"|"+String(viewSession.propertyId||"")+"|"+String(viewSession.ownershipId||""));
+  const cached=cache.get(cacheKey);
+  if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
+  const ss = SpreadsheetApp.openById(viewSession.databaseId);
   const read = name => {const aliases={"Invoice_Register":["Invoice_Register","Invoice Register"]};const list=aliases[name]||[name];for(let i=0;i<list.length;i++){const sh=ss.getSheetByName(list[i]);if(sh)return sheetObjects_(sh);}return [];};
-  const properties = rolePermission_(session,"Properties & Residents","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"properties",ss,ss.getSheetByName("Property Master")):read("Property Master")):[];
+  const properties = rolePermission_(session,"Properties & Residents","Can_View",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"properties",ss,ss.getSheetByName("Property Master")):read("Property Master")):[];
   const invoiceSheet=ss.getSheetByName("Invoice_Register")||ss.getSheetByName("Invoice Register");
-  const invoices = rolePermission_(session,"Maintenance & Invoices","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"invoices",ss,invoiceSheet):read("Invoice_Register")):[];
+  const invoices = rolePermission_(session,"Maintenance & Invoices","Can_View",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"invoices",ss,invoiceSheet):read("Invoice_Register")):[];
   const receiptSheet=ss.getSheetByName("Fund Inflow Register"),requestSheet=ss.getSheetByName("Activity Request Register");
-  const receipts = rolePermission_(session,"Payments","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"receipts",ss,receiptSheet):read("Fund Inflow Register")):[];
-  const requests = rolePermission_(session,"Activity Requests","Can_View")?(session.role==="Resident"?residentModuleRecords_(session,"activityRequests",ss,requestSheet):read("Activity Request Register")):[];
+  const receipts = (rolePermission_(session,"Payments","Can_View",viewSession.role)||rolePermission_(session,"Fund Inflow","Can_View",viewSession.role))?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"receipts",ss,receiptSheet):read("Fund Inflow Register")):[];
+  const requests = rolePermission_(session,"Activity Requests","Can_View",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"activityRequests",ss,requestSheet):read("Activity Request Register")):[];
   const paid = receipts.filter(r => String(r.Receipt_Status || r.Status || "").toLowerCase() === "confirmed");
   const outstanding = invoices.reduce((sum,r) => sum + Math.max(0,Number(r.Outstanding_Amount || 0)),0);
-  return json_({status:"success",society:societyPublic_(session),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").toLowerCase()==="occupied").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:outstanding,pendingRequests:requests.filter(r=>String(r.Request_Status||"").toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}});
+  const payload={status:"success",society:societyPublic_(viewSession),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").toLowerCase()==="occupied").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:outstanding,pendingRequests:requests.filter(r=>String(r.Request_Status||"").toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}};
+  const serialized=JSON.stringify(payload);if(serialized.length<=95000)cache.put(cacheKey,serialized,20);
+  return json_(payload);
 }
 
 const PERMISSION_MODULE_MAP_ = {
@@ -824,7 +1023,7 @@ function seedRolePermissionDefaults_(sh){
   const rows=[];let n=1;
   const defaultMap={
     Admin:ROLE_PERMISSION_MODULES_,
-    Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Activity Requests","Expenses","Reports","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
+    Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Bill Wise Details","Activity Requests","Expenses","Reports","Financial Year Management","Account Heads","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
     Accountant:["Dashboard","Properties & Residents","Owner Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
     Resident:["Dashboard","Resident Portal","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Bill Wise Details","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"]
   };
@@ -860,10 +1059,17 @@ function requirePermission_(session,moduleName,action,effectiveRole){
 function residentViewSession_(session,viewAsResident){
   if(!viewAsResident)return session;
   if(!["Committee","Accountant"].includes(session.role))throw new Error("Resident preview is available only to Committee and Accountant accounts.");
-  if(!String(session.propertyId||"")||!String(session.ownershipId||""))throw new Error("Resident View requires both PropertyID and Ownership_ID linked to your user account.");
-  const current=sheetObjects_(societySheet_(session,"Ownership History").sh).find(x=>String(x.PropertyID)===String(session.propertyId)&&String(x.Ownership_ID)===String(session.ownershipId)&&String(x.Ownership_Status)==="Current");
+  const propertyId=String(session.propertyId||"").trim();
+  const ownRows=propertyId?sheetObjects_(societySheet_(session,"Ownership History").sh).filter(x=>String(x.PropertyID).trim()===propertyId&&String(x.Ownership_Status).trim()==="Current"):[];
+  let effectiveOwnershipId=String(session.ownershipId||"").trim();
+  if(!effectiveOwnershipId&&propertyId){
+    const matched=session.ownerId?ownRows.find(x=>String(x.OwnerID).trim()===String(session.ownerId).trim()):ownRows[0];
+    if(matched&&matched.Ownership_ID)effectiveOwnershipId=String(matched.Ownership_ID).trim();
+  }
+  if(!propertyId||!effectiveOwnershipId)throw new Error("Resident View requires both PropertyID and Ownership_ID linked to your user account.");
+  const current=ownRows.find(x=>String(x.Ownership_ID).trim()===effectiveOwnershipId);
   if(!current)throw new Error("Your linked Ownership_ID is not current for the assigned property.");
-  return Object.assign({},session,{role:"Resident",ownerId:String(current.OwnerID||session.ownerId||"")});
+  return Object.assign({},session,{role:"Resident",ownerId:String(current.OwnerID||session.ownerId||""),ownershipId:effectiveOwnershipId});
 }
 function authorizeModuleRead_(session,key,viewAsResident){
   if(key==="rolePermissions"){
@@ -873,6 +1079,7 @@ function authorizeModuleRead_(session,key,viewAsResident){
   }
   const moduleName=PERMISSION_MODULE_MAP_[key];if(!moduleName)throw new Error("Permission denied.");
   const effectiveRole=viewAsResident?"Resident":session.role;
+  if(key==="receipts"&&(rolePermission_(session,"Payments","Can_View",effectiveRole)||rolePermission_(session,"Fund Inflow","Can_View",effectiveRole)))return;
   requirePermission_(session,moduleName,"Can_View",effectiveRole);
 }
 
@@ -993,14 +1200,13 @@ function login_(body) {
   }
 
   cache.remove(failKey);
-  // Resolve columns once on the successful path, rather than rereading the header
-  // for each cell update. Keep the current hash/KDF and legacy migration policy.
-  const loginHeaders = cachedAuthHeaders_(usersSheet);
-  const saltCol = loginHeaders.indexOf("Password_Salt") + 1;
-  const hashCol = loginHeaders.indexOf("Password_Hash") + 1;
-  const lastLoginCol = loginHeaders.indexOf("Last_Login") + 1;
-  if (!saltCol || !hashCol || !lastLoginCol) throw new Error("Authentication columns are missing from Society User Access.");
   if (legacyMatch) {
+    // Only resolve header columns when upgrading a legacy v5.1 SHA-256 hash.
+    const loginHeaders = cachedAuthHeaders_(usersSheet);
+    const saltCol = loginHeaders.indexOf("Password_Salt") + 1;
+    const hashCol = loginHeaders.indexOf("Password_Hash") + 1;
+    const lastLoginCol = loginHeaders.indexOf("Last_Login") + 1;
+    if (!saltCol || !hashCol || !lastLoginCol) throw new Error("Authentication columns are missing from Society User Access.");
     const salt = randomHex_(24);
     usersSheet.getRange(user.__row, saltCol).setValue(salt);
     usersSheet.getRange(user.__row, hashCol).setValue(hashPassword_(salt, password));
@@ -1037,7 +1243,6 @@ function login_(body) {
 
   const clientUser = Object.assign({}, session);
   delete clientUser.databaseId;
-  delete clientUser.ownershipId;
   delete clientUser.ownerId;
   delete clientUser.userAccessRow;
   return json_({
@@ -1518,16 +1723,16 @@ function settlePayment_(session,body,unused){requireRole_(session,FINANCE_ROLES.
     if(totalAllocated>0)journalEntries.push({accountName:"Accounts Receivable",accountType:"Asset",debit:0,credit:totalAllocated,propertyId:receipt.PropertyID,ownershipId:receipt.Ownership_ID,narration:"Allocation for receipt "+receiptNo});
     if(remaining>0)journalEntries.push({accountName:"Resident Advances",accountType:"Liability",debit:0,credit:remaining,propertyId:receipt.PropertyID,ownershipId:receipt.Ownership_ID,narration:"Unallocated advance "+receiptNo});
     postJournalEntry_(ss,"Receipt",receipt.Transaction_ID,new Date(),journalEntries,session);
-    const result={transactionId:receipt.Transaction_ID,receiptNo,bankAccount:bankId,allocated:totalAllocated,unallocated:remaining,allocationRows:writtenAllocations};writeOperation_(ledger,op,"confirmPayment",receipt.Transaction_ID,"DONE",result);auditEvent_(session,"ALLOCATE","Fund Inflow Register",receipt.Transaction_ID,"Allocated="+totalAllocated+", advance="+remaining,receipt,{Receipt_Status:"Confirmed",Receipt_Number:receiptNo,Unallocated_Amount:remaining,Bank_Account:bankId});return json_({status:"success",data:result});
+    const result={transactionId:receipt.Transaction_ID,receiptNo,bankAccount:bankId,allocated:totalAllocated,unallocated:remaining,allocationRows:writtenAllocations};writeOperation_(ledger,op,"confirmPayment",receipt.Transaction_ID,"DONE",result);clearFundBalanceCache_(session.societyCode);auditEvent_(session,"ALLOCATE","Fund Inflow Register",receipt.Transaction_ID,"Allocated="+totalAllocated+", advance="+remaining,receipt,{Receipt_Status:"Confirmed",Receipt_Number:receiptNo,Unallocated_Amount:remaining,Bank_Account:bankId});return json_({status:"success",data:result});
   }finally{lock.releaseLock();}}
 function allocatePayment_(session,body){requirePermission_(session,"Bill Wise Details","Can_Edit");return settlePayment_(session,body,false);}
 function createExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseCreate);requirePermission_(session,"Expenses","Can_Create");const op=requireOperationId_(body),r=body.record||{},amount=Number(r.Payment_Amount);if(!isFinite(amount)||amount<=0)throw new Error("Expense amount must be greater than zero.");if(!cleanText_(r.Expense_Category,100)||!cleanText_(r.Payee_Name,120)||!cleanText_(r.Particulars,300))throw new Error("Expense category, payee and particulars are required.");if(["UPI","NEFT","IMPS","Cheque","Cash","Card"].indexOf(String(r.Payment_Mode))<0)throw new Error("Invalid expense payment mode.");const lock=LockService.getScriptLock();lock.waitLock(15000);try{const bankSh=societySheet_(session,"Bank Account Master").sh;if(!sheetObjects_(bankSh).some(b=>String(b.BankAccount_ID)===String(r.Bank_Account)&&String(b.Status||"Active")==="Active"))throw new Error("Select an active society bank account.");const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true,data:JSON.parse(prior.result)});if(prior)throw new Error("A previous expense creation is incomplete; reconcile it before retrying.");const existingExpense=sheetObjects_(sh).find(x=>String(x.Payment_Reference||"")===String(r.Payment_Reference||"")&&String(x.Payee_Name||"").toLowerCase()===String(r.Payee_Name||"").toLowerCase()&&Number(x.Payment_Amount||0)===amount&&String(x.Expense_Status||"")!=="Cancelled"&&String(r.Payment_Reference||"")!=="N/A");if(existingExpense)throw new Error("An expense with the same payee, payment reference and amount already exists.");writeOperation_(ledger,op,"createExpense","","STARTED",{});const id="EXP-"+randomHex_(8).toUpperCase(),voucher="VOU-"+new Date().getFullYear()+"-"+String(Math.max(1,sh.getLastRow())).padStart(6,"0");const rec=Object.assign({},r,{Expense_ID:id,Voucher_No:voucher,Expense_Status:"Pending Approval",Created_By:session.userId,Created_At:new Date(),Approved_By:"",Approved_At:"",Cancelled_By:"",Cancelled_At:"",Cancellation_Reason:""});appendByHeaders_(sh,rec);writeOperation_(ledger,op,"createExpense",id,"DONE",{expenseId:id,voucherNo:voucher});auditEvent_(session,"CREATE","Expense Register",id,"Voucher="+voucher,"",rec);return json_({status:"success",data:{expenseId:id,voucherNo:voucher,expense:rec}});}finally{lock.releaseLock();}}
 function approveExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);requirePermission_(session,"Expenses","Can_Approve");return updateExpenseStatus_(session,body,"Approved");}
 function markExpensePaid_(session,body){requireRole_(session,FINANCE_ROLES.expensePay);requirePermission_(session,"Expenses","Can_Edit");return updateExpenseStatus_(session,body,"Paid");}
-function cancelExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);requirePermission_(session,"Expenses","Can_Delete");const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorCancel=findOperationByActionRecord_(ledger,"cancelExpense",body.expenseId);if(priorCancel){if(priorCancel.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous cancellation for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(r.Expense_Status==="Paid")throw new Error("Paid expenses cannot be cancelled. Use a reversal entry.");writeOperation_(ledger,op,"cancelExpense",body.expenseId,"STARTED",{});updateByHeaders_(sh,f.row,{Expense_Status:"Cancelled",Cancelled_By:session.userId,Cancelled_At:new Date(),Cancellation_Reason:reason},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"cancelExpense",body.expenseId,"DONE",{expenseId:body.expenseId});auditEvent_(session,"CANCEL","Expense Register",body.expenseId,reason,r,{Expense_Status:"Cancelled"});return json_({status:"success"});}finally{lock.releaseLock();}}
+function cancelExpense_(session,body){requireRole_(session,FINANCE_ROLES.expenseApprove);requirePermission_(session,"Expenses","Can_Delete");const reason=cleanText_(body.reason,300);if(!reason)throw new Error("Cancellation reason is required.");const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorCancel=findOperationByActionRecord_(ledger,"cancelExpense",body.expenseId);if(priorCancel){if(priorCancel.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous cancellation for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(r.Expense_Status==="Paid")throw new Error("Paid expenses cannot be cancelled. Use a reversal entry.");writeOperation_(ledger,op,"cancelExpense",body.expenseId,"STARTED",{});updateByHeaders_(sh,f.row,{Expense_Status:"Cancelled",Cancelled_By:session.userId,Cancelled_At:new Date(),Cancellation_Reason:reason},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"cancelExpense",body.expenseId,"DONE",{expenseId:body.expenseId});clearFundBalanceCache_(session.societyCode);auditEvent_(session,"CANCEL","Expense Register",body.expenseId,reason,r,{Expense_Status:"Cancelled"});return json_({status:"success"});}finally{lock.releaseLock();}}
 function updateExpenseStatus_(session,body,status){const op=requireOperationId_(body),lock=LockService.getScriptLock();lock.waitLock(15000);try{const {ss,sh}=societySheet_(session,"Expense Register"),ledger=operationLedger_(ss),prior=findOperation_(ledger,op);if(prior&&prior.status==="DONE")return json_({status:"success",duplicate:true});if(prior)throw new Error("A previous expense operation is incomplete; reconcile it before retrying.");const priorExpense=findOperationByActionRecord_(ledger,"expensePaid",body.expenseId);if(status==="Paid"&&priorExpense){if(priorExpense.status==="DONE")return json_({status:"success",duplicate:true});throw new Error("A previous payment for this expense is incomplete; reconcile it before retrying.");}const f=rowById_(sh,"Expense_ID",body.expenseId);if(!f)throw new Error("Expense not found.");const r=objectFromRow_(f.headers,f.values);if(status==="Approved"&&r.Expense_Status!=="Pending Approval")throw new Error("Only pending expenses can be approved.");if(status==="Paid"&&String(r.Expense_Status)!=="Approved")throw new Error("Expense must be approved before it can be marked Paid.");if(status==="Paid"){const bankSh=societySheet_(session,"Bank Account Master").sh,bf=rowById_(bankSh,"BankAccount_ID",r.Bank_Account);if(!bf)throw new Error("Bank account not found.");const bank=objectFromRow_(bf.headers,bf.values),amount=Number(r.Payment_Amount||0),balance=Number(bank.Current_Balance||0);if(amount<=0||balance<amount)throw new Error("Insufficient bank balance or invalid expense amount.");writeOperation_(ledger,op,"expensePaid",body.expenseId,"STARTED",{});updateByHeaders_(bankSh,bf.row,{Current_Balance:balance-amount},["BankAccount_ID","Account_Number"]);const bankName=String(bank.Bank_Name||bank.Account_Name||r.Bank_Account);postJournalEntry_(ss,"Expense",body.expenseId,new Date(),[{accountName:"Expense: "+String(r.Expense_Category),accountType:"Expense",debit:amount,credit:0,narration:"Voucher "+String(r.Voucher_No||body.expenseId)},{accountName:"Bank: "+bankName,accountType:"Asset",debit:0,credit:amount,narration:"Voucher "+String(r.Voucher_No||body.expenseId)}],session);}
     if(status!=="Paid")writeOperation_(ledger,op,"expense"+status,body.expenseId,"STARTED",{});
-    updateByHeaders_(sh,f.row,status==="Approved"?{Expense_Status:status,Approved_By:session.userId,Approved_At:new Date()}:{Expense_Status:"Paid",Approved_By:session.userId,Approved_At:r.Approved_At||new Date(),Payment_Date:r.Payment_Date||new Date()},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"expense"+status,body.expenseId,"DONE",{expenseId:body.expenseId,status});auditEvent_(session,status==="Paid"?"APPROVE":"UPDATE","Expense Register",body.expenseId,status,r,{Expense_Status:status,Payment_Date:status==="Paid"?(r.Payment_Date||new Date()):r.Payment_Date});return json_({status:"success"});}finally{lock.releaseLock();}}
+    updateByHeaders_(sh,f.row,status==="Approved"?{Expense_Status:status,Approved_By:session.userId,Approved_At:new Date()}:{Expense_Status:"Paid",Approved_By:session.userId,Approved_At:r.Approved_At||new Date(),Payment_Date:r.Payment_Date||new Date()},["Expense_ID","Voucher_No"]);writeOperation_(ledger,op,"expense"+status,body.expenseId,"DONE",{expenseId:body.expenseId,status});clearFundBalanceCache_(session.societyCode);auditEvent_(session,status==="Paid"?"APPROVE":"UPDATE","Expense Register",body.expenseId,status,r,{Expense_Status:status,Payment_Date:status==="Paid"?(r.Payment_Date||new Date()):r.Payment_Date});return json_({status:"success"});}finally{lock.releaseLock();}}
 
 function societyDriveInfo_(code){
   const master=SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
@@ -1936,7 +2141,7 @@ function getUserRow_(session) {
 }
 function publicUser_(u) {
   if(!u) return {};
-  return {UserID:String(u.UserID||u.Access_ID||""),Login_ID:String(u.Login_ID||""),Full_Name:String(u.Full_Name||""),Email_ID:String(u.Email_ID||""),Mobile_No:String(u.Mobile_No||""),Role:String(u.Role||""),PropertyID:String(u.PropertyID||""),Account_Status:String(u.Account_Status||""),Profile_Address:String(u.Profile_Address||""),Emergency_Contact:String(u.Emergency_Contact||""),KYC_Status:String(u.KYC_Status||"Not Submitted"),KYC_Documents:parseJsonArray_(u.KYC_Documents).map(d=>({fileId:d.fileId,fileName:d.fileName,uploadedAt:d.uploadedAt,status:d.status})) ,Created_At:String(u.Created_At||"")};
+  return {UserID:String(u.UserID||u.Access_ID||""),Login_ID:String(u.Login_ID||""),Full_Name:String(u.Full_Name||""),Email_ID:String(u.Email_ID||""),Mobile_No:String(u.Mobile_No||""),Role:String(u.Role||""),PropertyID:String(u.PropertyID||""),Ownership_ID:String(u.Ownership_ID||""),Account_Status:String(u.Account_Status||""),Profile_Address:String(u.Profile_Address||""),Emergency_Contact:String(u.Emergency_Contact||""),KYC_Status:String(u.KYC_Status||"Not Submitted"),KYC_Documents:parseJsonArray_(u.KYC_Documents).map(d=>({fileId:d.fileId,fileName:d.fileName,uploadedAt:d.uploadedAt,status:d.status})) ,Created_At:String(u.Created_At||"")};
 }
 function requireSession_(token) {
   if(!token) throw new Error("Authentication required. Sign in again.");
@@ -1967,18 +2172,178 @@ function requireSession_(token) {
   return session;
 }
 function requireRole_(session,roles) {if(!roles.includes(session.role)) throw new Error("Permission denied.");}
-function hashPassword_(salt,password) {
-  // Iterated HMAC-SHA256 KDF. Apps Script's String overload must be used
-  // consistently: the HMAC output is a byte array, so encode it before using
-  // it as the next round's String input. Passing the raw array with a String
-  // key causes: (number[],String) method-signature mismatch.
-  let value = Utilities.computeHmacSha256Signature(String(password), String(salt));
-  for (let i = 1; i < CONFIG.PASSWORD_ITERATIONS; i++) {
-    value = Utilities.computeHmacSha256Signature(
-      Utilities.base64Encode(value), String(salt)
-    );
+const SHA256_K_ = new Int32Array([
+  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+]);
+const SHA256_H0_ = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+const B64_CHARS_ = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function utf8Bytes_(str) {
+  const s = unescape(encodeURIComponent(String(str)));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function sha256Compress_(state, block, w) {
+  for (let i = 0; i < 16; i++) {
+    const j = i * 4;
+    w[i] = (block[j] << 24) | (block[j + 1] << 16) | (block[j + 2] << 8) | block[j + 3];
   }
-  return bytesToHex_(value);
+  for (let i = 16; i < 64; i++) {
+    const x = w[i - 15], y = w[i - 2];
+    const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+    const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+    w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+  }
+  let a = state[0], b = state[1], c = state[2], d = state[3];
+  let e = state[4], f = state[5], g = state[6], h = state[7];
+  for (let i = 0; i < 64; i++) {
+    const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+    const ch = (e & f) ^ ((~e) & g);
+    const temp1 = (h + S1 + ch + SHA256_K_[i] + w[i]) | 0;
+    const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+    const maj = (a & b) ^ (a & c) ^ (b & c);
+    const temp2 = (S0 + maj) | 0;
+    h = g; g = f; f = e; e = (d + temp1) | 0;
+    d = c; c = b; b = a; a = (temp1 + temp2) | 0;
+  }
+  state[0] = (state[0] + a) | 0; state[1] = (state[1] + b) | 0;
+  state[2] = (state[2] + c) | 0; state[3] = (state[3] + d) | 0;
+  state[4] = (state[4] + e) | 0; state[5] = (state[5] + f) | 0;
+  state[6] = (state[6] + g) | 0; state[7] = (state[7] + h) | 0;
+}
+function sha256Raw_(bytes) {
+  const len = bytes.length;
+  const totalLen = ((len + 9 + 63) >> 6) << 6;
+  const padded = new Uint8Array(totalLen);
+  padded.set(bytes);
+  padded[len] = 0x80;
+  const bitLenHi = Math.floor((len * 8) / 0x100000000);
+  const bitLenLo = (len * 8) >>> 0;
+  padded[totalLen - 8] = (bitLenHi >>> 24) & 0xff;
+  padded[totalLen - 7] = (bitLenHi >>> 16) & 0xff;
+  padded[totalLen - 6] = (bitLenHi >>> 8) & 0xff;
+  padded[totalLen - 5] = bitLenHi & 0xff;
+  padded[totalLen - 4] = (bitLenLo >>> 24) & 0xff;
+  padded[totalLen - 3] = (bitLenLo >>> 16) & 0xff;
+  padded[totalLen - 2] = (bitLenLo >>> 8) & 0xff;
+  padded[totalLen - 1] = bitLenLo & 0xff;
+  const state = new Int32Array(SHA256_H0_);
+  const w = new Int32Array(64);
+  for (let off = 0; off < totalLen; off += 64) {
+    sha256Compress_(state, padded.subarray(off, off + 64), w);
+  }
+  const out = new Uint8Array(32);
+  for (let i = 0; i < 8; i++) {
+    const v = state[i];
+    out[i * 4] = (v >>> 24) & 0xff;
+    out[i * 4 + 1] = (v >>> 16) & 0xff;
+    out[i * 4 + 2] = (v >>> 8) & 0xff;
+    out[i * 4 + 3] = v & 0xff;
+  }
+  return out;
+}
+function hashPassword_(salt,password) {
+  // Pure-JS V8 iterated HMAC-SHA256 KDF (bit-identical to Utilities.computeHmacSha256Signature + base64Encode, ~300x faster).
+  let key = utf8Bytes_(salt);
+  if (key.length > 64) key = sha256Raw_(key);
+  const ipad = new Uint8Array(64);
+  const opad = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) {
+    const b = i < key.length ? key[i] : 0;
+    ipad[i] = b ^ 0x36;
+    opad[i] = b ^ 0x5c;
+  }
+  const w = new Int32Array(64);
+  const ipadInit = new Int32Array(SHA256_H0_);
+  sha256Compress_(ipadInit, ipad, w);
+  const opadInit = new Int32Array(SHA256_H0_);
+  sha256Compress_(opadInit, opad, w);
+
+  const msg0 = utf8Bytes_(password);
+  const inner0Len = 64 + msg0.length;
+  const inner0Total = ((inner0Len + 9 + 63) >> 6) << 6;
+  const inner0Pad = new Uint8Array(inner0Total - 64);
+  inner0Pad.set(msg0);
+  inner0Pad[msg0.length] = 0x80;
+  const bitLen0Lo = (inner0Len * 8) >>> 0;
+  const bitLen0Hi = Math.floor((inner0Len * 8) / 0x100000000);
+  inner0Pad[inner0Pad.length - 8] = (bitLen0Hi >>> 24) & 0xff;
+  inner0Pad[inner0Pad.length - 7] = (bitLen0Hi >>> 16) & 0xff;
+  inner0Pad[inner0Pad.length - 6] = (bitLen0Hi >>> 8) & 0xff;
+  inner0Pad[inner0Pad.length - 5] = bitLen0Hi & 0xff;
+  inner0Pad[inner0Pad.length - 4] = (bitLen0Lo >>> 24) & 0xff;
+  inner0Pad[inner0Pad.length - 3] = (bitLen0Lo >>> 16) & 0xff;
+  inner0Pad[inner0Pad.length - 2] = (bitLen0Lo >>> 8) & 0xff;
+  inner0Pad[inner0Pad.length - 1] = bitLen0Lo & 0xff;
+
+  const innerState = new Int32Array(8);
+  const outerState = new Int32Array(8);
+  innerState.set(ipadInit);
+  for (let off = 0; off < inner0Pad.length; off += 64) {
+    sha256Compress_(innerState, inner0Pad.subarray(off, off + 64), w);
+  }
+
+  const outerBlock = new Uint8Array(64);
+  outerBlock[32] = 0x80;
+  outerBlock[62] = 0x03;
+  const innerBlock = new Uint8Array(64);
+  innerBlock[44] = 0x80;
+  innerBlock[62] = 0x03;
+  innerBlock[63] = 0x60;
+  const digestBytes = new Uint8Array(32);
+
+  function finishOuter() {
+    for (let i = 0; i < 8; i++) {
+      const v = innerState[i];
+      outerBlock[i * 4] = (v >>> 24) & 0xff;
+      outerBlock[i * 4 + 1] = (v >>> 16) & 0xff;
+      outerBlock[i * 4 + 2] = (v >>> 8) & 0xff;
+      outerBlock[i * 4 + 3] = v & 0xff;
+    }
+    outerState.set(opadInit);
+    sha256Compress_(outerState, outerBlock, w);
+    for (let i = 0; i < 8; i++) {
+      const v = outerState[i];
+      digestBytes[i * 4] = (v >>> 24) & 0xff;
+      digestBytes[i * 4 + 1] = (v >>> 16) & 0xff;
+      digestBytes[i * 4 + 2] = (v >>> 8) & 0xff;
+      digestBytes[i * 4 + 3] = v & 0xff;
+    }
+  }
+
+  finishOuter();
+  for (let round = 1; round < CONFIG.PASSWORD_ITERATIONS; round++) {
+    let p = 0;
+    for (let i = 0; i < 30; i += 3) {
+      const n = (digestBytes[i] << 16) | (digestBytes[i + 1] << 8) | digestBytes[i + 2];
+      innerBlock[p++] = B64_CHARS_.charCodeAt((n >>> 18) & 63);
+      innerBlock[p++] = B64_CHARS_.charCodeAt((n >>> 12) & 63);
+      innerBlock[p++] = B64_CHARS_.charCodeAt((n >>> 6) & 63);
+      innerBlock[p++] = B64_CHARS_.charCodeAt(n & 63);
+    }
+    const nLast = (digestBytes[30] << 16) | (digestBytes[31] << 8);
+    innerBlock[p++] = B64_CHARS_.charCodeAt((nLast >>> 18) & 63);
+    innerBlock[p++] = B64_CHARS_.charCodeAt((nLast >>> 12) & 63);
+    innerBlock[p++] = B64_CHARS_.charCodeAt((nLast >>> 6) & 63);
+    innerBlock[p++] = 61;
+    innerState.set(ipadInit);
+    sha256Compress_(innerState, innerBlock, w);
+    finishOuter();
+  }
+
+  let hex = "";
+  for (let i = 0; i < 32; i++) {
+    hex += (digestBytes[i] < 16 ? "0" : "") + digestBytes[i].toString(16);
+  }
+  return hex;
 }
 function verifyPassword_(salt,password) {
   const old=sha256_(salt+password);

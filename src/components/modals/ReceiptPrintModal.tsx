@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import { Printer, X, CheckCircle2 } from 'lucide-react';
 
 export const ReceiptPrintModal: React.FC = () => {
@@ -74,7 +75,7 @@ export const ReceiptPrintModal: React.FC = () => {
                 MONEY RECEIPT / মানি রসিদ
               </span>
               <p className="mt-2 text-base font-bold text-[#29352D]">{previewReceipt.Receipt_Number}</p>
-              <p className="text-xs text-gray-500">Date: {previewReceipt.Date_Of_Received}</p>
+              <p className="text-xs text-gray-500">Date: {formatDateDisplay(previewReceipt.Date_Of_Received, '—')}</p>
               <span className="inline-block mt-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
                 {previewReceipt.Receipt_Status}
               </span>

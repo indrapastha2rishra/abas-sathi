@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import { useApp } from '../../context/AppContext';
 import {
   Home,
@@ -48,7 +49,8 @@ export const ResidentDashboard: React.FC = () => {
   const now = new Date();
   const billMetrics = calculateResidentInvoiceMetrics(myInvoices, myReceipts, billAllocations, now);
   const totalOutstanding = billMetrics.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
-  const nextDueDate = billMetrics.find(i => i.Outstanding_Amount > 0)?.Due_Date || 'None Pending';
+  const rawNextDueDate = billMetrics.find(i => i.Outstanding_Amount > 0)?.Due_Date;
+  const nextDueDate = rawNextDueDate ? formatDateDisplay(rawNextDueDate, 'None Pending') : 'None Pending';
   const recentReceipts = [...myReceipts].sort((a,b) => String(b.Date_Of_Received || '').localeCompare(String(a.Date_Of_Received || ''))).slice(0,4);
 
   return (
@@ -240,7 +242,7 @@ export const ResidentDashboard: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Period: {inv.Bill_Period_From} to {inv.Bill_Period_To}
+                    Period: {formatDateDisplay(inv.Bill_Period_From, '—')} to {formatDateDisplay(inv.Bill_Period_To, '—')}
                   </p>
                 </div>
                 <div className="text-right">
@@ -288,7 +290,7 @@ export const ResidentDashboard: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Date: {rec.Date_Of_Received} • via {rec.Received_Mode}
+                    Date: {formatDateDisplay(rec.Date_Of_Received, '—')} • via {rec.Received_Mode}
                   </p>
                   {String(rec.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && billAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
@@ -332,7 +334,7 @@ export const ResidentDashboard: React.FC = () => {
               <div key={notice.Notice_ID} className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs">
                 <div className="flex justify-between items-center text-[10px] text-gray-500">
                   <span className="font-bold text-[#536B4D] uppercase">{notice.Notice_Category}</span>
-                  <span>{notice.Publish_Date}</span>
+                  <span>{formatDateDisplay(notice.Publish_Date, '—')}</span>
                 </div>
                 <h4 className="font-bold text-[#29352D] mt-1">{notice.Notice_Title}</h4>
                 <p className="text-[#29352D]/80 mt-1 line-clamp-2">{notice.Notice_Description}</p>
@@ -357,7 +359,7 @@ export const ResidentDashboard: React.FC = () => {
               />
               <div className="p-3 bg-[#F7F4EC]">
                 <p className="text-xs font-bold text-[#29352D]">{gallery[0].Event_Name}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5">{gallery[0].Event_Date}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">{formatDateDisplay(gallery[0].Event_Date, '—')}</p>
               </div>
             </div>
           )}

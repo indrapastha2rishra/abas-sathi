@@ -71,20 +71,21 @@ export async function authRequest<T = any>(
       });
     } catch (error: any) {
       if (error?.name === 'AbortError') {
-        throw new BackendRequestError('The server did not respond within the allowed time. Please retry.', undefined, false);
+        throw new BackendRequestError('The server did not respond within the allowed time. Please retry.', undefined, true, 'TIMEOUT');
       }
       const detail = String(error?.message || '');
       throw new BackendRequestError(
         `Could not reach the ABAS SATHI server. Check that the Apps Script Web App is deployed for access by anyone and that the deployment URL is current. ${detail}`.trim(),
         undefined,
-        true
+        true,
+        'NETWORK_ERROR'
       );
     }
 
     let raw = '';
     try { raw = await response.text(); }
     catch {
-      throw new BackendRequestError('The server connection closed before returning a response. Please retry.', response.status, true);
+      throw new BackendRequestError('The server connection closed before returning a response. Please retry.', response.status, true, 'CONNECTION_CLOSED');
     }
 
     let result: any;
@@ -94,7 +95,8 @@ export async function authRequest<T = any>(
       throw new BackendRequestError(
         `The Apps Script endpoint returned a non-JSON response (HTTP ${response.status}). Check Web App deployment access and URL. ${preview}`,
         response.status,
-        response.status >= 500
+        response.status >= 500,
+        'INVALID_RESPONSE'
       );
     }
 

@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateDisplay } from '../../utils/dateFormat';
 import { Printer, Download, X, CheckCircle, ShieldCheck } from 'lucide-react';
 
 export const InvoicePrintModal: React.FC = () => {
@@ -74,8 +75,8 @@ export const InvoicePrintModal: React.FC = () => {
                 MAINTENANCE INVOICE / বিল
               </span>
               <p className="mt-2 text-base font-bold text-[#29352D]">{previewInvoice.Invoice_Number}</p>
-              <p className="text-xs text-gray-500">Billing Date: {previewInvoice.Billing_Date}</p>
-              <p className="text-xs font-semibold text-[#C97958]">Due Date: {previewInvoice.Due_Date}</p>
+              <p className="text-xs text-gray-500">Billing Date: {formatDateDisplay(previewInvoice.Billing_Date, '—')}</p>
+              <p className="text-xs font-semibold text-[#C97958]">Due Date: {formatDateDisplay(previewInvoice.Due_Date, '—')}</p>
             </div>
           </div>
 
@@ -94,7 +95,7 @@ export const InvoicePrintModal: React.FC = () => {
                 Structural Area: <strong>{previewInvoice.Area_SqFt} Sq.Ft.</strong>
               </p>
               <p className="text-xs text-[#29352D]/80">
-                Period: <strong>{previewInvoice.Bill_Period_From}</strong> to <strong>{previewInvoice.Bill_Period_To}</strong>
+                Period: <strong>{formatDateDisplay(previewInvoice.Bill_Period_From, '—')}</strong> to <strong>{formatDateDisplay(previewInvoice.Bill_Period_To, '—')}</strong>
               </p>
             </div>
           </div>
@@ -197,7 +198,7 @@ export const InvoicePrintModal: React.FC = () => {
           <div className="mt-12 flex justify-between items-end border-t border-dashed border-[#E8E1D4] pt-6 text-xs text-gray-500">
             <div>
               <p>Computer generated invoice, issued under authorized society seal.</p>
-              <p>Verified on: {new Date().toLocaleDateString('en-IN')}</p>
+              <p>Verified on: {formatDateDisplay(new Date())}</p>
             </div>
             <div className="text-center">
               <div className="w-32 border-b border-gray-400 mb-1"></div>

@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { backendUrl } from '../../utils/authClient';
+import { clearAllUserDataCaches } from '../../utils/localDataCache';
 import {
   Menu,
   Languages,
@@ -34,6 +35,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
     setActiveTab,
   } = useApp();
 
+  const [residentModeNotice, setResidentModeNotice] = useState('');
   const [society] = useState(() => {
     try {
       const u = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
@@ -50,6 +52,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
         body: JSON.stringify({ action: 'logout', token: session.token }), keepalive: true,
       }).catch(() => undefined);
     }
+    clearAllUserDataCaches();
     localStorage.removeItem('abasSathiSession');
     window.location.replace(window.location.pathname);
   };
@@ -124,7 +127,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
             <span className="font-bold">{language === 'en' ? 'বাংলা' : 'English'}</span>
           </button>
 
-          {['Committee','Accountant'].includes(actualRole) && <button onClick={() => { const ok=toggleResidentMode(); if(!ok)window.alert('Resident Mode চালু করতে User Master-এ আপনার user account-এর সঙ্গে current PropertyID ও Ownership_ID link করতে হবে।'); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-colors ${isResidentMode?'border-[#536B4D] bg-[#536B4D] text-white':'border-slate-200 text-slate-600 hover:bg-slate-50'}`} title={isResidentMode?'Back to Staff Mode':'View as Resident'}><Home size={15}/><span className="hidden sm:inline">{isResidentMode?'Staff Mode':'View as Resident'}</span></button>}
+          {['Committee','Accountant'].includes(actualRole) && <button onClick={() => { const ok=toggleResidentMode(); if(!ok)setResidentModeNotice('Resident Mode চালু করতে User Master-এ আপনার user account-এর সঙ্গে current PropertyID ও Ownership_ID link করতে হবে।'); else setResidentModeNotice(''); }} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-colors ${isResidentMode?'border-[#536B4D] bg-[#536B4D] text-white':'border-slate-200 text-slate-600 hover:bg-slate-50'}`} title={isResidentMode?'Back to Staff Mode':'View as Resident'}><Home size={15}/><span className="hidden sm:inline">{isResidentMode?'Staff Mode':'View as Resident'}</span></button>}
           <button onClick={() => setActiveTab('profile')} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="My Profile"><UserRound size={15}/><span className="hidden sm:inline">Profile</span></button>
 
           {/* Notification Bell */}
@@ -152,6 +155,12 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
           <button onClick={signOut} className="ml-2 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="Sign out"><LogOut size={15}/><span className="hidden sm:inline">Sign out</span></button>
         </div>
       </header>
+      {residentModeNotice && (
+        <div role="status" className="w-full border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-900 flex items-center justify-between gap-3">
+          <span>{residentModeNotice}</span>
+          <button onClick={() => setResidentModeNotice('')} className="text-amber-700 hover:underline cursor-pointer">Dismiss</button>
+        </div>
+      )}
 
     </>
   );

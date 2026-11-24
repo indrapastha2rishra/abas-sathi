@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { authRequest, BackendRequestError } from './utils/authClient';
 import { isActiveAuthenticatedProfile } from './utils/authValidation';
+import { clearAllUserDataCaches } from './utils/localDataCache';
 import { Login } from './components/auth/Login';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
@@ -202,6 +203,7 @@ export default function App() {
           mobile: String(profile.Mobile_No || session.user?.mobile || ''),
           role: String(profile.Role),
           propertyId: String(profile.PropertyID || ''),
+          ownershipId: String(profile.Ownership_ID || session.user?.ownershipId || ''),
           accountStatus: String(profile.Account_Status),
         },
       };
@@ -210,6 +212,7 @@ export default function App() {
       setSessionCheck('verified');
     } catch (error: any) {
       if (error instanceof BackendRequestError && error.code === 'AUTH_ERROR') {
+        clearAllUserDataCaches();
         localStorage.removeItem('abasSathiSession');
         setSession(null);
         setSessionCheck('none');
@@ -250,6 +253,7 @@ export default function App() {
     } catch {
       // Local logout still proceeds if the network is unavailable.
     } finally {
+      clearAllUserDataCaches();
       localStorage.removeItem('abasSathiSession');
       setSession(null);
       setSessionCheck('none');

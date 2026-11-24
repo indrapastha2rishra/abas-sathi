@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatDateTimeDisplay } from '../../utils/dateFormat';
 
 export const BackupManager: React.FC = () => {
   const { createSocietyBackup, configureAutomatedBackup, restoreSocietyBackup, listSocietyBackups, listRecoveryOperations } = useApp();
@@ -31,12 +32,12 @@ export const BackupManager: React.FC = () => {
     <div className="rounded-xl border border-[#E8E1D4] bg-white overflow-hidden">
       <div className="p-4 font-bold text-sm">Backup History</div>
       <div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-[#536B4D] text-white"><tr><th className="p-2">Created</th><th className="p-2">File Name</th><th className="p-2">Type</th><th className="p-2">Status</th><th className="p-2">File ID</th><th className="p-2">Action</th></tr></thead><tbody>
-        {rows.map(r=><tr key={r.Backup_ID} className="border-b"><td className="p-2">{String(r.Created_At||'').slice(0,19)}</td><td className="p-2">{r.File_Name}</td><td className="p-2">{r.Backup_Type}</td><td className="p-2">{r.Status}</td><td className="p-2 font-mono">{r.File_ID}</td><td className="p-2"><button onClick={()=>setBackupId(r.File_ID)} className="font-bold text-[#536B4D]">Select</button></td></tr>)}
+        {rows.map(r=><tr key={r.Backup_ID} className="border-b"><td className="p-2">{formatDateTimeDisplay(r.Created_At,'—')}</td><td className="p-2">{r.File_Name}</td><td className="p-2">{r.Backup_Type}</td><td className="p-2">{r.Status}</td><td className="p-2 font-mono">{r.File_ID}</td><td className="p-2"><button onClick={()=>setBackupId(r.File_ID)} className="font-bold text-[#536B4D]">Select</button></td></tr>)}
       </tbody></table>{!rows.length&&<p className="p-4 text-xs text-gray-500">No backup records are available.</p>}</div>
     </div>
     <div className="rounded-xl border border-amber-200 bg-white overflow-hidden">
       <div className="p-4"><h3 className="font-bold text-sm text-amber-900">Incomplete Operations — Manual Reconciliation Queue</h3><p className="text-xs text-gray-600 mt-1">Do not retry a STARTED operation blindly. Compare the target register, operation ID and audit log first.</p></div>
-      <div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-amber-100"><tr><th className="p-2">Operation ID</th><th className="p-2">Action</th><th className="p-2">Record ID</th><th className="p-2">Status</th><th className="p-2">Created</th></tr></thead><tbody>{recoveryRows.map(r=><tr key={r.Operation_ID} className="border-b"><td className="p-2 font-mono">{r.Operation_ID}</td><td className="p-2">{r.Action}</td><td className="p-2">{r.Record_ID}</td><td className="p-2">{r.Status}</td><td className="p-2">{String(r.Created_At||'').slice(0,19)}</td></tr>)}</tbody></table>{!recoveryRows.length&&<p className="p-4 text-xs text-gray-500">No incomplete operations found.</p>}</div>
+      <div className="overflow-x-auto"><table className="w-full text-xs text-left"><thead className="bg-amber-100"><tr><th className="p-2">Operation ID</th><th className="p-2">Action</th><th className="p-2">Record ID</th><th className="p-2">Status</th><th className="p-2">Created</th></tr></thead><tbody>{recoveryRows.map(r=><tr key={r.Operation_ID} className="border-b"><td className="p-2 font-mono">{r.Operation_ID}</td><td className="p-2">{r.Action}</td><td className="p-2">{r.Record_ID}</td><td className="p-2">{r.Status}</td><td className="p-2">{formatDateTimeDisplay(r.Created_At,'—')}</td></tr>)}</tbody></table>{!recoveryRows.length&&<p className="p-4 text-xs text-gray-500">No incomplete operations found.</p>}</div>
     </div>
   </div>;
 };
