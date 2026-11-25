@@ -4,6 +4,7 @@ import {
   computeOwnerOutstandingRows,
   computeOwnershipOutstandingClient,
   computePropertyOutstandingRows,
+  groupOwnershipOutstandingByFloor,
   resolveFYRangeForMonth,
   resolveReportKey,
   tabForReportKey,
@@ -202,5 +203,97 @@ test('computeOwnershipOutstandingClient links Paid to Confirmed Fund Inflow Regi
   assert.equal(res.data[0].Total_Paid, 3700);
   assert.equal(res.data[0].Outstanding, 3700);
   assert.equal(res.summary.totalOutstanding, 3700);
+});
+
+test('computeOwnershipOutstandingClient sums Allocated_Amount from Bill Wise Details grouped by Ownership_ID and groups by Floor_No', () => {
+  const res = computeOwnershipOutstandingClient({
+    invoices: [
+      {
+        InvoiceID: 'INV-1',
+        Invoice_Number: 'INV-001',
+        PropertyID: 'P-G1',
+        Ownership_ID: 'OSH-G1',
+        OwnerID: 'O1',
+        Owner_Name: 'Ground Owner',
+        Flat_Number: 'G-01',
+        Net_Charge_Amount: 3000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 3000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      {
+        InvoiceID: 'INV-2',
+        Invoice_Number: 'INV-002',
+        PropertyID: 'P-201',
+        Ownership_ID: 'OSH-201',
+        OwnerID: 'O2',
+        Owner_Name: 'Second Floor Owner',
+        Flat_Number: '201',
+        Net_Charge_Amount: 5000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 5000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      {
+        InvoiceID: 'INV-3',
+        Invoice_Number: 'INV-003',
+        PropertyID: 'P-101',
+        Ownership_ID: 'OSH-101',
+        OwnerID: 'O3',
+        Owner_Name: 'First Floor Owner',
+        Flat_Number: '101',
+        Net_Charge_Amount: 4000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 4000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'TXN-A', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-B', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-PEND', Receipt_Status: 'Pending Verification' } as any,
+    ],
+    billAllocations: [
+      // Multiple allocations for OSH-201 including one without InvoiceID (grouped strictly by Ownership_ID)
+      { Allocation_ID: 'A1', Transaction_ID: 'TXN-A', InvoiceID: 'INV-2', Ownership_ID: 'OSH-201', Allocated_Amount: 1500 } as any,
+      { Allocation_ID: 'A2', Transaction_ID: 'TXN-B', InvoiceID: '', Ownership_ID: 'OSH-201', Allocated_Amount: 1000 } as any,
+      { Allocation_ID: 'A3', Transaction_ID: 'TXN-PEND', InvoiceID: 'INV-2', Ownership_ID: 'OSH-201', Allocated_Amount: 900 } as any,
+      // Allocation for OSH-101 without Transaction_ID in receipts (direct Bill Wise Details entry)
+      { Allocation_ID: 'A4', Transaction_ID: '', InvoiceID: 'INV-3', Ownership_ID: 'OSH-101', Allocated_Amount: 1200 } as any,
+    ],
+    ownerships: [
+      { Ownership_ID: 'OSH-G1', PropertyID: 'P-G1', OwnerID: 'O1', Ownership_Status: 'Current' } as any,
+      { Ownership_ID: 'OSH-201', PropertyID: 'P-201', OwnerID: 'O2', Ownership_Status: 'Current' } as any,
+      { Ownership_ID: 'OSH-101', PropertyID: 'P-101', OwnerID: 'O3', Ownership_Status: 'Current' } as any,
+    ],
+    properties: [
+      { PropertyID: 'P-G1', Flat_No: 'G-01', Floor_No: 0 } as any,
+      { PropertyID: 'P-101', Flat_No: '101', Floor_No: 1 } as any,
+      { PropertyID: 'P-201', Flat_No: '201', Floor_No: 2 } as any,
+    ],
+    owners: [],
+  });
+
+  assert.equal(res.data.length, 3);
+  const g1 = res.data.find((r: any) => r.Ownership_ID === 'OSH-G1')!;
+  const f1 = res.data.find((r: any) => r.Ownership_ID === 'OSH-101')!;
+  const f2 = res.data.find((r: any) => r.Ownership_ID === 'OSH-201')!;
+  assert.equal(g1.Floor_No, 0);
+  assert.equal(g1.Total_Paid, 0);
+  assert.equal(g1.Outstanding, 3000);
+  assert.equal(f1.Total_Paid, 1200);
+  assert.equal(f1.Outstanding, 2800);
+  assert.equal(f2.Total_Paid, 2500); // 1500 + 1000, pending 900 excluded
+  assert.equal(f2.Outstanding, 2500);
+
+  const floorGroups = groupOwnershipOutstandingByFloor(res.data);
+  assert.equal(floorGroups.length, 3);
+  assert.deepEqual(
+    floorGroups.map((g) => g.floorLabel),
+    ['Floor 0', 'Floor 1', 'Floor 2']
+  );
+  assert.equal(floorGroups[0].totalOutstanding, 3000);
+  assert.equal(floorGroups[1].totalOutstanding, 2800);
+  assert.equal(floorGroups[2].totalOutstanding, 2500);
 });
 

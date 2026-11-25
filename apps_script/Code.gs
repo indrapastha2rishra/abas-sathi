@@ -30,7 +30,7 @@ const CONFIG = {
     "Rate Master", "Invoice_Register", "Fund Inflow Register", "Bill Wise Details",
     "Expense Register", "Expense Category Master", "Bank Account Master",
     "User Master & Role Management", "Activity Request Register", "Notice Master",
-    "Gallery Master", "Preventive Maintenance Master", "Rate Property Mapping",
+    "Gallery Master", "Gallery_Photos", "Preventive Maintenance Master", "Rate Property Mapping",
     "Property Utility Details", "Audit Log", "Financial Year Master", "Account Head Master", "Role_Permission"
   ]
 };
@@ -146,7 +146,7 @@ const MODULE_SHEETS = {
   receipts: "Fund Inflow Register", billWiseDetails: "Bill Wise Details",
   expenses: "Expense Register", expenseCategories: "Expense Category Master",
   bankAccounts: "Bank Account Master", activityRequests: "Activity Request Register",
-  notices: "Notice Master", gallery: "Gallery Master",
+  notices: "Notice Master", gallery: "Gallery Master", galleryPhotos: "Gallery_Photos",
   preventiveMaintenance: "Preventive Maintenance Master",
   propertyUtilityDetails: "Property Utility Details", financialYears: "Financial Year Master",
   ratePropertyMapping: "Rate Property Mapping", accountHeads: "Account Head Master", auditLogs: "Audit Log"
@@ -161,8 +161,8 @@ function getModuleData_(session, body) {
   const page = Math.max(1, Math.floor(Number(body.page) || 1));
   const limit = Math.min(200, Math.max(1, Math.floor(Number(body.limit) || 50)));
   const ss = SpreadsheetApp.openById(session.databaseId);
-  const sheet = key === "rolePermissions" ? ensureRolePermissionSheet_(ss) : (ss.getSheetByName(sheetName) || (key==="invoices"?ss.getSheetByName("Invoice Register"):null));
-  if(!sheet)throw new Error("Required sheet is missing: "+sheetName);
+  const sheet = key === "rolePermissions" ? ensureRolePermissionSheet_(ss) : (ss.getSheetByName(sheetName) || (key==="invoices"?ss.getSheetByName("Invoice Register"):key==="galleryPhotos"?ss.getSheetByName("Gallery Photos"):null));
+  if(!sheet){if(key==="galleryPhotos")return json_({status:"success",module:key,data:[],pagination:{page,limit,total,totalPages:0}});throw new Error("Required sheet is missing: "+sheetName);}
   if(key === "rolePermissions") {
     const all = sheetObjects_(sheet),start=(page-1)*limit,total=all.length;
     return json_({status:"success",module:key,data:all.slice(start,start+limit),pagination:{page,limit,total,totalPages:Math.ceil(total/limit)}});
@@ -323,28 +323,52 @@ function postOpeningBalances_(session,body){
  */
 function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows, receiptRows, billRows) {
   const ownershipById = {};
-  (ownershipRows || []).forEach(x => { if (x.Ownership_ID) ownershipById[String(x.Ownership_ID)] = x; });
+  (ownershipRows || []).forEach(x => { if (x.Ownership_ID) ownershipById[String(x.Ownership_ID).trim()] = x; });
   const propertyById = {};
-  (propertyRows || []).forEach(x => { if (x.PropertyID) propertyById[String(x.PropertyID)] = x; });
+  (propertyRows || []).forEach(x => { if (x.PropertyID) propertyById[String(x.PropertyID).trim()] = x; });
   const ownerById = {};
-  (ownerRows || []).forEach(x => { if (x.OwnerID) ownerById[String(x.OwnerID)] = x; });
+  (ownerRows || []).forEach(x => { if (x.OwnerID) ownerById[String(x.OwnerID).trim()] = x; });
+
+  const receiptStatusByTxn = {};
+  (receiptRows || []).forEach(r => {
+    const txnId = String(r.Transaction_ID || "").trim();
+    if (txnId) receiptStatusByTxn[txnId] = String(r.Receipt_Status || r.Status || "").trim().toLowerCase();
+  });
+
+  const excludedStatuses = { cancelled: true, draft: true, pending_approval: true, "pending approval": true };
+  const keyByInvoiceId = {};
+  const keyByInvoiceNumber = {};
   const grouped = {};
-  let unlinkedInvoiceCount = 0;
-  invoiceDueDetails_(invoiceRows, receiptRows || [], billRows || []).forEach(({ inv, excluded, net, paid, due }) => {
-    if (excluded) return;
-    const ownershipId = String(inv.Ownership_ID || "");
-    const propertyId = String(inv.PropertyID || "");
-    const ownerId = String(inv.OwnerID || "");
+
+  (invoiceRows || []).forEach(inv => {
+    const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
+    if (excludedStatuses[statusRaw]) return;
+    const ownershipId = String(inv.Ownership_ID || "").trim();
+    const propertyId = String(inv.PropertyID || "").trim();
+    const ownerId = String(inv.OwnerID || "").trim();
     const key = ownershipId || ("UNLINKED:" + propertyId + ":" + ownerId);
-    if (!ownershipId && due > 0) unlinkedInvoiceCount++;
+    const invId = String(inv.InvoiceID || "").trim();
+    const invNum = String(inv.Invoice_Number || "").trim();
+    if (invId) keyByInvoiceId[invId] = key;
+    if (invNum) keyByInvoiceNumber[invNum] = key;
+
     const history = ownershipById[ownershipId] || {};
     const property = propertyById[propertyId] || {};
     const owner = ownerById[ownerId] || {};
+    const floorRaw = property.Floor_No !== undefined && property.Floor_No !== ""
+      ? property.Floor_No
+      : (property["Floor No."] !== undefined && property["Floor No."] !== ""
+        ? property["Floor No."]
+        : (property["Floor No"] !== undefined && property["Floor No"] !== ""
+          ? property["Floor No"]
+          : (inv.Floor_No !== undefined ? inv.Floor_No : "")));
+
     if (!grouped[key]) {
       grouped[key] = {
         Ownership_ID: ownershipId || "Not linked",
         PropertyID: propertyId,
         Flat_No: String(inv.Flat_Number || inv.Flat_No || property.Flat_No || property["Flat No."] || ""),
+        Floor_No: floorRaw === null || floorRaw === undefined ? "" : floorRaw,
         OwnerID: ownerId,
         Owner_Name: String(inv.Owner_Name || owner.Owner_Name || ""),
         Ownership_Start_Date: history.Ownership_Start_Date || "",
@@ -354,20 +378,94 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
         Total_Billed: 0,
         Total_Paid: 0,
         Outstanding: 0,
-        Data_Link_Status: ownershipId && history.Ownership_ID ? "Linked" : "Needs review"
+        Data_Link_Status: ownershipId && history.Ownership_ID ? "Linked" : "Needs review",
+        _legacyPaid: 0,
+        _hasOwnershipId: Boolean(ownershipId)
       };
+    } else if (grouped[key].Floor_No === "" && floorRaw !== "" && floorRaw !== null && floorRaw !== undefined) {
+      grouped[key].Floor_No = floorRaw;
     }
+
+    const net = Math.max(0, fundMoney_(inv.Net_Charge_Amount));
+    const legacyPaid = Math.max(0, fundMoney_(inv.Paid_Amount));
     grouped[key].Invoice_Count++;
     grouped[key].Total_Billed = fundMoney_(grouped[key].Total_Billed + net);
-    grouped[key].Total_Paid = fundMoney_(grouped[key].Total_Paid + paid);
-    grouped[key].Outstanding = fundMoney_(grouped[key].Outstanding + due);
+    grouped[key]._legacyPaid = fundMoney_(grouped[key]._legacyPaid + legacyPaid);
   });
-  const data = Object.values(grouped)
+
+  // Sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
+  const allocatedByOwnership = {};
+  (billRows || []).forEach(b => {
+    const txnId = String(b.Transaction_ID || "").trim();
+    if (txnId && Object.prototype.hasOwnProperty.call(receiptStatusByTxn, txnId) && receiptStatusByTxn[txnId] !== "confirmed") {
+      return;
+    }
+    const directOwnershipId = String(b.Ownership_ID || "").trim();
+    const invId = String(b.InvoiceID || "").trim();
+    const invNum = String(b.Invoice_Number || "").trim();
+    const resolvedKey = directOwnershipId || (invId ? (keyByInvoiceId[invId] || "") : "") || (invNum ? (keyByInvoiceNumber[invNum] || "") : "");
+    if (!resolvedKey) return;
+    allocatedByOwnership[resolvedKey] = fundMoney_((allocatedByOwnership[resolvedKey] || 0) + Math.max(0, fundMoney_(b.Allocated_Amount)));
+  });
+
+  const useBillWiseAllocations = Array.isArray(billRows) && billRows.length > 0;
+  let unlinkedInvoiceCount = 0;
+
+  const data = Object.keys(grouped).map(key => {
+    const g = grouped[key];
+    const paid = useBillWiseAllocations ? (allocatedByOwnership[key] || 0) : g._legacyPaid;
+    const totalPaid = fundMoney_(Math.max(0, paid));
+    const outstanding = Math.max(0, fundMoney_(g.Total_Billed - totalPaid));
+    if (!g._hasOwnershipId && outstanding > 0) unlinkedInvoiceCount += g.Invoice_Count;
+    return {
+      Ownership_ID: g.Ownership_ID,
+      PropertyID: g.PropertyID,
+      Flat_No: g.Flat_No,
+      Floor_No: g.Floor_No,
+      OwnerID: g.OwnerID,
+      Owner_Name: g.Owner_Name,
+      Ownership_Start_Date: g.Ownership_Start_Date,
+      Ownership_End_Date: g.Ownership_End_Date,
+      Ownership_Status: g.Ownership_Status,
+      Invoice_Count: g.Invoice_Count,
+      Total_Billed: g.Total_Billed,
+      Total_Paid: totalPaid,
+      Outstanding: outstanding,
+      Data_Link_Status: g.Data_Link_Status
+    };
+  })
     .filter(x => x.Outstanding > 0)
-    .sort((a,b) => b.Outstanding - a.Outstanding);
-  const totalOutstanding = fundMoney_(data.reduce((sum,x) => sum + x.Outstanding, 0));
+    .sort((a, b) => {
+      const fA = a.Floor_No === "" || a.Floor_No === null || a.Floor_No === undefined ? Number.MAX_SAFE_INTEGER : Number(a.Floor_No);
+      const fB = b.Floor_No === "" || b.Floor_No === null || b.Floor_No === undefined ? Number.MAX_SAFE_INTEGER : Number(b.Floor_No);
+      const rankA = isFinite(fA) ? fA : (Number.MAX_SAFE_INTEGER - 1);
+      const rankB = isFinite(fB) ? fB : (Number.MAX_SAFE_INTEGER - 1);
+      if (rankA !== rankB) return rankA - rankB;
+      return String(a.Flat_No || a.PropertyID || "").localeCompare(String(b.Flat_No || b.PropertyID || ""), undefined, { numeric: true, sensitivity: "base" });
+    });
+
+  const floorMap = {};
+  data.forEach(r => {
+    const fk = r.Floor_No === "" || r.Floor_No === null || r.Floor_No === undefined ? "__UNASSIGNED__" : String(r.Floor_No);
+    if (!floorMap[fk]) {
+      floorMap[fk] = {
+        Floor_No: r.Floor_No,
+        Ownership_Count: 0,
+        Total_Billed: 0,
+        Total_Paid: 0,
+        Outstanding: 0
+      };
+    }
+    floorMap[fk].Ownership_Count++;
+    floorMap[fk].Total_Billed = fundMoney_(floorMap[fk].Total_Billed + r.Total_Billed);
+    floorMap[fk].Total_Paid = fundMoney_(floorMap[fk].Total_Paid + r.Total_Paid);
+    floorMap[fk].Outstanding = fundMoney_(floorMap[fk].Outstanding + r.Outstanding);
+  });
+
+  const totalOutstanding = fundMoney_(data.reduce((sum, x) => sum + x.Outstanding, 0));
   return {
     data,
+    byFloor: Object.values(floorMap),
     summary: {
       ownershipCount: data.length,
       totalOutstanding,
@@ -877,8 +975,18 @@ function residentCanAccessLinkedFile_(session,registered){
     return false;
   }
   if(category==="gallery photo"){
-    if(module!=="gallery"||!recordId)return false;
-    const sh=societySheet_(session,"Gallery Master").sh,found=rowById_(sh,"Gallery_ID",recordId);if(!found)return false;
+    if(!["gallery","galleryPhotos"].includes(module)||!recordId)return false;
+    let galleryId=recordId;
+    if(module==="galleryPhotos"){
+      const pSh=ss.getSheetByName("Gallery_Photos")||ss.getSheetByName("Gallery Photos");
+      const pFound=pSh?rowById_(pSh,"Photo_ID",recordId):null;
+      if(!pFound)return false;
+      const pRec=objectFromRow_(pFound.headers,pFound.values);
+      if(["inactive","archived","deleted"].includes(String(pRec.Status||"").trim().toLowerCase()))return false;
+      galleryId=String(pRec.Gallery_ID||"").trim();
+      if(!galleryId)return false;
+    }
+    const sh=societySheet_(session,"Gallery Master").sh,found=rowById_(sh,"Gallery_ID",galleryId);if(!found)return false;
     const r=objectFromRow_(found.headers,found.values),visibility=String(r.Visibility||"");
     if(["Inactive","Archived"].includes(String(r.Status)))return false;
     return ["Public","Residents Only","All Residents"].includes(visibility);
@@ -946,12 +1054,12 @@ function getDashboardData_(session,body) {
   if(cached){try{return json_(JSON.parse(cached));}catch(e){cache.remove(cacheKey);}}
   const ss = SpreadsheetApp.openById(session.databaseId);
   let keys = role === "Resident"
-    ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery","propertyUtilityDetails"]
+    ? ["properties","owners","ownershipHistory","invoices","receipts","billWiseDetails","activityRequests","notices","gallery","galleryPhotos","propertyUtilityDetails"]
     : ["properties","ownershipHistory","tenants","invoices","receipts","billWiseDetails",
        ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests","expenses"] : []),
-       "notices","gallery","preventiveMaintenance",
+       "notices","gallery","galleryPhotos","preventiveMaintenance",
        ...(role === "Admin" || role === "Accountant" ? ["bankAccounts"] : [])];
-  const recentLimits={activityRequests:250,notices:150,gallery:30,preventiveMaintenance:250};
+  const recentLimits={activityRequests:250,notices:150,gallery:30,galleryPhotos:200,preventiveMaintenance:250};
   const data = {};
   keys=keys.filter(function(key){
     const moduleName=PERMISSION_MODULE_MAP_[key]||key;
@@ -962,7 +1070,7 @@ function getDashboardData_(session,body) {
   keys.forEach(function(key) {
     authorizeModuleRead_(session, key, Boolean(body&&body.viewAsResident));
     const sheetName = MODULE_SHEETS[key];
-    const aliases = key === "invoices" ? ["Invoice_Register","Invoice Register"] : [sheetName];
+    const aliases = key === "invoices" ? ["Invoice_Register","Invoice Register"] : key === "galleryPhotos" ? ["Gallery_Photos","Gallery Photos"] : [sheetName];
     let sh = null;
     for (let i = 0; i < aliases.length; i++) {
       sh = ss.getSheetByName(aliases[i]);
@@ -1009,7 +1117,7 @@ const PERMISSION_MODULE_MAP_ = {
   properties:"Properties & Residents", owners:"Owner Management", ownershipHistory:"Ownership History", tenants:"Tenant Management",
   rates:"Maintenance & Invoices", invoices:"Maintenance & Invoices", receipts:"Payments", billWiseDetails:"Bill Wise Details",
   expenses:"Expenses", expenseCategories:"Expenses", bankAccounts:"Bank Accounts", activityRequests:"Activity Requests",
-  notices:"Notices", gallery:"Gallery", preventiveMaintenance:"Preventive Maintenance", ratePropertyMapping:"Maintenance & Invoices",
+  notices:"Notices", gallery:"Gallery", galleryPhotos:"Gallery", preventiveMaintenance:"Preventive Maintenance", ratePropertyMapping:"Maintenance & Invoices",
   propertyUtilityDetails:"Properties & Residents", financialYears:"Financial Year Management", accountHeads:"Account Heads",
   auditLogs:"Audit Log", rolePermissions:"Role Permission Management"
 };
@@ -1112,6 +1220,17 @@ function residentModuleRecords_(session,key,ss,sheet){
   if(key==="owners")return currentOwnerIds.flatMap(id=>findRowsByHeaderValue_(sheet,"OwnerID",id));
   if(key==="notices")return scopeRecords_(session,key,sheetObjects_(sheet),ss);
   if(key==="gallery")return scopeRecords_(session,key,sheetObjects_(sheet),ss);
+  if(key==="galleryPhotos"){
+    const gallerySheet=ss.getSheetByName("Gallery Master");
+    if(!gallerySheet)return [];
+    const visibleGalleryIds=new Set(
+      scopeRecords_(session,"gallery",sheetObjects_(gallerySheet),ss)
+        .filter(r=>!["inactive","archived"].includes(String(r.Status||"").trim().toLowerCase()))
+        .map(r=>String(r.Gallery_ID||"").trim())
+        .filter(Boolean)
+    );
+    return sheetObjects_(sheet).filter(r=>visibleGalleryIds.has(String(r.Gallery_ID||"").trim())&&!["inactive","archived","deleted"].includes(String(r.Status||"").trim().toLowerCase()));
+  }
   return [];
 }
 function scopeRecords_(session,key,records,ss) {

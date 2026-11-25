@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Building2,
@@ -28,10 +28,22 @@ import {
 import { calculateFundSummary } from '../../utils/calculations';
 import { formatDateDisplay, getMonthShortName } from '../../utils/dateFormat';
 import { readFundBalanceCache, writeFundBalanceCache } from '../../utils/localDataCache';
+import {
+  computeOwnershipOutstandingClient,
+  getFloorMeta,
+  groupOwnershipOutstandingByFloor,
+} from '../../utils/reportHelpers';
+import {
+  buildActiveGalleryEvents,
+  filterActiveNotices,
+  sortOwnershipOutstandingByFlatAsc,
+} from '../../utils/dashboardHelpers';
 
 export const AdminDashboard: React.FC = () => {
   const {
     properties,
+    owners,
+    ownerships,
     currentUser,
     invoices,
     receipts,
@@ -43,10 +55,10 @@ export const AdminDashboard: React.FC = () => {
     preventiveMaintenance,
     notices,
     gallery,
+    galleryPhotos,
+    getPrivateFile,
     t,
     setActiveTab,
-    setPreviewInvoice,
-    setPreviewReceipt,
     getFundBalanceSummary,
     hasPermission,
     actualRole,
@@ -198,6 +210,26 @@ export const AdminDashboard: React.FC = () => {
     .sort((a, b) => String(a.Due_Date || '').localeCompare(String(b.Due_Date || '')));
   const totalOutstanding = outstandingRows.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
   fundSummary.outstandingCollection = totalOutstanding;
+  const ownershipOutstanding = useMemo(
+    () =>
+      computeOwnershipOutstandingClient({
+        invoices,
+        receipts,
+        billAllocations,
+        ownerships,
+        properties,
+        owners,
+      }),
+    [invoices, receipts, billAllocations, ownerships, properties, owners]
+  );
+  const sortedOwnershipOutstandingRows = useMemo(
+    () => sortOwnershipOutstandingByFlatAsc(ownershipOutstanding.data),
+    [ownershipOutstanding.data]
+  );
+  const ownershipFloorSummary = useMemo(
+    () => groupOwnershipOutstandingByFloor(ownershipOutstanding.data, properties),
+    [ownershipOutstanding.data, properties]
+  );
   const recentRequests = [...activityRequests]
     .sort((a, b) => String(b.Updated_At || b.Request_Date || b.Created_At || '').localeCompare(String(a.Updated_At || a.Request_Date || a.Created_At || '')))
     .slice(0, 4);
@@ -205,14 +237,66 @@ export const AdminDashboard: React.FC = () => {
     .filter(item => !['Completed', 'Cancelled'].includes(String(item.Maintenance_Status || '')))
     .sort((a, b) => String(a.Next_Service_Date || '').localeCompare(String(b.Next_Service_Date || '')))
     .slice(0, 5);
-  const activeNotices = notices
-    .filter(notice => {
-      const status = String(notice.Notice_Status || '').trim().toLowerCase();
-      const publish = String(notice.Publish_Date || '').slice(0, 10);
-      const expiry = String(notice.Expiry_Date || '').slice(0, 10);
-      return status === 'published' && (!publish || publish <= todayKey) && (!expiry || expiry >= todayKey);
-    })
-    .sort((a, b) => String(b.Publish_Date || '').localeCompare(String(a.Publish_Date || '')));
+  const activeNotices = useMemo(
+    () => filterActiveNotices(notices, todayKey),
+    [notices, todayKey]
+  );
+  const activeGalleryEvents = useMemo(
+    () => buildActiveGalleryEvents(gallery, galleryPhotos),
+    [gallery, galleryPhotos]
+  );
+  const [galleryPhotoSources, setGalleryPhotoSources] = useState<Record<string, string>>({});
+  const [selectedPhotoIdxByEvent, setSelectedPhotoIdxByEvent] = useState<Record<string, number>>({});
+  const attemptedPhotoRefsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    const refsToLoad: string[] = [];
+    const directUpdates: Record<string, string> = {};
+
+    activeGalleryEvents.forEach(({ photos }) => {
+      photos.forEach((photo) => {
+        const ref = photo.ref;
+        if (!ref) return;
+        if (/^(https?:\/\/|data:|blob:|\/)/i.test(ref)) {
+          if (!galleryPhotoSources[ref]) directUpdates[ref] = ref;
+        } else if (!attemptedPhotoRefsRef.current.has(ref)) {
+          attemptedPhotoRefsRef.current.add(ref);
+          refsToLoad.push(ref);
+        }
+      });
+    });
+
+    if (Object.keys(directUpdates).length > 0 && !cancelled) {
+      setGalleryPhotoSources((prev) => ({ ...prev, ...directUpdates }));
+    }
+
+    if (refsToLoad.length === 0) return () => { cancelled = true; };
+
+    const loadPrivatePhotos = async () => {
+      const resolved: Record<string, string> = {};
+      await Promise.all(
+        refsToLoad.map(async (ref) => {
+          try {
+            const res: any = await getPrivateFile(ref);
+            if (res?.data?.base64 && res?.data?.mimeType) {
+              resolved[ref] = `data:${res.data.mimeType};base64,${res.data.base64}`;
+            }
+          } catch {
+            // Keep clean placeholder if private photo cannot be loaded
+          }
+        })
+      );
+      if (!cancelled && Object.keys(resolved).length > 0) {
+        setGalleryPhotoSources((prev) => ({ ...prev, ...resolved }));
+      }
+    };
+
+    void loadPrivatePhotos();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGalleryEvents]);
 
   return (
     <div className="space-y-6">
@@ -608,76 +692,123 @@ export const AdminDashboard: React.FC = () => {
         </div>}
       </div>}
 
-      {/* Row 3: 7. Outstanding Maintenance Charges Total & Flat-wise Details */}
-      {hasPermission('Maintenance & Invoices','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
-          <div>
-            <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-[#C97958]" />
-              7. Outstanding Charges / বকেয়া রক্ষণাবেক্ষণ বিবরণী
-            </h3>
-            <p className="text-xs text-gray-500">
-              Total Outstanding: <strong className="text-red-700">₹{totalOutstanding.toLocaleString('en-IN')}</strong> across {outstandingRows.length} active invoices
-            </p>
+      {/* Row 3: 7. Ownership-wise Outstanding Report */}
+      {(hasPermission('Reports', 'Can_View') || hasPermission('Maintenance & Invoices', 'Can_View')) && (
+        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-[#C97958]" />
+                7. Ownership-wise Outstanding / মালিকানার মেয়াদভিত্তিক বকেয়া রিপোর্ট
+              </h3>
+              <p className="text-xs text-gray-500">
+                Total Outstanding:{' '}
+                <strong className="text-red-700">
+                  ₹{Number(ownershipOutstanding.summary.totalOutstanding || 0).toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </strong>{' '}
+                across {ownershipOutstanding.summary.ownershipCount} ownership record(s) • Paid linked to Confirmed Fund Inflow Register &amp; Bill Wise Details
+                {ownershipOutstanding.summary.unlinkedInvoiceCount > 0
+                  ? ` • ${ownershipOutstanding.summary.unlinkedInvoiceCount} unlinked invoice(s)`
+                  : ''}
+              </p>
+            </div>
+            {hasPermission('Reports', 'Can_View') && (
+              <button
+                onClick={() => setActiveTab('reports_ownership_due')}
+                className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                View Complete Ownership Outstanding <ArrowUpRight className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
-          <button
-            onClick={() => setActiveTab('invoices_outstanding')}
-            className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1"
-          >
-            View Complete Outstanding Register <ArrowUpRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-[#F7F4EC] text-[#29352D]">
-              <tr>
-                <th className="px-3 py-2.5 font-bold">Invoice No</th>
-                <th className="px-3 py-2.5 font-bold">Flat No</th>
-                <th className="px-3 py-2.5 font-bold">Owner Name</th>
-                <th className="px-3 py-2.5 font-bold">Due Date</th>
-                <th className="px-3 py-2.5 font-bold text-right">Net Bill</th>
-                <th className="px-3 py-2.5 font-bold text-right">Paid</th>
-                <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
-                <th className="px-3 py-2.5 font-bold text-center">Status</th>
-                <th className="px-3 py-2.5 font-bold text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E8E1D4]">
-              {outstandingRows.slice(0, 5).map((inv) => (
-                <tr key={inv.InvoiceID} className="hover:bg-neutral-50 transition-colors">
-                  <td className="px-3 py-2.5 font-medium">{inv.Invoice_Number}</td>
-                  <td className="px-3 py-2.5 font-bold text-[#536B4D]">{inv.Flat_Number}</td>
-                  <td className="px-3 py-2.5">{inv.Owner_Name}</td>
-                  <td className="px-3 py-2.5 text-gray-500">{formatDateDisplay(inv.Due_Date, '—')}</td>
-                  <td className="px-3 py-2.5 text-right font-medium">₹{inv.Net_Charge_Amount.toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-right text-emerald-700">₹{inv.Paid_Amount.toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-right font-bold text-red-700">₹{inv.Outstanding_Amount.toFixed(2)}</td>
-                  <td className="px-3 py-2.5 text-center">
-                    <span
-                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        inv.Invoice_Status === 'Overdue'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {inv.Invoice_Status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <button
-                      onClick={() => setPreviewInvoice(inv as any)}
-                      className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                    >
-                      View Invoice
-                    </button>
-                  </td>
-                </tr>
+          {ownershipFloorSummary.length > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-semibold text-[#536B4D]">By Floor:</span>
+              {ownershipFloorSummary.map((grp) => (
+                <span
+                  key={grp.floorKey}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#E8E1D4] bg-[#F7F4EC] px-2.5 py-1 text-[11px]"
+                >
+                  <span className="font-bold text-[#29352D]">{grp.floorLabel}:</span>
+                  <span className="font-bold text-red-700">
+                    ₹{grp.totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-gray-500">({grp.ownershipCount})</span>
+                </span>
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#F7F4EC] text-[#29352D]">
+                <tr>
+                  <th className="px-3 py-2.5 font-bold">Ownership ID</th>
+                  <th className="px-3 py-2.5 font-bold">Flat</th>
+                  <th className="px-3 py-2.5 font-bold">Floor</th>
+                  <th className="px-3 py-2.5 font-bold">Owner</th>
+                  <th className="px-3 py-2.5 font-bold">Ownership Period</th>
+                  <th className="px-3 py-2.5 font-bold">Status</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Invoices</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Billed</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Paid</th>
+                  <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
+                  <th className="px-3 py-2.5 font-bold text-center">Link</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E8E1D4]">
+                {sortedOwnershipOutstandingRows.slice(0, 8).map((r, i) => (
+                  <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50 transition-colors">
+                    <td className="px-3 py-2.5 font-mono text-gray-600">{r.Ownership_ID}</td>
+                    <td className="px-3 py-2.5 font-bold text-[#536B4D]">{r.Flat_No || r.PropertyID}</td>
+                    <td className="px-3 py-2.5 font-medium text-gray-700">{getFloorMeta(r.Floor_No).floorLabel}</td>
+                    <td className="px-3 py-2.5 font-medium text-[#29352D]">{r.Owner_Name || r.OwnerID || '—'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                      {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
+                    </td>
+                    <td className="px-3 py-2.5">{r.Ownership_Status}</td>
+                    <td className="px-3 py-2.5 text-right">{r.Invoice_Count}</td>
+                    <td className="px-3 py-2.5 text-right font-medium">
+                      ₹{Number(r.Total_Billed || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-emerald-700">
+                      ₹{Number(r.Total_Paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-bold text-red-700">
+                      ₹{Number(r.Outstanding || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          r.Data_Link_Status === 'Linked' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {r.Data_Link_Status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {sortedOwnershipOutstandingRows.length === 0 && (
+                  <tr>
+                    <td colSpan={11} className="px-3 py-6 text-center text-gray-500">
+                      No outstanding ownership dues found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {sortedOwnershipOutstandingRows.length > 8 && (
+            <p className="mt-3 text-[11px] text-gray-500">
+              Showing top 8 of {sortedOwnershipOutstandingRows.length} ownership record(s) sorted by Flat No.
+            </p>
+          )}
         </div>
-      </div>}
+      )}
 
       {/* Row 4: 8. Recent Activity & 9. Preventive Maintenance Progress */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -767,30 +898,42 @@ export const AdminDashboard: React.FC = () => {
         </div>}
       </div>
 
-      {/* Row 5: 10. Notices & Community Gallery */}
+      {/* Row 5: 10. Active Notices & Active Gallery */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Latest Notices */}
-        {hasPermission('Notices','Can_View') && <div className="lg:col-span-7 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {/* Active Notices (Notice Master) */}
+        {hasPermission('Notices','Can_View') && <div data-testid="dashboard-active-notices" className="lg:col-span-6 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Calendar className="h-4 w-4 text-[#536B4D]" />
-              Active Notices / বর্তমান নোটিশ
+              Active Notices / সক্রিয় নোটিশ
             </h3>
-            <span className="text-xs text-gray-500">{activeNotices.length} Active</span>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#536B4D]/10 text-[#536B4D]">
+              {activeNotices.length} Active
+            </span>
           </div>
 
           <div className="space-y-3">
-            {activeNotices.length === 0 && <p className="text-xs text-gray-500">No active notices at present.</p>}
-            {activeNotices.slice(0, 3).map((notice) => (
+            {activeNotices.length === 0 && (
+              <p className="text-xs text-gray-500 py-4 text-center">No active notices at present.</p>
+            )}
+            {activeNotices.slice(0, 5).map((notice) => (
               <div
                 key={notice.Notice_ID}
                 className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4]"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#536B4D]/10 text-[#536B4D]">
-                    {notice.Notice_Category}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-[#536B4D]/10 text-[#536B4D]">
+                      {notice.Notice_Category || 'General'}
+                    </span>
+                    {notice.Notice_Number && (
+                      <span className="text-[10px] font-mono text-gray-500">{notice.Notice_Number}</span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-gray-500">
+                    {formatDateDisplay(notice.Publish_Date, '—')}
+                    {notice.Expiry_Date ? ` · Valid till ${formatDateDisplay(notice.Expiry_Date, '—')}` : ''}
                   </span>
-                  <span className="text-[10px] text-gray-500">{formatDateDisplay(notice.Publish_Date, '—')}</span>
                 </div>
                 <h4 className="text-xs font-bold text-[#29352D] mt-1.5">{notice.Notice_Title}</h4>
                 <p className="text-xs text-[#29352D]/80 line-clamp-2 mt-1">{notice.Notice_Description}</p>
@@ -799,30 +942,102 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>}
 
-        {/* Community Gallery preview */}
-        {hasPermission('Gallery','Can_View') && <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+        {/* Active Gallery (Gallery Master + Gallery_Photos) */}
+        {hasPermission('Gallery','Can_View') && <div data-testid="dashboard-active-gallery" className="lg:col-span-6 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <ImageIcon className="h-4 w-4 text-[#536B4D]" />
-              Community Gallery / ছবি গ্যালারি
+              Active Gallery / সক্রিয় গ্যালারি
             </h3>
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#536B4D]/10 text-[#536B4D]">
+              {activeGalleryEvents.length} Active
+            </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            {gallery.slice(0, 2).map((item) => (
-              <div key={item.Gallery_ID} className="group relative rounded-xl overflow-hidden border border-[#E8E1D4]">
-                <img
-                  src={item.Photo_File_Reference}
-                  alt={item.Event_Name}
-                  className="h-28 w-full object-cover group-hover:scale-105 transition-transform duration-300"
-                />
-                <div className="p-2 bg-white">
-                  <p className="text-[11px] font-bold text-[#29352D] truncate">{item.Event_Name}</p>
-                  <p className="text-[9px] text-gray-500">{formatDateDisplay(item.Event_Date, '—')}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+          {activeGalleryEvents.length === 0 ? (
+            <p className="text-xs text-gray-500 py-4 text-center">No active gallery events at present.</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {activeGalleryEvents.slice(0, 4).map(({ event, photos }) => {
+                const rawIdx = selectedPhotoIdxByEvent[event.Gallery_ID] || 0;
+                const activeIdx = photos.length > 0 ? Math.min(rawIdx, photos.length - 1) : 0;
+                const currentPhoto = photos[activeIdx];
+                const currentSrc = currentPhoto
+                  ? galleryPhotoSources[currentPhoto.ref] ||
+                    (/^(https?:\/\/|data:|blob:|\/)/i.test(currentPhoto.ref) ? currentPhoto.ref : '')
+                  : '';
+                return (
+                  <div key={event.Gallery_ID} className="group rounded-xl overflow-hidden border border-[#E8E1D4] bg-white flex flex-col">
+                    <div className="relative h-36 bg-[#F7F4EC] overflow-hidden">
+                      {currentSrc ? (
+                        <img
+                          src={currentSrc}
+                          alt={currentPhoto?.caption || event.Event_Name}
+                          className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="h-full w-full flex flex-col items-center justify-center text-gray-400 text-[11px] gap-1">
+                          <ImageIcon className="h-6 w-6 text-[#536B4D]/40" />
+                          <span>{photos.length > 0 ? 'Loading photo…' : 'No photos attached'}</span>
+                        </div>
+                      )}
+                      {photos.length > 0 && (
+                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-black/65 text-white text-[10px] font-semibold">
+                          {activeIdx + 1} / {photos.length}
+                        </span>
+                      )}
+                      <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-black/65 text-white text-[10px]">
+                        {formatDateDisplay(event.Event_Date, '—')}
+                      </span>
+                    </div>
+
+                    {photos.length > 1 && (
+                      <div className="flex items-center gap-1.5 px-2.5 pt-2 overflow-x-auto">
+                        {photos.map((photo, idx) => {
+                          const thumbSrc =
+                            galleryPhotoSources[photo.ref] ||
+                            (/^(https?:\/\/|data:|blob:|\/)/i.test(photo.ref) ? photo.ref : '');
+                          return (
+                            <button
+                              key={photo.photoId}
+                              type="button"
+                              onClick={() =>
+                                setSelectedPhotoIdxByEvent((prev) => ({
+                                  ...prev,
+                                  [event.Gallery_ID]: idx,
+                                }))
+                              }
+                              aria-label={`View photo ${idx + 1} for ${event.Event_Name}`}
+                              className={`h-9 w-11 shrink-0 rounded-md overflow-hidden border-2 transition-all cursor-pointer ${
+                                idx === activeIdx ? 'border-[#536B4D]' : 'border-[#E8E1D4] opacity-75 hover:opacity-100'
+                              }`}
+                            >
+                              {thumbSrc ? (
+                                <img src={thumbSrc} alt={photo.caption || event.Event_Name} className="h-full w-full object-cover" />
+                              ) : (
+                                <div className="h-full w-full bg-[#F7F4EC] flex items-center justify-center">
+                                  <ImageIcon className="h-3.5 w-3.5 text-gray-400" />
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="p-2.5 bg-white flex-1">
+                      <p className="text-xs font-bold text-[#29352D] truncate">{event.Event_Name}</p>
+                      {(currentPhoto?.caption || event.Event_Description) && (
+                        <p className="text-[11px] text-gray-600 line-clamp-2 mt-0.5">
+                          {currentPhoto?.caption || event.Event_Description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>}
       </div>
     </div>

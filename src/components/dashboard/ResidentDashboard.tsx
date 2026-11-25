@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { buildActiveGalleryEvents, filterActiveNotices } from '../../utils/dashboardHelpers';
 import { useApp } from '../../context/AppContext';
 import {
   Home,
@@ -32,6 +33,8 @@ export const ResidentDashboard: React.FC = () => {
     activityRequests,
     notices,
     gallery,
+    galleryPhotos,
+    getPrivateFile,
     t,
     setActiveTab,
     hasPermission,
@@ -47,11 +50,57 @@ export const ResidentDashboard: React.FC = () => {
   const myRequests = activityRequests.filter((r) => r.PropertyID === myProperty?.PropertyID);
 
   const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const billMetrics = calculateResidentInvoiceMetrics(myInvoices, myReceipts, billAllocations, now);
   const totalOutstanding = billMetrics.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
   const rawNextDueDate = billMetrics.find(i => i.Outstanding_Amount > 0)?.Due_Date;
   const nextDueDate = rawNextDueDate ? formatDateDisplay(rawNextDueDate, 'None Pending') : 'None Pending';
   const recentReceipts = [...myReceipts].sort((a,b) => String(b.Date_Of_Received || '').localeCompare(String(a.Date_Of_Received || ''))).slice(0,4);
+  const activeNotices = useMemo(() => filterActiveNotices(notices, todayKey), [notices, todayKey]);
+  const activeGalleryEvents = useMemo(() => buildActiveGalleryEvents(gallery, galleryPhotos), [gallery, galleryPhotos]);
+  const [galleryPhotoSources, setGalleryPhotoSources] = useState<Record<string, string>>({});
+  const attemptedRefsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    const refsToLoad: string[] = [];
+    const directUpdates: Record<string, string> = {};
+    activeGalleryEvents.forEach(({ photos }) => {
+      photos.forEach(({ ref }) => {
+        if (!ref) return;
+        if (/^(https?:\/\/|data:|blob:|\/)/i.test(ref)) {
+          if (!galleryPhotoSources[ref]) directUpdates[ref] = ref;
+        } else if (!attemptedRefsRef.current.has(ref)) {
+          attemptedRefsRef.current.add(ref);
+          refsToLoad.push(ref);
+        }
+      });
+    });
+    if (Object.keys(directUpdates).length > 0 && !cancelled) {
+      setGalleryPhotoSources((prev) => ({ ...prev, ...directUpdates }));
+    }
+    if (refsToLoad.length === 0) return () => { cancelled = true; };
+    const loadPrivate = async () => {
+      const resolved: Record<string, string> = {};
+      await Promise.all(
+        refsToLoad.map(async (ref) => {
+          try {
+            const res: any = await getPrivateFile(ref);
+            if (res?.data?.base64 && res?.data?.mimeType) {
+              resolved[ref] = `data:${res.data.mimeType};base64,${res.data.base64}`;
+            }
+          } catch {
+            // Keep placeholder
+          }
+        })
+      );
+      if (!cancelled && Object.keys(resolved).length > 0) {
+        setGalleryPhotoSources((prev) => ({ ...prev, ...resolved }));
+      }
+    };
+    void loadPrivate();
+    return () => { cancelled = true; };
+  }, [activeGalleryEvents]);
 
   return (
     <div className="space-y-6">
@@ -319,18 +368,22 @@ export const ResidentDashboard: React.FC = () => {
         </div>}
       </div>
 
-      {/* Row 3: Notices & Community Gallery */}
+      {/* Row 3: Active Notices & Active Gallery */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {hasPermission('Notices','Can_View') && <div className="lg:col-span-8 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <Calendar className="h-4 w-4 text-[#536B4D]" />
-              Community Notice Board / সোসাইটি নোটিশ
+              Active Notices / সক্রিয় নোটিশ
             </h3>
+            <span className="text-xs text-gray-500">{activeNotices.length} Active</span>
           </div>
 
           <div className="space-y-3">
-            {notices.slice(0, 3).map((notice) => (
+            {activeNotices.length === 0 && (
+              <p className="text-xs text-gray-500 py-4 text-center">No active notices at present.</p>
+            )}
+            {activeNotices.slice(0, 3).map((notice) => (
               <div key={notice.Notice_ID} className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs">
                 <div className="flex justify-between items-center text-[10px] text-gray-500">
                   <span className="font-bold text-[#536B4D] uppercase">{notice.Notice_Category}</span>
@@ -347,22 +400,42 @@ export const ResidentDashboard: React.FC = () => {
           <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
             <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
               <ImageIcon className="h-4 w-4 text-[#536B4D]" />
-              Event Gallery
+              Active Gallery / সক্রিয় গ্যালারি
             </h3>
+            <span className="text-xs text-gray-500">{activeGalleryEvents.length} Active</span>
           </div>
-          {gallery.length > 0 && (
-            <div className="rounded-xl overflow-hidden border border-[#E8E1D4]">
-              <img
-                src={gallery[0].Photo_File_Reference}
-                alt={gallery[0].Event_Name}
-                className="h-36 w-full object-cover"
-              />
-              <div className="p-3 bg-[#F7F4EC]">
-                <p className="text-xs font-bold text-[#29352D]">{gallery[0].Event_Name}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5">{formatDateDisplay(gallery[0].Event_Date, '—')}</p>
+          {activeGalleryEvents.length === 0 ? (
+            <p className="text-xs text-gray-500 py-4 text-center">No active gallery events at present.</p>
+          ) : (() => {
+            const { event, photos } = activeGalleryEvents[0];
+            const firstPhoto = photos[0];
+            const src = firstPhoto
+              ? galleryPhotoSources[firstPhoto.ref] || (/^(https?:\/\/|data:|blob:|\/)/i.test(firstPhoto.ref) ? firstPhoto.ref : '')
+              : '';
+            return (
+              <div className="rounded-xl overflow-hidden border border-[#E8E1D4]">
+                {src ? (
+                  <img
+                    src={src}
+                    alt={firstPhoto?.caption || event.Event_Name}
+                    className="h-36 w-full object-cover"
+                  />
+                ) : (
+                  <div className="h-36 w-full bg-[#F7F4EC] flex items-center justify-center text-gray-400 text-xs">
+                    <ImageIcon className="h-5 w-5 text-[#536B4D]/40 mr-1.5" />
+                    <span>{photos.length > 0 ? 'Loading photo…' : 'No photos attached'}</span>
+                  </div>
+                )}
+                <div className="p-3 bg-[#F7F4EC]">
+                  <p className="text-xs font-bold text-[#29352D]">{event.Event_Name}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {formatDateDisplay(event.Event_Date, '—')}
+                    {photos.length > 1 ? ` · ${photos.length} photos` : ''}
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>}
       </div>
     </div>

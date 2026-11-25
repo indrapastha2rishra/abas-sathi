@@ -70,3 +70,42 @@ test('ownership outstanding derives Paid from Confirmed Fund Inflow Register rec
   assert.equal(result.summary.totalOutstanding, 3700);
 });
 
+test('ownership outstanding sums Allocated_Amount grouped by Ownership_ID and outputs Floor_No and byFloor totals', () => {
+  const invoices = [
+    { InvoiceID:'I1', Ownership_ID:'OWN-1', PropertyID:'P1', OwnerID:'O1', Owner_Name:'Owner 1', Flat_Number:'101', Net_Charge_Amount:4000, Paid_Amount:0, Invoice_Status:'Unpaid' },
+    { InvoiceID:'I2', Ownership_ID:'OWN-2', PropertyID:'P2', OwnerID:'O2', Owner_Name:'Owner 2', Flat_Number:'201', Net_Charge_Amount:5000, Paid_Amount:0, Invoice_Status:'Unpaid' },
+  ];
+  const history = [
+    { Ownership_ID:'OWN-1', PropertyID:'P1', OwnerID:'O1', Ownership_Status:'Current' },
+    { Ownership_ID:'OWN-2', PropertyID:'P2', OwnerID:'O2', Ownership_Status:'Current' },
+  ];
+  const properties = [
+    { PropertyID:'P1', Flat_No:'101', Floor_No: 1 },
+    { PropertyID:'P2', Flat_No:'201', Floor_No: 2 },
+  ];
+  const receipts = [
+    { Transaction_ID:'TXN-1', Receipt_Status:'Confirmed' },
+    { Transaction_ID:'TXN-2', Receipt_Status:'Confirmed' },
+  ];
+  const billAllocations = [
+    { Allocation_ID:'A1', Transaction_ID:'TXN-1', InvoiceID:'I1', Ownership_ID:'OWN-1', Allocated_Amount:1000 },
+    { Allocation_ID:'A2', Transaction_ID:'TXN-2', InvoiceID:'', Ownership_ID:'OWN-1', Allocated_Amount:500 },
+    { Allocation_ID:'A3', Transaction_ID:'', InvoiceID:'I2', Ownership_ID:'OWN-2', Allocated_Amount:2000 },
+  ];
+  const result = build(invoices, history, properties, [], receipts, billAllocations);
+  assert.equal(result.data.length, 2);
+  assert.equal(result.data[0].Ownership_ID, 'OWN-1');
+  assert.equal(result.data[0].Floor_No, 1);
+  assert.equal(result.data[0].Total_Paid, 1500);
+  assert.equal(result.data[0].Outstanding, 2500);
+  assert.equal(result.data[1].Ownership_ID, 'OWN-2');
+  assert.equal(result.data[1].Floor_No, 2);
+  assert.equal(result.data[1].Total_Paid, 2000);
+  assert.equal(result.data[1].Outstanding, 3000);
+  assert.equal(result.byFloor.length, 2);
+  assert.equal(result.byFloor[0].Floor_No, 1);
+  assert.equal(result.byFloor[0].Outstanding, 2500);
+  assert.equal(result.byFloor[1].Floor_No, 2);
+  assert.equal(result.byFloor[1].Outstanding, 3000);
+});
+

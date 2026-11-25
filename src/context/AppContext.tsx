@@ -21,6 +21,7 @@ import {
   ActivityRequestRegister,
   NoticeMaster,
   GalleryMaster,
+  GalleryPhoto,
   PreventiveMaintenanceMaster,
   AuditLog,
   FinancialYearMaster,
@@ -89,6 +90,7 @@ interface AppContextType {
   activityRequests: ActivityRequestRegister[];
   notices: NoticeMaster[];
   gallery: GalleryMaster[];
+  galleryPhotos: GalleryPhoto[];
   preventiveMaintenance: PreventiveMaintenanceMaster[];
   auditLogs: AuditLog[];
   financialYears: FinancialYearMaster[];
@@ -215,6 +217,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activityRequests, setActivityRequests] = useState<ActivityRequestRegister[]>(() => (initialModules.activityRequests?.data || []) as ActivityRequestRegister[]);
   const [notices, setNotices] = useState<NoticeMaster[]>(() => (initialModules.notices?.data || []) as NoticeMaster[]);
   const [gallery, setGallery] = useState<GalleryMaster[]>(() => (initialModules.gallery?.data || []) as GalleryMaster[]);
+  const [galleryPhotos, setGalleryPhotos] = useState<GalleryPhoto[]>(() => (initialModules.galleryPhotos?.data || []) as GalleryPhoto[]);
   const [preventiveMaintenance, setPreventiveMaintenance] = useState<PreventiveMaintenanceMaster[]>(() => (initialModules.preventiveMaintenance?.data || []) as PreventiveMaintenanceMaster[]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => (initialModules.auditLogs?.data || []) as AuditLog[]);
   const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>(() => (initialModules.financialYears?.data || []) as FinancialYearMaster[]);
@@ -464,6 +467,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         case 'activityRequests': setActivityRequests(normalizedRows as ActivityRequestRegister[]); break;
         case 'notices': setNotices(normalizedRows as NoticeMaster[]); break;
         case 'gallery': setGallery(normalizedRows as GalleryMaster[]); break;
+        case 'galleryPhotos': setGalleryPhotos(normalizedRows as GalleryPhoto[]); break;
         case 'preventiveMaintenance': setPreventiveMaintenance(normalizedRows as PreventiveMaintenanceMaster[]); break;
         case 'financialYears': setFinancialYears(normalizedRows as FinancialYearMaster[]); break;
         case 'accountHeads': setAccountHeads(normalizedRows as AccountHeadMaster[]); break;
@@ -479,16 +483,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const modulePlan: Record<string, string[]> = {
-      dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','expenses','bankAccounts','preventiveMaintenance'],
+      dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','expenses','bankAccounts','preventiveMaintenance'],
       properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
       properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
       invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],
-      invoices_register: ['invoices','properties','owners','rates','ratePropertyMapping','ownershipHistory'], invoices_rates: ['rates','ratePropertyMapping','properties'],
-      invoices_outstanding: ['invoices','properties','owners','rates'],
+      invoices_register: ['invoices','properties','owners','rates','ratePropertyMapping','ownershipHistory','billWiseDetails','receipts'], invoices_rates: ['rates','ratePropertyMapping','properties'],
+      invoices_outstanding: ['invoices','properties','owners','rates','billWiseDetails','receipts'],
       payments_record: ['receipts','invoices','properties','owners','ownershipHistory','bankAccounts','billWiseDetails'],
       payments_receipts: ['receipts','invoices','properties','billWiseDetails'], payments_allocation: ['receipts','invoices','billWiseDetails','properties','owners','ownershipHistory'],
       payments_advances: ['receipts','invoices','billWiseDetails','properties'], resident_flat: ['properties','owners','ownershipHistory','propertyUtilityDetails','tenants'],
-      resident_bills: ['invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory'], resident_history: ['receipts','billWiseDetails'],
+      resident_bills: ['invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory','receipts','billWiseDetails'], resident_history: ['receipts','billWiseDetails'],
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'],
@@ -501,7 +505,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads','financialYears'],
       reports_year_end: ['financialYears','bankAccounts'],
       financial_rv: ['accountHeads','financialYears'], financial_pv: ['accountHeads','financialYears'], financial_jv: ['accountHeads','financialYears'], financial_cv: ['accountHeads','financialYears'],
-      resident_notices: ['notices','gallery'], resident_reports: ['properties','owners','ownershipHistory','invoices','receipts','billWiseDetails','activityRequests','notices','gallery'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
+      resident_notices: ['notices','gallery','galleryPhotos'], resident_reports: ['properties','owners','ownershipHistory','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
     const load = async () => {
       try {
@@ -510,7 +514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           tenants: 'Tenant Management', rates: 'Maintenance & Invoices', invoices: 'Maintenance & Invoices',
           receipts: 'Payments', billWiseDetails: 'Bill Wise Details', expenses: 'Expenses',
           expenseCategories: 'Expenses', bankAccounts: 'Bank Accounts', activityRequests: 'Activity Requests',
-          notices: 'Notices', gallery: 'Gallery', preventiveMaintenance: 'Preventive Maintenance',
+          notices: 'Notices', gallery: 'Gallery', galleryPhotos: 'Gallery', preventiveMaintenance: 'Preventive Maintenance',
           ratePropertyMapping: 'Maintenance & Invoices', propertyUtilityDetails: 'Properties & Residents',
           financialYears: 'Financial Year Management', accountHeads: 'Account Heads', auditLogs: 'Audit Log',
         };
@@ -610,8 +614,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (activeTab === 'dashboard') {
           // Check if dashboard modules are already warm (<30s); otherwise fetch getRoleDashboardData once and populate all module caches.
           const dashCoreModules = activeRole === 'Resident'
-            ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery']
-            : ['properties','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','preventiveMaintenance'];
+            ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos']
+            : ['properties','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
           const allDashWarm = dashCoreModules.every((mod) => {
             const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
             return c && Date.now() - c.at < readCacheTtlMs;
@@ -660,12 +664,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           await Promise.allSettled([permsPromise, dashDataPromise]);
 
-          // Silently pre-warm commonly visited secondary master modules so subsequent tab switches load in 0ms.
+          // Silently pre-warm commonly visited secondary master modules (plus galleryPhotos if omitted by older backend cache).
           if (!cancelled) {
             const prefetchCandidates = activeRole === 'Resident'
-              ? ['propertyUtilityDetails']
-              : ['owners', 'ownershipHistory', 'rates', 'expenseCategories', 'financialYears'];
+              ? ['propertyUtilityDetails', 'galleryPhotos']
+              : ['owners', 'ownershipHistory', 'rates', 'expenseCategories', 'financialYears', 'galleryPhotos'];
             const missingPrefetch = prefetchCandidates.filter((mod) => {
+              if (!permittedRequested.includes(mod) && mod === 'galleryPhotos') return false;
               const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
               return !c || Date.now() - c.at >= readCacheTtlMs;
             });
@@ -1045,6 +1050,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activityRequests,
         notices,
         gallery,
+        galleryPhotos,
         preventiveMaintenance,
         auditLogs,
         financialYears,

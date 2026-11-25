@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { PaymentMode, FundInflowRegister } from '../../types/database';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
 
 interface Props {
   initialSubTab?: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record';
@@ -89,10 +90,21 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     [activeRole, billAllocations, residentProperty?.PropertyID]
   );
 
+  const computedInvoices = useMemo(
+    () => computeInvoiceOutstandingBills(invoices, billAllocations, receipts),
+    [invoices, billAllocations, receipts]
+  );
+
   // Resident "Pay Now" flow state
   const myInvoices = useMemo(
-    () => invoices.filter((i) => i.PropertyID === residentProperty?.PropertyID && toAmt(i.Outstanding_Amount) > 0),
-    [invoices, residentProperty?.PropertyID]
+    () =>
+      computedInvoices.filter(
+        (i) =>
+          i.PropertyID === residentProperty?.PropertyID &&
+          !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(i.Invoice_Status || '').trim().toLowerCase()) &&
+          toAmt(i.Calculated_Outstanding) > 0
+      ),
+    [computedInvoices, residentProperty?.PropertyID]
   );
 
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>(
@@ -136,13 +148,13 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
 
   const recordPropertyInvoices = useMemo(
     () =>
-      invoices.filter(
+      computedInvoices.filter(
         (inv) =>
           String(inv.PropertyID || '') === String(recordPropertyId || '') &&
-          String(inv.Invoice_Status || '').toLowerCase() !== 'cancelled' &&
-          toAmt(inv.Outstanding_Amount) > 0
+          !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(inv.Invoice_Status || '').trim().toLowerCase()) &&
+          toAmt(inv.Calculated_Outstanding) > 0
       ),
-    [invoices, recordPropertyId]
+    [computedInvoices, recordPropertyId]
   );
 
   const selectedRecordOwnership = useMemo(

@@ -5,7 +5,7 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => ({
-  base: '/',
+  base: '/abas-sathi/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -283,6 +283,17 @@ export interface GalleryMaster {
   Status: 'Active' | 'Archived';
 }
 
+export interface GalleryPhoto {
+  Photo_ID: string;
+  Gallery_ID: string;
+  Photo_File_Reference: string;
+  Photo_Caption?: string;
+  Display_Order?: number;
+  Status?: 'Active' | 'Inactive' | 'Archived';
+  Uploaded_By?: string;
+  Uploaded_At?: string;
+}
+
 export interface PreventiveMaintenanceMaster {
   Maintenance_ID: string;
   Asset_Name: string;

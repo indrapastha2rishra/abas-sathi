@@ -298,6 +298,128 @@ export function computeOwnerOutstandingRows(params: {
     .sort((a, b) => b.Outstanding - a.Outstanding);
 }
 
+export function resolveFloorValue(
+  prop?: Partial<PropertyMaster> | Record<string, any> | null,
+  inv?: Partial<InvoiceRegister> | Record<string, any> | null,
+  history?: Partial<OwnershipHistory> | Record<string, any> | null
+): number | string {
+  const candidates = [
+    prop?.Floor_No,
+    (prop as any)?.['Floor No.'],
+    (prop as any)?.['Floor No'],
+    (inv as any)?.Floor_No,
+    (history as any)?.Floor_No,
+  ];
+  for (const raw of candidates) {
+    if (raw === undefined || raw === null) continue;
+    const str = String(raw).trim();
+    if (str === '') continue;
+    const num = Number(str);
+    return Number.isFinite(num) ? num : str;
+  }
+  return '';
+}
+
+export function getFloorMeta(floorNo: unknown): { floorKey: string; floorLabel: string; floorRank: number } {
+  if (floorNo === undefined || floorNo === null || String(floorNo).trim() === '') {
+    return { floorKey: '__UNASSIGNED__', floorLabel: 'Unassigned Floor', floorRank: Number.MAX_SAFE_INTEGER };
+  }
+  const str = String(floorNo).trim();
+  const num = Number(str);
+  if (Number.isFinite(num)) {
+    return {
+      floorKey: String(num),
+      floorLabel: `Floor ${num}`,
+      floorRank: num,
+    };
+  }
+  return {
+    floorKey: str,
+    floorLabel: /^floor\b/i.test(str) ? str : `Floor ${str}`,
+    floorRank: Number.MAX_SAFE_INTEGER - 1,
+  };
+}
+
+export interface OwnershipFloorGroup<T = any> {
+  floorKey: string;
+  floorLabel: string;
+  floorRank: number;
+  ownershipCount: number;
+  invoiceCount: number;
+  totalBilled: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  rows: T[];
+}
+
+export function groupOwnershipOutstandingByFloor<T extends Record<string, any>>(
+  rows: T[],
+  properties: PropertyMaster[] = []
+): OwnershipFloorGroup<T>[] {
+  const propById = new Map<string, PropertyMaster>();
+  const propByFlat = new Map<string, PropertyMaster>();
+  (properties || []).forEach((p) => {
+    if (p.PropertyID) propById.set(String(p.PropertyID).trim(), p);
+    if (p.Flat_No) propByFlat.set(String(p.Flat_No).trim().toLowerCase(), p);
+  });
+
+  const groups = new Map<string, OwnershipFloorGroup<T>>();
+
+  (rows || []).forEach((row) => {
+    const prop =
+      propById.get(String(row.PropertyID || '').trim()) ||
+      propByFlat.get(String(row.Flat_No || '').trim().toLowerCase());
+    const floorVal =
+      row.Floor_No !== undefined && row.Floor_No !== null && String(row.Floor_No).trim() !== ''
+        ? row.Floor_No
+        : resolveFloorValue(prop);
+    const meta = getFloorMeta(floorVal);
+    let grp = groups.get(meta.floorKey);
+    if (!grp) {
+      grp = {
+        floorKey: meta.floorKey,
+        floorLabel: meta.floorLabel,
+        floorRank: meta.floorRank,
+        ownershipCount: 0,
+        invoiceCount: 0,
+        totalBilled: 0,
+        totalPaid: 0,
+        totalOutstanding: 0,
+        rows: [],
+      };
+      groups.set(meta.floorKey, grp);
+    }
+    const enriched =
+      row.Floor_No === floorVal
+        ? row
+        : ({ ...row, Floor_No: floorVal } as T);
+    grp.rows.push(enriched);
+    grp.ownershipCount += 1;
+    grp.invoiceCount += Number(row.Invoice_Count || 0);
+    grp.totalBilled = Math.round((grp.totalBilled + toReportAmount(row.Total_Billed)) * 100) / 100;
+    grp.totalPaid = Math.round((grp.totalPaid + toReportAmount(row.Total_Paid)) * 100) / 100;
+    grp.totalOutstanding = Math.round((grp.totalOutstanding + toReportAmount(row.Outstanding)) * 100) / 100;
+  });
+
+  return Array.from(groups.values())
+    .sort((a, b) => {
+      if (a.floorRank !== b.floorRank) return a.floorRank - b.floorRank;
+      return a.floorLabel.localeCompare(b.floorLabel, undefined, { numeric: true, sensitivity: 'base' });
+    })
+    .map((grp) => ({
+      ...grp,
+      rows: [...grp.rows].sort((a, b) => {
+        const flatA = String(a.Flat_No || a.PropertyID || '').trim();
+        const flatB = String(b.Flat_No || b.PropertyID || '').trim();
+        const flatCmp = flatA.localeCompare(flatB, undefined, { numeric: true, sensitivity: 'base' });
+        if (flatCmp !== 0) return flatCmp;
+        const dateCmp = toReportDateKey(a.Ownership_Start_Date).localeCompare(toReportDateKey(b.Ownership_Start_Date));
+        if (dateCmp !== 0) return dateCmp;
+        return String(a.Ownership_ID || '').localeCompare(String(b.Ownership_ID || ''));
+      }),
+    }));
+}
+
 export function computeOwnershipOutstandingClient(params: {
   invoices: InvoiceRegister[];
   receipts: FundInflowRegister[];
@@ -307,49 +429,125 @@ export function computeOwnershipOutstandingClient(params: {
   owners: OwnerMaster[];
 }) {
   const { invoices, receipts, billAllocations, ownerships, properties, owners } = params;
-  const ownershipById = new Map((ownerships || []).map((o) => [String(o.Ownership_ID || ''), o]));
-  const propById = new Map((properties || []).map((p) => [String(p.PropertyID || ''), p]));
-  const ownerById = new Map((owners || []).map((o) => [String(o.OwnerID || ''), o]));
-  const grouped = new Map<string, any>();
-  let unlinkedInvoiceCount = 0;
+  const ownershipById = new Map((ownerships || []).map((o) => [String(o.Ownership_ID || '').trim(), o]));
+  const propById = new Map((properties || []).map((p) => [String(p.PropertyID || '').trim(), p]));
+  const ownerById = new Map((owners || []).map((o) => [String(o.OwnerID || '').trim(), o]));
 
-  computeConfirmedInvoiceMetrics(invoices, receipts, billAllocations).forEach(({ inv, net, paid, due }) => {
-    const ownershipId = String(inv.Ownership_ID || '');
-    const propertyId = String(inv.PropertyID || '');
-    const ownerId = String(inv.OwnerID || '');
-    const key = ownershipId || `UNLINKED:${propertyId}:${ownerId}`;
-    if (!ownershipId && due > 0) unlinkedInvoiceCount += 1;
-    const history = ownershipById.get(ownershipId);
-    const prop = propById.get(propertyId);
-    const owner = ownerById.get(ownerId);
-    let entry = grouped.get(key);
-    if (!entry) {
-      entry = {
-        Ownership_ID: ownershipId || 'Not linked',
-        PropertyID: propertyId,
-        Flat_No: String(inv.Flat_Number || (inv as any).Flat_No || prop?.Flat_No || ''),
-        OwnerID: ownerId,
-        Owner_Name: String(inv.Owner_Name || owner?.Owner_Name || ''),
-        Ownership_Start_Date: history?.Ownership_Start_Date || '',
-        Ownership_End_Date: history?.Ownership_End_Date || '',
-        Ownership_Status: history?.Ownership_Status || 'Historical record not found',
-        Invoice_Count: 0,
-        Total_Billed: 0,
-        Total_Paid: 0,
-        Outstanding: 0,
-        Data_Link_Status: ownershipId && history?.Ownership_ID ? 'Linked' : 'Needs review',
-      };
-      grouped.set(key, entry);
-    }
-    entry.Invoice_Count += 1;
-    entry.Total_Billed = Math.round((entry.Total_Billed + net) * 100) / 100;
-    entry.Total_Paid = Math.round((entry.Total_Paid + paid) * 100) / 100;
-    entry.Outstanding = Math.round((entry.Outstanding + due) * 100) / 100;
+  const receiptStatusByTxnId = new Map<string, string>();
+  (receipts || []).forEach((r) => {
+    const txnId = String(r.Transaction_ID || '').trim();
+    if (!txnId) return;
+    receiptStatusByTxnId.set(txnId, String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase());
   });
 
-  const data = Array.from(grouped.values())
+  const keyByInvoiceId = new Map<string, string>();
+  const keyByInvoiceNumber = new Map<string, string>();
+  const grouped = new Map<string, any>();
+
+  (invoices || [])
+    .filter((inv) => !EXCLUDED_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
+    .forEach((inv) => {
+      const ownershipId = String(inv.Ownership_ID || '').trim();
+      const propertyId = String(inv.PropertyID || '').trim();
+      const ownerId = String(inv.OwnerID || '').trim();
+      const key = ownershipId || `UNLINKED:${propertyId}:${ownerId}`;
+      const invId = String(inv.InvoiceID || '').trim();
+      const invNum = String(inv.Invoice_Number || '').trim();
+      if (invId) keyByInvoiceId.set(invId, key);
+      if (invNum) keyByInvoiceNumber.set(invNum, key);
+
+      const history = ownershipById.get(ownershipId);
+      const prop = propById.get(propertyId);
+      const owner = ownerById.get(ownerId);
+      const floorNo = resolveFloorValue(prop, inv, history);
+
+      let entry = grouped.get(key);
+      if (!entry) {
+        entry = {
+          Ownership_ID: ownershipId || 'Not linked',
+          PropertyID: propertyId,
+          Flat_No: String(inv.Flat_Number || (inv as any).Flat_No || prop?.Flat_No || ''),
+          Floor_No: floorNo,
+          OwnerID: ownerId,
+          Owner_Name: String(inv.Owner_Name || owner?.Owner_Name || ''),
+          Ownership_Start_Date: history?.Ownership_Start_Date || '',
+          Ownership_End_Date: history?.Ownership_End_Date || '',
+          Ownership_Status: history?.Ownership_Status || 'Historical record not found',
+          Invoice_Count: 0,
+          Total_Billed: 0,
+          Total_Paid: 0,
+          Outstanding: 0,
+          Data_Link_Status: ownershipId && history?.Ownership_ID ? 'Linked' : 'Needs review',
+          _legacyPaid: 0,
+          _hasOwnershipId: Boolean(ownershipId),
+        };
+        grouped.set(key, entry);
+      } else if (entry.Floor_No === '' && floorNo !== '') {
+        entry.Floor_No = floorNo;
+      }
+
+      const net = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
+      const legacyPaid = Math.max(0, toReportAmount(inv.Paid_Amount));
+      entry.Invoice_Count += 1;
+      entry.Total_Billed = Math.round((entry.Total_Billed + net) * 100) / 100;
+      entry._legacyPaid = Math.round((entry._legacyPaid + legacyPaid) * 100) / 100;
+    });
+
+  // Fetch and sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
+  const allocatedByOwnership = new Map<string, number>();
+  (billAllocations || []).forEach((row) => {
+    const txnId = String(row.Transaction_ID || '').trim();
+    if (txnId && receiptStatusByTxnId.has(txnId) && receiptStatusByTxnId.get(txnId) !== 'confirmed') {
+      return;
+    }
+    const directOwnershipId = String(row.Ownership_ID || '').trim();
+    const invId = String(row.InvoiceID || '').trim();
+    const invNum = String(row.Invoice_Number || '').trim();
+    const resolvedKey =
+      directOwnershipId ||
+      (invId ? keyByInvoiceId.get(invId) : '') ||
+      (invNum ? keyByInvoiceNumber.get(invNum) : '') ||
+      '';
+    if (!resolvedKey) return;
+    const allocatedAmt = Math.max(0, toReportAmount(row.Allocated_Amount));
+    allocatedByOwnership.set(
+      resolvedKey,
+      Math.round(((allocatedByOwnership.get(resolvedKey) || 0) + allocatedAmt) * 100) / 100
+    );
+  });
+
+  const useBillWiseAllocations = (billAllocations || []).length > 0;
+  let unlinkedInvoiceCount = 0;
+
+  const data = Array.from(grouped.entries())
+    .map(([key, entry]) => {
+      const paid = useBillWiseAllocations ? allocatedByOwnership.get(key) || 0 : entry._legacyPaid;
+      const totalPaid = Math.round(Math.max(0, paid) * 100) / 100;
+      const outstanding = Math.max(0, Math.round((entry.Total_Billed - totalPaid) * 100) / 100);
+      if (!entry._hasOwnershipId && outstanding > 0) {
+        unlinkedInvoiceCount += entry.Invoice_Count;
+      }
+      const { _legacyPaid, _hasOwnershipId, ...publicRow } = entry;
+      return {
+        ...publicRow,
+        Total_Paid: totalPaid,
+        Outstanding: outstanding,
+      };
+    })
     .filter((r) => r.Outstanding > 0)
-    .sort((a, b) => b.Outstanding - a.Outstanding);
+    .sort((a, b) => {
+      const floorA = getFloorMeta(a.Floor_No);
+      const floorB = getFloorMeta(b.Floor_No);
+      if (floorA.floorRank !== floorB.floorRank) return floorA.floorRank - floorB.floorRank;
+      const flatCmp = String(a.Flat_No || a.PropertyID || '').localeCompare(
+        String(b.Flat_No || b.PropertyID || ''),
+        undefined,
+        { numeric: true, sensitivity: 'base' }
+      );
+      if (flatCmp !== 0) return flatCmp;
+      return String(a.Ownership_ID || '').localeCompare(String(b.Ownership_ID || ''));
+    });
+
   const totalOutstanding = Math.round(data.reduce((s, r) => s + r.Outstanding, 0) * 100) / 100;
   return {
     data,

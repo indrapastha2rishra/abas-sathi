@@ -14,8 +14,11 @@ import {
   computeOwnerOutstandingRows,
   computeOwnershipOutstandingClient,
   computePropertyOutstandingRows,
+  getFloorMeta,
+  groupOwnershipOutstandingByFloor,
   PropertyOutstandingRow,
   ReportKey,
+  resolveFloorValue,
   resolveFYRangeForMonth,
   resolveReportKey,
   tabForReportKey,
@@ -66,6 +69,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   const [selectedFyId, setSelectedFyId] = useState<string>('');
   const [propertyFilter, setPropertyFilter] = useState<'all' | 'pending' | 'clear'>('all');
   const [propertySearch, setPropertySearch] = useState('');
+  const [ownershipViewMode, setOwnershipViewMode] = useState<'by_floor' | 'flat_list'>('by_floor');
+  const [selectedOwnershipFloor, setSelectedOwnershipFloor] = useState<string>('all');
   const [serverReport, setServerReport] = useState<any>(null);
   const [serverReportError, setServerReportError] = useState('');
   const [serverReportLoading, setServerReportLoading] = useState(false);
@@ -369,7 +374,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     return clientOwnerDues;
   }, [activeReport, serverReport, clientOwnerDues]);
 
-  // Ownership-wise Outstanding (Server + Client fallback)
+  // Ownership-wise Outstanding Maintenance (Bill Wise Details Allocated_Amount grouped by Ownership_ID + Floor_No)
   const clientOwnershipDues = useMemo(
     () =>
       computeOwnershipOutstandingClient({
@@ -383,19 +388,38 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     [invoices, receipts, billAllocations, ownerships, properties, owners]
   );
 
+  const useClientOwnershipReport =
+    (invoices.length > 0 || billAllocations.length > 0) &&
+    (hasPermission('Bill Wise Details', 'Can_View') || serverReport?.reportType !== 'ownershipOutstanding');
+
   const ownershipDuesRows = useMemo(() => {
-    if (
+    const propById = new Map(properties.map((p) => [String(p.PropertyID || '').trim(), p]));
+    const propByFlat = new Map(properties.map((p) => [String(p.Flat_No || '').trim().toLowerCase(), p]));
+    const rawRows =
+      !useClientOwnershipReport &&
       activeReport === 'ownership_due' &&
       serverReport?.reportType === 'ownershipOutstanding' &&
       Array.isArray(serverReport?.data)
-    ) {
-      return serverReport.data;
-    }
-    return clientOwnershipDues.data;
-  }, [activeReport, serverReport, clientOwnershipDues.data]);
+        ? serverReport.data
+        : clientOwnershipDues.data;
+
+    return rawRows.map((r: any) => {
+      if (r.Floor_No !== undefined && r.Floor_No !== null && String(r.Floor_No).trim() !== '') {
+        return r;
+      }
+      const prop =
+        propById.get(String(r.PropertyID || '').trim()) ||
+        propByFlat.get(String(r.Flat_No || '').trim().toLowerCase());
+      return {
+        ...r,
+        Floor_No: resolveFloorValue(prop, r),
+      };
+    });
+  }, [useClientOwnershipReport, activeReport, serverReport, clientOwnershipDues.data, properties]);
 
   const ownershipDuesSummary = useMemo(() => {
     if (
+      !useClientOwnershipReport &&
       activeReport === 'ownership_due' &&
       serverReport?.reportType === 'ownershipOutstanding' &&
       serverReport?.summary
@@ -403,7 +427,42 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       return serverReport.summary;
     }
     return clientOwnershipDues.summary;
-  }, [activeReport, serverReport, clientOwnershipDues.summary]);
+  }, [useClientOwnershipReport, activeReport, serverReport, clientOwnershipDues.summary]);
+
+  const ownershipFloorGroups = useMemo(
+    () => groupOwnershipOutstandingByFloor(ownershipDuesRows, properties),
+    [ownershipDuesRows, properties]
+  );
+
+  useEffect(() => {
+    if (
+      selectedOwnershipFloor !== 'all' &&
+      !ownershipFloorGroups.some((g) => g.floorKey === selectedOwnershipFloor)
+    ) {
+      setSelectedOwnershipFloor('all');
+    }
+  }, [ownershipFloorGroups, selectedOwnershipFloor]);
+
+  const filteredOwnershipFloorGroups = useMemo(
+    () =>
+      selectedOwnershipFloor === 'all'
+        ? ownershipFloorGroups
+        : ownershipFloorGroups.filter((g) => g.floorKey === selectedOwnershipFloor),
+    [ownershipFloorGroups, selectedOwnershipFloor]
+  );
+
+  const filteredOwnershipRows = useMemo(
+    () => filteredOwnershipFloorGroups.flatMap((g) => g.rows),
+    [filteredOwnershipFloorGroups]
+  );
+
+  const ownershipTotalAllocatedPaid = useMemo(
+    () =>
+      Math.round(
+        ownershipDuesRows.reduce((s: number, r: any) => s + toReportAmount(r.Total_Paid), 0) * 100
+      ) / 100,
+    [ownershipDuesRows]
+  );
 
   // Expense Summary (Server + Client fallback)
   const clientExpenseCategories = useMemo(() => {
@@ -575,7 +634,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
             activeReport === 'ownership_due' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70 hover:text-[#29352D]'
           }`}
         >
-          Ownership-wise Outstanding
+          Ownership-wise Outstanding Maintenance
         </button>
         {canCreateYearEnd && (
           <button
@@ -1135,113 +1194,304 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
         </div>
       )}
 
-      {/* REPORT 6: OWNERSHIP-WISE OUTSTANDING */}
+      {/* REPORT 6: OWNERSHIP-WISE OUTSTANDING MAINTENANCE (BY FLOOR & OWNERSHIP_ID) */}
       {activeReport === 'ownership_due' && (
         <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E8E1D4] pb-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#E8E1D4] pb-3">
             <div>
               <h3 className="font-bold text-[#29352D] text-sm">
-                Ownership-period-wise Outstanding Report / মালিকানা মেয়াদভিত্তিক বকেয়া
+                Ownership-wise Outstanding Maintenance / মালিকানাভিত্তিক বকেয়া রক্ষণাবেক্ষণ
               </h3>
               <p className="text-xs text-gray-500">
-                Preserves liability separation across flat ownership transfers using Ownership_ID • Paid linked to Confirmed Fund Inflow Register &amp; Bill Wise Details
+                Grouped by Floor (Floor No.) &amp; Ownership_ID • Paid summed from Bill Wise Details (Allocated_Amount) grouped by Ownership_ID
               </p>
             </div>
-            <button
-              onClick={() => {
-                const rows = [
-                  ['Ownership_ID', 'Flat_No', 'Owner_Name', 'Start_Date', 'End_Date', 'Status', 'Invoices', 'Billed', 'Paid', 'Outstanding', 'Link_Status'],
-                  ...ownershipDuesRows.map((r: any) => [
-                    String(r.Ownership_ID || ''),
-                    String(r.Flat_No || r.PropertyID || ''),
-                    String(r.Owner_Name || r.OwnerID || ''),
-                    formatDateDisplay(r.Ownership_Start_Date, '—'),
-                    formatDateDisplay(r.Ownership_End_Date, 'Current'),
-                    String(r.Ownership_Status || ''),
-                    String(r.Invoice_Count || 0),
-                    toReportAmount(r.Total_Billed).toFixed(2),
-                    toReportAmount(r.Total_Paid).toFixed(2),
-                    toReportAmount(r.Outstanding).toFixed(2),
-                    String(r.Data_Link_Status || ''),
-                  ]),
-                ];
-                handleExportCSV('Ownership_Outstanding_Report', rows);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#536B4D] text-white text-xs font-bold hover:bg-[#3F523A] no-print cursor-pointer"
-            >
-              <Download className="h-3.5 w-3.5" /> Export CSV
-            </button>
+            <div className="flex flex-wrap items-center gap-2 no-print">
+              <select
+                aria-label="Filter by Floor"
+                value={selectedOwnershipFloor}
+                onChange={(e) => setSelectedOwnershipFloor(e.target.value)}
+                className="rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] px-3 py-1.5 text-xs font-semibold text-[#29352D]"
+              >
+                <option value="all">All Floors ({ownershipFloorGroups.length})</option>
+                {ownershipFloorGroups.map((g) => (
+                  <option key={g.floorKey} value={g.floorKey}>
+                    {g.floorLabel} ({g.ownershipCount})
+                  </option>
+                ))}
+              </select>
+
+              <div className="inline-flex rounded-xl border border-[#E8E1D4] bg-[#F7F4EC] p-0.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setOwnershipViewMode('by_floor')}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    ownershipViewMode === 'by_floor'
+                      ? 'bg-white text-[#536B4D] shadow-2xs font-bold'
+                      : 'text-[#29352D]/70 hover:text-[#29352D]'
+                  }`}
+                >
+                  By Floor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOwnershipViewMode('flat_list')}
+                  className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                    ownershipViewMode === 'flat_list'
+                      ? 'bg-white text-[#536B4D] shadow-2xs font-bold'
+                      : 'text-[#29352D]/70 hover:text-[#29352D]'
+                  }`}
+                >
+                  All Ownerships
+                </button>
+              </div>
+
+              <button
+                onClick={() => {
+                  const rows = [
+                    ['Floor_No', 'Ownership_ID', 'Flat_No', 'Owner_Name', 'Start_Date', 'End_Date', 'Status', 'Invoices', 'Billed', 'Allocated_Paid', 'Outstanding', 'Link_Status'],
+                    ...filteredOwnershipRows.map((r: any) => [
+                      getFloorMeta(r.Floor_No).floorLabel,
+                      String(r.Ownership_ID || ''),
+                      String(r.Flat_No || r.PropertyID || ''),
+                      String(r.Owner_Name || r.OwnerID || ''),
+                      formatDateDisplay(r.Ownership_Start_Date, '—'),
+                      formatDateDisplay(r.Ownership_End_Date, 'Current'),
+                      String(r.Ownership_Status || ''),
+                      String(r.Invoice_Count || 0),
+                      toReportAmount(r.Total_Billed).toFixed(2),
+                      toReportAmount(r.Total_Paid).toFixed(2),
+                      toReportAmount(r.Outstanding).toFixed(2),
+                      String(r.Data_Link_Status || ''),
+                    ]),
+                  ];
+                  handleExportCSV('Ownership_Outstanding_Maintenance_By_Floor', rows);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#536B4D] text-white text-xs font-bold hover:bg-[#3F523A] cursor-pointer"
+              >
+                <Download className="h-3.5 w-3.5" /> Export CSV ({filteredOwnershipRows.length})
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] p-3.5">
+              <span className="text-gray-600">Floors with Dues</span>
+              <strong className="block text-lg text-[#29352D] mt-1">{ownershipFloorGroups.length}</strong>
+            </div>
             <div className="rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] p-3.5">
               <span className="text-gray-600">Ownership Records with Dues</span>
               <strong className="block text-lg text-[#29352D] mt-1">{Number(ownershipDuesSummary?.ownershipCount || 0)}</strong>
+            </div>
+            <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3.5">
+              <span className="text-emerald-800">Allocated Paid (Bill Wise Details)</span>
+              <strong className="block text-lg text-emerald-800 mt-1">{formatINR(ownershipTotalAllocatedPaid)}</strong>
             </div>
             <div className="rounded-xl bg-red-50 border border-red-200 p-3.5">
               <span className="text-red-800">Total Outstanding</span>
               <strong className="block text-lg text-red-700 mt-1">{formatINR(ownershipDuesSummary?.totalOutstanding)}</strong>
             </div>
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3.5">
-              <span className="text-amber-900">Unlinked Legacy Invoices</span>
-              <strong className="block text-lg text-amber-950 mt-1">{Number(ownershipDuesSummary?.unlinkedInvoiceCount || 0)}</strong>
-            </div>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-[#E8E1D4]">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-[#536B4D] text-white">
-                <tr>
-                  <th className="p-3">Ownership ID</th>
-                  <th className="p-3">Flat</th>
-                  <th className="p-3">Owner</th>
-                  <th className="p-3">Ownership Period</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3 text-right">Invoices</th>
-                  <th className="p-3 text-right">Billed</th>
-                  <th className="p-3 text-right">Paid</th>
-                  <th className="p-3 text-right">Outstanding</th>
-                  <th className="p-3">Link</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E8E1D4]">
-                {ownershipDuesRows.map((r: any, i: number) => (
-                  <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50">
-                    <td className="p-3 font-mono">{r.Ownership_ID}</td>
-                    <td className="p-3 font-semibold">{r.Flat_No || r.PropertyID}</td>
-                    <td className="p-3">{r.Owner_Name || r.OwnerID || '—'}</td>
-                    <td className="p-3 whitespace-nowrap">
-                      {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
-                    </td>
-                    <td className="p-3">{r.Ownership_Status}</td>
-                    <td className="p-3 text-right">{r.Invoice_Count}</td>
-                    <td className="p-3 text-right">{formatINR(r.Total_Billed)}</td>
-                    <td className="p-3 text-right text-emerald-700">{formatINR(r.Total_Paid)}</td>
-                    <td className="p-3 text-right font-semibold text-red-700">{formatINR(r.Outstanding)}</td>
-                    <td className="p-3">
-                      <span
-                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          r.Data_Link_Status === 'Linked' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {r.Data_Link_Status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {ownershipDuesRows.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="p-6 text-center text-gray-500">
-                      {serverReportLoading ? 'Loading ownership-wise outstanding report…' : 'No outstanding ownership dues found.'}
-                    </td>
-                  </tr>
+          {Number(ownershipDuesSummary?.unlinkedInvoiceCount || 0) > 0 && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2 text-xs text-amber-900">
+              Unlinked Legacy Invoices: <strong>{Number(ownershipDuesSummary?.unlinkedInvoiceCount || 0)}</strong> invoice(s) have no Ownership_ID linked.
+            </div>
+          )}
+
+          {/* Floor-wise Summary Strip */}
+          {ownershipFloorGroups.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#536B4D]">
+                  Floor-wise Summary / ফ্লোরভিত্তিক বকেয়া সারসংক্ষেপ
+                </span>
+                {selectedOwnershipFloor !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOwnershipFloor('all')}
+                    className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer no-print"
+                  >
+                    Show All Floors
+                  </button>
                 )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 text-xs">
+                {ownershipFloorGroups.map((grp) => {
+                  const isSelected = selectedOwnershipFloor === grp.floorKey;
+                  return (
+                    <button
+                      key={grp.floorKey}
+                      type="button"
+                      onClick={() =>
+                        setSelectedOwnershipFloor((cur) => (cur === grp.floorKey ? 'all' : grp.floorKey))
+                      }
+                      className={`text-left rounded-xl border p-3 transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'border-[#536B4D] bg-[#536B4D]/10'
+                          : 'border-[#E8E1D4] bg-[#F7F4EC]/60 hover:bg-[#F7F4EC]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-bold text-[#29352D]">{grp.floorLabel}</span>
+                        <span className="text-[10px] font-semibold text-gray-500">
+                          {grp.ownershipCount} unit{grp.ownershipCount === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <strong className="block text-sm text-red-700 mt-1">{formatINR(grp.totalOutstanding)}</strong>
+                      <span className="block text-[10px] text-emerald-700 mt-0.5">
+                        Paid: {formatINR(grp.totalPaid)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Grouped by Floor Display */}
+          {ownershipViewMode === 'by_floor' && (
+            <div className="space-y-4">
+              {filteredOwnershipFloorGroups.map((grp) => (
+                <div key={grp.floorKey} className="overflow-hidden rounded-xl border border-[#E8E1D4]">
+                  <div className="bg-[#536B4D] text-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm">{grp.floorLabel}</span>
+                      <span className="rounded-md bg-white/15 px-2 py-0.5 text-[11px] font-semibold">
+                        {grp.ownershipCount} ownership{grp.ownershipCount === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 text-[11px]">
+                      <span>Billed: <strong>{formatINR(grp.totalBilled)}</strong></span>
+                      <span>Paid (Allocated): <strong>{formatINR(grp.totalPaid)}</strong></span>
+                      <span className="rounded-md bg-white px-2 py-0.5 text-red-700 font-bold">
+                        Floor Due: {formatINR(grp.totalOutstanding)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-[#F7F4EC] text-[#29352D] border-b border-[#E8E1D4]">
+                        <tr>
+                          <th className="p-3 font-bold">Ownership ID</th>
+                          <th className="p-3 font-bold">Flat</th>
+                          <th className="p-3 font-bold">Owner</th>
+                          <th className="p-3 font-bold">Ownership Period</th>
+                          <th className="p-3 font-bold">Status</th>
+                          <th className="p-3 font-bold text-right">Invoices</th>
+                          <th className="p-3 font-bold text-right">Billed</th>
+                          <th className="p-3 font-bold text-right">Paid (Allocated)</th>
+                          <th className="p-3 font-bold text-right text-red-700">Outstanding</th>
+                          <th className="p-3 font-bold">Link</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#E8E1D4]">
+                        {grp.rows.map((r: any, i: number) => (
+                          <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50">
+                            <td className="p-3 font-mono">{r.Ownership_ID}</td>
+                            <td className="p-3 font-semibold text-[#536B4D]">{r.Flat_No || r.PropertyID}</td>
+                            <td className="p-3">{r.Owner_Name || r.OwnerID || '—'}</td>
+                            <td className="p-3 whitespace-nowrap">
+                              {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
+                            </td>
+                            <td className="p-3">{r.Ownership_Status}</td>
+                            <td className="p-3 text-right">{r.Invoice_Count}</td>
+                            <td className="p-3 text-right">{formatINR(r.Total_Billed)}</td>
+                            <td className="p-3 text-right text-emerald-700">{formatINR(r.Total_Paid)}</td>
+                            <td className="p-3 text-right font-semibold text-red-700">{formatINR(r.Outstanding)}</td>
+                            <td className="p-3">
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  r.Data_Link_Status === 'Linked' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {r.Data_Link_Status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-[#F7F4EC]/80 border-t border-[#E8E1D4] font-bold text-[#29352D]">
+                        <tr>
+                          <td colSpan={5} className="p-3">{grp.floorLabel} Subtotal</td>
+                          <td className="p-3 text-right">{grp.invoiceCount}</td>
+                          <td className="p-3 text-right">{formatINR(grp.totalBilled)}</td>
+                          <td className="p-3 text-right text-emerald-700">{formatINR(grp.totalPaid)}</td>
+                          <td className="p-3 text-right text-red-700">{formatINR(grp.totalOutstanding)}</td>
+                          <td className="p-3"></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              ))}
+              {filteredOwnershipFloorGroups.length === 0 && (
+                <div className="rounded-xl border border-[#E8E1D4] p-6 text-center text-xs text-gray-500">
+                  {serverReportLoading ? 'Loading ownership-wise outstanding maintenance report…' : 'No outstanding ownership maintenance dues found.'}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Flat List Display (All Ownerships with Floor Column) */}
+          {ownershipViewMode === 'flat_list' && (
+            <div className="overflow-x-auto rounded-xl border border-[#E8E1D4]">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-[#536B4D] text-white">
+                  <tr>
+                    <th className="p-3">Floor</th>
+                    <th className="p-3">Ownership ID</th>
+                    <th className="p-3">Flat</th>
+                    <th className="p-3">Owner</th>
+                    <th className="p-3">Ownership Period</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3 text-right">Invoices</th>
+                    <th className="p-3 text-right">Billed</th>
+                    <th className="p-3 text-right">Paid (Allocated)</th>
+                    <th className="p-3 text-right">Outstanding</th>
+                    <th className="p-3">Link</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E8E1D4]">
+                  {filteredOwnershipRows.map((r: any, i: number) => (
+                    <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50">
+                      <td className="p-3 font-semibold text-[#29352D]">{getFloorMeta(r.Floor_No).floorLabel}</td>
+                      <td className="p-3 font-mono">{r.Ownership_ID}</td>
+                      <td className="p-3 font-semibold">{r.Flat_No || r.PropertyID}</td>
+                      <td className="p-3">{r.Owner_Name || r.OwnerID || '—'}</td>
+                      <td className="p-3 whitespace-nowrap">
+                        {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
+                      </td>
+                      <td className="p-3">{r.Ownership_Status}</td>
+                      <td className="p-3 text-right">{r.Invoice_Count}</td>
+                      <td className="p-3 text-right">{formatINR(r.Total_Billed)}</td>
+                      <td className="p-3 text-right text-emerald-700">{formatINR(r.Total_Paid)}</td>
+                      <td className="p-3 text-right font-semibold text-red-700">{formatINR(r.Outstanding)}</td>
+                      <td className="p-3">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            r.Data_Link_Status === 'Linked' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {r.Data_Link_Status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredOwnershipRows.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="p-6 text-center text-gray-500">
+                        {serverReportLoading ? 'Loading ownership-wise outstanding maintenance report…' : 'No outstanding ownership maintenance dues found.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           <p className="text-[11px] text-amber-700">
-            {(serverReport?.reportType === 'ownershipOutstanding' && serverReport?.note) ||
-              'Outstanding is grouped by Ownership_ID with Paid amounts linked to Confirmed receipts in Fund Inflow Register and allocations in Bill Wise Details.'}
+            Outstanding maintenance is grouped by Floor (Floor No.) and Ownership_ID, calculated by summing Allocated_Amount from Bill Wise Details grouped by Ownership_ID and deducting from Invoice Register Net_Charge_Amount.
           </p>
         </div>
       )}

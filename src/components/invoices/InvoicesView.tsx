@@ -20,13 +20,26 @@ import {
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
 import type { InvoiceRegister } from '../../types/database';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
+import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
 import { formatDateDisplay } from '../../utils/dateFormat';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
 }
 
-const getInvoiceOutstanding = (invoice: InvoiceRegister): number => {
+const EXCLUDED_OUTSTANDING_STATUSES = new Set([
+  'cancelled',
+  'draft',
+  'pending_approval',
+  'pending approval',
+]);
+
+const getInvoiceOutstanding = (
+  invoice: Partial<InvoiceRegister> & { Calculated_Outstanding?: number }
+): number => {
+  if (typeof invoice.Calculated_Outstanding === 'number' && Number.isFinite(invoice.Calculated_Outstanding)) {
+    return Math.max(0, invoice.Calculated_Outstanding);
+  }
   const rawDue = invoice.Outstanding_Amount as unknown;
   if (rawDue === '' || rawDue === null || rawDue === undefined) {
     return Math.max(0, Number(invoice.Net_Charge_Amount || 0) - Number(invoice.Paid_Amount || 0));
@@ -128,8 +141,18 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   };
 
   // Resident scope: only the authenticated flat. For residents, payment/outstanding values come strictly from confirmed Fund Inflow + Bill Wise Details.
-  const residentMetrics = calculateResidentInvoiceMetrics(invoices, receipts, billAllocations);
-  const invoicesForView = activeRole === 'Resident' ? residentMetrics.filter(inv => inv.PropertyID === residentProperty?.PropertyID) : invoices;
+  const residentMetrics = React.useMemo(
+    () => calculateResidentInvoiceMetrics(invoices, receipts, billAllocations),
+    [invoices, receipts, billAllocations]
+  );
+  // Staff Outstanding Bills formula: Net_Charge_Amount (Invoice_Register) - SUM(Allocated_Amount from Bill Wise Details by InvoiceID)
+  const staffInvoiceMetrics = React.useMemo(
+    () => computeInvoiceOutstandingBills(invoices, billAllocations, receipts),
+    [invoices, billAllocations, receipts]
+  );
+  const invoicesForView = activeRole === 'Resident'
+    ? residentMetrics.filter(inv => inv.PropertyID === residentProperty?.PropertyID)
+    : staffInvoiceMetrics;
   // Filtered invoices
   const filteredInvoices = invoicesForView.filter((inv) => {
     const matchesSearch =
@@ -139,7 +162,8 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       String(inv.Purpose || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const outstandingAmount = getInvoiceOutstanding(inv as any);
-    const isOutstanding = inv.Invoice_Status !== 'Cancelled' && outstandingAmount > 0;
+    const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
+    const isOutstanding = !EXCLUDED_OUTSTANDING_STATUSES.has(statusLower) && outstandingAmount > 0;
     const matchesStatus = activeSubTab === 'outstanding'
       ? isOutstanding && (statusFilter === 'All' || inv.Invoice_Status === statusFilter)
       : (statusFilter === 'All' || inv.Invoice_Status === statusFilter);
@@ -209,9 +233,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       </div>
 
       {activeSubTab === 'outstanding' && (() => {
-        const activeOutstanding = invoices.filter((inv) => {
+        const activeOutstanding = invoicesForView.filter((inv) => {
+          const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
           const due = getInvoiceOutstanding(inv as any);
-          return inv.Invoice_Status !== 'Cancelled' && due > 0;
+          return !EXCLUDED_OUTSTANDING_STATUSES.has(statusLower) && due > 0;
         });
         const totalDue = activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv as any), 0);
         const overdueCount = activeOutstanding.filter((inv) => inv.Invoice_Status === 'Overdue').length;
