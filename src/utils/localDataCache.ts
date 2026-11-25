@@ -49,7 +49,12 @@ export function readCachedPermissions(societyCode?: string, role?: string): Role
 export function writeCachedPermissions(societyCode: string | undefined, role: string | undefined, rows: RolePermissionRecord[]): void {
   if (typeof window === 'undefined' || !societyCode || !role) return;
   try {
-    window.localStorage.setItem(`${PERM_PREFIX}${societyCode}:${role}`, JSON.stringify({ savedAt: Date.now(), rows }));
+    const key = `${PERM_PREFIX}${societyCode}:${role}`;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), rows }));
   } catch {
     // Ignore storage quota errors
   }

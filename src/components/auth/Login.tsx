@@ -4,7 +4,7 @@ import {
   Eye, EyeOff, Zap, UserRound, Trash2, Mail, KeyRound, CheckCircle2
 } from 'lucide-react';
 import { authRequest, backendUrl, BackendRequestError } from '../../utils/authClient';
-import { isStrongPassword } from '../../utils/authValidation';
+import { isStrongPassword, normalizeAuthRole } from '../../utils/authValidation';
 
 type Props = { onLogin: (session: any) => void };
 type Mode = 'login' | 'forgot' | 'reset';
@@ -200,7 +200,8 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         { timeoutMs: 25000 }
       );
 
-      if (!result?.token || !result?.user?.userId || !result?.user?.role) {
+      const normalizedRole = normalizeAuthRole(result?.user?.role);
+      if (!result?.token || !result?.user?.userId || !normalizedRole) {
         throw new BackendRequestError('The server did not return a valid login session.', undefined, false, 'AUTH_ERROR');
       }
 
@@ -211,7 +212,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         fullName: String(result.user.fullName || ''),
         email: String(result.user.email || ''),
         mobile: String(result.user.mobile || ''),
-        role: String(result.user.role),
+        role: normalizedRole,
         propertyId: String(result.user.propertyId || ''),
         accountStatus: 'Active',
       };

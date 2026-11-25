@@ -10,8 +10,17 @@ export function isStrongPassword(value: string): boolean {
     /[^A-Za-z0-9]/.test(value);
 }
 
+export function normalizeAuthRole(value: unknown): AuthRole | '' {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'admin') return 'Admin';
+  if (normalized === 'committee') return 'Committee';
+  if (normalized === 'accountant') return 'Accountant';
+  if (normalized === 'resident') return 'Resident';
+  return '';
+}
+
 export function isAllowedAuthRole(value: unknown): value is AuthRole {
-  return AUTH_ROLES.includes(String(value) as AuthRole);
+  return normalizeAuthRole(value) !== '';
 }
 
 export function isActiveAuthenticatedProfile(profile: any): boolean {

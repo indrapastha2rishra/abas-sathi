@@ -5,7 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { authRequest, BackendRequestError } from './utils/authClient';
-import { isActiveAuthenticatedProfile } from './utils/authValidation';
+import { isActiveAuthenticatedProfile, normalizeAuthRole } from './utils/authValidation';
 import { clearAllUserDataCaches } from './utils/localDataCache';
 import { Login } from './components/auth/Login';
 import { AppProvider, useApp } from './context/AppContext';
@@ -247,7 +247,7 @@ export default function App() {
           fullName: String(profile.Full_Name || session.user?.fullName || ''),
           email: String(profile.Email_ID || session.user?.email || ''),
           mobile: String(profile.Mobile_No || session.user?.mobile || ''),
-          role: String(profile.Role),
+          role: normalizeAuthRole(profile.Role) || String(profile.Role).trim(),
           propertyId: String(profile.PropertyID || ''),
           ownershipId: String(profile.Ownership_ID || session.user?.ownershipId || ''),
           accountStatus: String(profile.Account_Status),
@@ -309,7 +309,7 @@ export default function App() {
   if (!session) return <Login onLogin={(newSession) => { setSession(newSession); setSessionCheck('verified'); }} />;
 
   return (
-    <AppProvider>
+    <AppProvider key={`${session?.user?.userId || ''}:${normalizeAuthRole(session?.user?.role) || session?.user?.role || ''}`}>
       <>
         {sessionCheck === 'checking' && (
           <div className="w-full px-3 py-1.5 bg-emerald-50 text-emerald-800 text-xs font-medium text-center" role="status" aria-live="polite">

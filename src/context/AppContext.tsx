@@ -31,6 +31,7 @@ import {
 
 import { Language, translations } from '../utils/i18n';
 import { authRequest, BackendRequestError } from '../utils/authClient';
+import { normalizeAuthRole } from '../utils/authValidation';
 import { permissionGranted, moduleForTab, actionForTab, type PermissionAction, type RolePermissionRecord } from '../utils/permissions';
 import {
   buildScopeKey,
@@ -182,7 +183,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const initialSession = (() => {
     try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch { return {}; }
   })();
-  const initialRole: UserRole = initialSession?.user?.role || 'Resident';
+  const initialRole: UserRole = normalizeAuthRole(initialSession?.user?.role) || 'Resident';
   const initialScopeKey = initialSession?.token
     ? buildScopeKey(initialSession.societyCode, initialSession.user?.userId, initialRole, false)
     : '';
@@ -194,7 +195,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [language, setLanguage] = useState<Language>('en');
   const [users, setUsers] = useState<UserMaster[]>([]);
-  const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = initialSession; const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:u.role || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:u.ownershipId || null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
+  const [currentUser, setCurrentUser] = useState<UserMaster>(() => { try { const s = initialSession; const u = s.user || {}; return { UserID:u.userId || '', Full_Name:u.fullName || '', Email_ID:u.email || '', Mobile_No:u.mobile || '', Role:normalizeAuthRole(u.role) || 'Resident', PropertyID:u.propertyId || null, Ownership_ID:u.ownershipId || null, Account_Status:'Active', Last_Login:new Date().toISOString(), Created_By:'', Created_At:'' }; } catch { return { UserID:'', Full_Name:'', Email_ID:'', Mobile_No:'', Role:'Resident', PropertyID:null, Ownership_ID:null, Account_Status:'Active', Last_Login:'', Created_By:'', Created_At:'' }; } }); // Starts as Admin
   const [activeRole, setActiveRole] = useState<UserRole>(initialRole);
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const actualRole: UserRole = currentUser.Role || 'Resident';
@@ -363,8 +364,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!session.token || !baseUrl) { setPermissionsReady(true); return; }
     let cancelled = false;
 
-    const scopeKey = buildScopeKey(session.societyCode, session.user?.userId, session.user?.role, isResidentMode);
-    const cachedPerms = readCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : session.user?.role);
+    const sessionRole = normalizeAuthRole(session.user?.role) || session.user?.role;
+    const scopeKey = buildScopeKey(session.societyCode, session.user?.userId, sessionRole, isResidentMode);
+    const cachedPerms = readCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : sessionRole);
     if (cachedPerms.length > 0) {
       setRolePermissions(cachedPerms);
       setPermissionsReady(true);
@@ -475,7 +477,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         case 'rolePermissions': {
           const freshPermissions = normalizedRows as RolePermissionRecord[];
           setRolePermissions(freshPermissions);
-          writeCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : session.user?.role, freshPermissions);
+          writeCachedPermissions(session.societyCode, isResidentMode ? 'Resident' : sessionRole, freshPermissions);
           setPermissionsReady(true);
           break;
         }
@@ -551,9 +553,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               viewAsResident: isResidentMode,
             }),
           });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          if (!response.ok) throw new BackendRequestError(`HTTP ${response.status}`, response.status, response.status >= 500);
           const result = await response.json();
-          if (result.status !== 'success') throw new Error(result.message || `Could not load ${module}`);
+          if (result.status !== 'success') {
+            throw new BackendRequestError(
+              result.message || `Could not load ${module}`,
+              response.status,
+              response.status >= 500,
+              String(result.code || '')
+            );
+          }
           return result;
         };
 
@@ -607,6 +616,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .then(rows => applyModuleRows('rolePermissions', rows))
             .catch(err => {
               console.error('ABAS SATHI module load error', { module: 'Role Permissions', role: activeRole, error: String(err || 'Unknown error') });
+              if (err instanceof BackendRequestError && err.code === 'AUTH_ERROR') {
+                clearAllUserDataCaches();
+                localStorage.removeItem('abasSathiSession');
+                window.location.reload();
+                return;
+              }
               if (!cancelled) setPermissionsReady(true);
             });
         };
@@ -640,6 +655,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 })
                 .catch((err) => {
                   console.error('ABAS SATHI module load error', { module: 'Role Dashboard Data', role: activeRole, error: String(err || 'Unknown error') });
+                  if (err instanceof BackendRequestError && err.code === 'AUTH_ERROR') {
+                    clearAllUserDataCaches();
+                    localStorage.removeItem('abasSathiSession');
+                    window.location.reload();
+                  }
                 });
 
           // Keep dashboard summary cache populated non-blockingly without competing with primary dashboard data.

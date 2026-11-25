@@ -1037,9 +1037,10 @@ function sheetObjectsTail_(sh,limit) {
 /** V6.0.4 role-aware dashboard endpoint. Role is derived from authenticated session only. */
 function getRoleDashboardData_(session, body) {
   const started=Date.now();
-  const role=String(session.role||"");
+  const role=normalizeRole_(session.role)||String(session.role||"").trim();
   const allowed=["Admin","Committee","Accountant","Resident"];
   if(!allowed.includes(role)) throw new Error("Unsupported authenticated role for dashboard.");
+  session.role=role;
   const result=getDashboardData_(session,body||{});
   console.info("ABAS_ROLE_DASHBOARD_TIMING",JSON.stringify({role:role,elapsedMs:Date.now()-started}));
   return result;
@@ -1129,7 +1130,11 @@ function ensureRolePermissionSheet_(ss){
   if(sh.getLastColumn()===0)sh.getRange(1,1,1,ROLE_PERMISSION_HEADERS_.length).setValues([ROLE_PERMISSION_HEADERS_]);
   const headers=headerMap_(sh);
   ROLE_PERMISSION_HEADERS_.forEach(h=>{if(headers.indexOf(h)<0){sh.getRange(1,sh.getLastColumn()+1).setValue(h);}});
-  if(sh.getLastRow()<=1)seedRolePermissionDefaults_(sh);
+  if(sh.getLastRow()<=1){
+    seedRolePermissionDefaults_(sh);
+  }else{
+    seedMissingRolesPermissions_(sh);
+  }
   return sh;
 }
 function seedRolePermissionDefaults_(sh){
@@ -1151,15 +1156,46 @@ function seedRolePermissionDefaults_(sh){
 }
 
 function getMyPermissions_(session){
-  const rows=rolePermissionRows_(session),roles=session.role==="Admin"?["Admin"]:session.role==="Resident"?["Resident"]:[session.role,"Resident"];
-  const data=rows.filter(r=>roles.includes(String(r.Role||"")));
-  return json_({status:"success",data,role:String(session.role||"")});
+  const sessionRole=normalizeRole_(session.role)||String(session.role||"").trim();
+  const rows=rolePermissionRows_(session),roles=sessionRole==="Admin"?["Admin"]:sessionRole==="Resident"?["Resident"]:[sessionRole,"Resident"];
+  const data=rows.filter(r=>roles.includes(normalizeRole_(r.Role)||String(r.Role||"").trim()))
+    .map(r=>Object.assign({},r,{Role:normalizeRole_(r.Role)||String(r.Role||"").trim()}));
+  return json_({status:"success",data,role:sessionRole});
 }
 function rolePermissionRows_(session){
   const cache=CacheService.getScriptCache(),key="ROLE_PERMISSIONS_"+sha256_(String(session.societyCode||""));
   const cached=cache.get(key);if(cached){try{return JSON.parse(cached);}catch(e){cache.remove(key);}}
   const ss=SpreadsheetApp.openById(session.databaseId),sh=ensureRolePermissionSheet_(ss),rows=sheetObjects_(sh);
   const json=JSON.stringify(rows);if(json.length<90000)cache.put(key,json,30);return rows;
+}
+function seedMissingRolesPermissions_(sh){
+  const existing=sheetObjects_(sh);
+  const configuredRoles=new Set(existing.map(r=>normalizeRole_(r.Role)).filter(Boolean));
+  const missingRoles=["Admin","Committee","Accountant","Resident"].filter(role=>!configuredRoles.has(role));
+  if(!missingRoles.length)return;
+  const defaultMap={
+    Admin:ROLE_PERMISSION_MODULES_,
+    Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Bill Wise Details","Activity Requests","Expenses","Reports","Financial Year Management","Account Heads","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
+    Accountant:["Dashboard","Properties & Residents","Owner Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
+    Resident:["Dashboard","Resident Portal","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Bill Wise Details","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"]
+  };
+  function perms(role,module){
+    if(role==="Admin")return {Can_View:true,Can_Create:true,Can_Edit:true,Can_Delete:module!=="Audit Log",Can_Approve:true};
+    if(role==="Committee")return {Can_View:true,Can_Create:module==="Activity Requests",Can_Edit:module==="Activity Requests",Can_Delete:false,Can_Approve:["Activity Requests","Expenses"].includes(module)};
+    if(role==="Accountant")return {Can_View:true,Can_Create:["Payments","Fund Inflow","Expenses","Financial Transactions"].includes(module),Can_Edit:["Payments","Fund Inflow","Bill Wise Details","Expenses"].includes(module),Can_Delete:false,Can_Approve:["Payments"].includes(module)};
+    return {Can_View:true,Can_Create:["Pay Now","Activity Requests"].includes(module),Can_Edit:module==="Activity Requests",Can_Delete:false,Can_Approve:false};
+  }
+  const headers=headerMap_(sh);
+  let seq=existing.length+1;
+  const rows=[];
+  missingRoles.forEach(role=>defaultMap[role].forEach(module=>{
+    const a=perms(role,module);
+    const obj={Permission_ID:"RP"+String(seq++).padStart(5,"0"),Role:role,Module_Name:module,Can_View:a.Can_View,Can_Create:a.Can_Create,Can_Edit:a.Can_Edit,Can_Delete:a.Can_Delete,Can_Approve:a.Can_Approve,Remarks:"V6.0.0 starter permissions; Admin may customize per society"};
+    rows.push(headers.map(h=>Object.prototype.hasOwnProperty.call(obj,h)?obj[h]:""));
+  }));
+  if(rows.length){
+    sh.getRange(sh.getLastRow()+1,1,rows.length,headers.length).setValues(rows);
+  }
 }
 function clearRolePermissionCache_(societyCode){CacheService.getScriptCache().remove("ROLE_PERMISSIONS_"+sha256_(String(societyCode||"")));}
 function rolePermission_(session,moduleName,action,effectiveRole){
@@ -1235,6 +1271,7 @@ function residentModuleRecords_(session,key,ss,sheet){
 }
 function scopeRecords_(session,key,records,ss) {
   if (session.role !== "Resident") return records;
+  const norm = v => String(v == null ? "" : v).trim().toUpperCase();
   const propertyId = String(session.propertyId || "");
   const ownershipRows = sheetObjects_(ss.getSheetByName("Ownership History"));
   const currentOwnerships = ownershipRows.filter(r=>String(r.PropertyID||"")===propertyId&&String(r.Ownership_Status||"")==="Current"&&String(r.Ownership_ID||"")===String(session.ownershipId||"")&&(!session.ownerId||String(r.OwnerID||"")===String(session.ownerId)));
@@ -1329,13 +1366,28 @@ function login_(body) {
     const loginHeaders = cachedAuthHeaders_(usersSheet);
     const saltCol = loginHeaders.indexOf("Password_Salt") + 1;
     const hashCol = loginHeaders.indexOf("Password_Hash") + 1;
-    const lastLoginCol = loginHeaders.indexOf("Last_Login") + 1;
-    if (!saltCol || !hashCol || !lastLoginCol) throw new Error("Authentication columns are missing from Society User Access.");
+    if (!saltCol || !hashCol) throw new Error("Authentication columns are missing from Society User Access.");
     const salt = randomHex_(24);
     usersSheet.getRange(user.__row, saltCol).setValue(salt);
     usersSheet.getRange(user.__row, hashCol).setValue(hashPassword_(salt, password));
   }
   // Last_Login is deferred to an authenticated metadata request after Dashboard mount.
+
+  const normalizedRole = normalizeRole_(user.Role);
+  if (!normalizedRole) {
+    throw new Error("Your account role is not authorized. Contact your society Admin.");
+  }
+
+  let resolvedUserId = String(user.UserID || user.Access_ID || "").trim();
+  if (!resolvedUserId) {
+    const loginHeaders = cachedAuthHeaders_(usersSheet);
+    const userIdCol = loginHeaders.indexOf("UserID") + 1;
+    resolvedUserId = "USR-" + randomHex_(6).toUpperCase();
+    if (userIdCol && user.__row) {
+      usersSheet.getRange(user.__row, userIdCol).setValue(resolvedUserId);
+    }
+    user.UserID = resolvedUserId;
+  }
 
   // Every successful device login receives a separate, unpredictable token.
   // No existing device session is invalidated by a new login.
@@ -1346,14 +1398,14 @@ function login_(body) {
     societyAddress: String(society.Society_Address || society.Registered_Address || society.Address || ""),
     databaseId: String(society.Database_ID),
     fullName: String(user.Full_Name || ""),
-    userId: String(user.UserID || user.Access_ID || ""),
-    loginId: String(user.Login_ID || ""),
-    role: String(user.Role || "Resident"),
-    propertyId: String(user.PropertyID || ""),
-    ownershipId: String(user.Ownership_ID || ""),
-    ownerId: String(user.OwnerID || ""),
-    email: String(user.Email_ID || ""),
-    mobile: String(user.Mobile_No || ""),
+    userId: resolvedUserId,
+    loginId: String(user.Login_ID || "").trim(),
+    role: normalizedRole,
+    propertyId: String(user.PropertyID || "").trim(),
+    ownershipId: String(user.Ownership_ID || "").trim(),
+    ownerId: String(user.OwnerID || "").trim(),
+    email: String(user.Email_ID || "").trim(),
+    mobile: String(user.Mobile_No || "").trim(),
     userAccessRow: Number(user.__row || 0)
   };
   cache.put("SESSION_" + token, JSON.stringify(session), CONFIG.SESSION_TTL_SECONDS);
@@ -1361,7 +1413,7 @@ function login_(body) {
   // server-side profile so the first protected Dashboard request does not repeat
   // a Central Master user-list read. Role/status changes invalidate this cache.
   const safeAuthUser = Object.assign(publicUser_(user), {
-    Ownership_ID: String(user.Ownership_ID || ""), OwnerID: String(user.OwnerID || "")
+    Ownership_ID: String(user.Ownership_ID || "").trim(), OwnerID: String(user.OwnerID || "").trim()
   });
   cache.put(sessionUserCacheKey_(code, session.userId), JSON.stringify(safeAuthUser), 30);
 
@@ -1400,36 +1452,71 @@ function updateLoginActivity_(token) {
   return json_({status:"success"});
 }
 
+function resolveResidentOwnership_(society, propertyId, providedOwnershipId, providedOwnerId) {
+  const pid = cleanText_(propertyId, 80);
+  let ownershipId = cleanText_(providedOwnershipId, 80);
+  let ownerId = cleanText_(providedOwnerId, 80);
+  if (!pid || !society || !society.Database_ID) return { ownershipId, ownerId };
+  if (ownershipId && ownerId) return { ownershipId, ownerId };
+  try {
+    const ss = SpreadsheetApp.openById(String(society.Database_ID));
+    const ownSh = ss.getSheetByName("Ownership History");
+    if (!ownSh) return { ownershipId, ownerId };
+    const current = findRowsByHeaderValue_(ownSh, "PropertyID", pid)
+      .filter(r => String(r.Ownership_Status || "").trim().toLowerCase() === "current");
+    const matched = ownershipId
+      ? current.find(r => String(r.Ownership_ID || "").trim() === ownershipId)
+      : (ownerId ? current.find(r => String(r.OwnerID || "").trim() === ownerId) : (current.length === 1 ? current[0] : current[0]));
+    if (matched) {
+      if (!ownershipId) ownershipId = String(matched.Ownership_ID || "").trim();
+      if (!ownerId) ownerId = String(matched.OwnerID || "").trim();
+    }
+  } catch (e) {}
+  return { ownershipId, ownerId };
+}
+
 function adminCreateUser_(session,body) {
   requireRole_(session,["Admin"]);
   const code = normalizeSociety_(body.societyCode || session.societyCode);
   if (code !== session.societyCode) throw new Error("You can only manage users in your own society.");
   const name = cleanText_(body.fullName,100), loginId = normalizeLogin_(body.loginId);
   const email = cleanEmail_(body.email), mobile = cleanText_(body.mobile,20);
-  const role = String(body.role || "");
+  const role = normalizeRole_(body.role);
   const password = String(body.password || "");
   if (!name || !loginId || !email || !mobile) throw new Error("Name, Login ID, email and mobile are required.");
   if (!["Committee","Accountant","Resident"].includes(role)) throw new Error("Admin can create Committee, Accountant or Resident accounts only.");
   validatePassword_(password);
-  if (role === "Resident" && !cleanText_(body.propertyId,80)) throw new Error("Select a Property ID for Resident.");
+  const propertyId = role === "Resident" ? cleanText_(body.propertyId,80) : cleanText_(body.propertyId,80);
+  if (role === "Resident" && !propertyId) throw new Error("Select a Property ID for Resident.");
+  const activateImmediately = body.activateImmediately === true;
   const lock = LockService.getScriptLock(); lock.waitLock(10000);
   try {
-    const {usersSheet,rows} = societyAndUsers_(code);
+    const {society,usersSheet,rows} = societyAndUsers_(code);
     if (rows.some(r => normalizeLogin_(r.Login_ID) === loginId)) throw new Error("This Login ID already exists.");
     if (rows.some(r => normalizeEmail_(r.Email_ID) === email)) throw new Error("This email is already registered.");
     ensureHeaders_(usersSheet,USER_HEADERS);
+    const resolvedOwn = propertyId
+      ? resolveResidentOwnership_(society, propertyId, body.ownershipId, body.ownerId)
+      : { ownershipId: cleanText_(body.ownershipId,80), ownerId: cleanText_(body.ownerId,80) };
     const salt = randomHex_(24), now = new Date(), userId = "USR-" + randomHex_(6).toUpperCase();
+    const accountStatus = activateImmediately ? "Active" : "Pending";
     const record = {
       Society_Code:code, Login_ID:loginId, UserID:userId, Full_Name:name, Email_ID:email,
-      Mobile_No:mobile, Role:role, PropertyID:role==="Resident"?cleanText_(body.propertyId,80):"", Ownership_ID:cleanText_(body.ownershipId,80), OwnerID:cleanText_(body.ownerId,80),
-      Account_Status:"Pending", Password_Salt:salt, Password_Hash:hashPassword_(salt,password),
+      Mobile_No:mobile, Role:role, PropertyID:propertyId, Ownership_ID:resolvedOwn.ownershipId, OwnerID:resolvedOwn.ownerId,
+      Account_Status:accountStatus, Password_Salt:salt, Password_Hash:hashPassword_(salt,password),
       Profile_Address:"", Emergency_Contact:"", KYC_Status:"Not Submitted", KYC_Documents:"[]",
-      Created_At:now, Created_By:session.userId, Approved_At:"", Approved_By:"", Last_Login:"",
+      Created_At:now, Created_By:session.userId, Approved_At:activateImmediately?now:"", Approved_By:activateImmediately?session.userId:"", Last_Login:"",
       Password_Changed_At:now
     };
     appendObject_(usersSheet,record);
-    audit_(session,"USER_CREATED",userId,"New "+role+" user created; awaiting approval");
-    return json_({status:"success",message:"User created as Pending. Approve the account before first login.",user:{UserID:userId,Login_ID:loginId,Full_Name:name,Role:role,Account_Status:"Pending"}});
+    audit_(session,"USER_CREATED",userId,"New "+role+" user created ("+accountStatus+")");
+    return json_({
+      status:"success",
+      message:activateImmediately
+        ? "User created and activated. They can sign in immediately."
+        : "User created as Pending. Approve the account before first login.",
+      user:{UserID:userId,Login_ID:loginId,Full_Name:name,Role:role,PropertyID:propertyId,Ownership_ID:resolvedOwn.ownershipId,Account_Status:accountStatus}
+    });
   } finally { lock.releaseLock(); }
 }
 
@@ -1442,13 +1529,30 @@ function adminUpdateUser_(session,body){
   requireRole_(session,["Admin"]);const userId=cleanText_(body.userId,100),updates=body.updates||{};
   const context=societyAndUsers_(session.societyCode),user=context.rows.find(x=>String(x.UserID||x.Access_ID)===userId);
   if(!user)throw new Error("User account not found.");
-  if(userId===session.userId&&updates.Role&&String(updates.Role)!=="Admin")throw new Error("You cannot change your own Admin role.");
+  if(userId===session.userId&&updates.Role&&normalizeRole_(updates.Role)!=="Admin")throw new Error("You cannot change your own Admin role.");
   const patch={};
   if(updates.Full_Name!==undefined){const v=cleanText_(updates.Full_Name,120);if(!v)throw new Error("Full name is required.");patch.Full_Name=v;}
   if(updates.Email_ID!==undefined)patch.Email_ID=cleanEmail_(updates.Email_ID);
   if(updates.Mobile_No!==undefined){const v=cleanText_(updates.Mobile_No,20);if(!/^[+0-9() -]{7,20}$/.test(v))throw new Error("Enter a valid mobile number.");patch.Mobile_No=v;}
-  if(updates.Role!==undefined){const role=String(updates.Role);if(!["Committee","Accountant","Resident"].includes(role))throw new Error("Only Committee, Accountant or Resident role can be assigned here.");patch.Role=role;}
-  if(updates.PropertyID!==undefined){const propertyId=cleanText_(updates.PropertyID,80);if(String(patch.Role||user.Role)==="Resident"){const props=sheetObjects_(societySheet_(session,"Property Master").sh);if(!props.some(x=>String(x.PropertyID)===propertyId&&String(x.Property_Status||"Active")==="Active"))throw new Error("Select an active property for this Resident.");}patch.PropertyID=propertyId;}
+  if(updates.Role!==undefined){const role=normalizeRole_(updates.Role);if(!["Committee","Accountant","Resident"].includes(role))throw new Error("Only Committee, Accountant or Resident role can be assigned here.");patch.Role=role;}
+  const nextRole=patch.Role||normalizeRole_(user.Role)||String(user.Role||"");
+  if(updates.PropertyID!==undefined){
+    const propertyId=cleanText_(updates.PropertyID,80);
+    if(nextRole==="Resident"){
+      const props=sheetObjects_(societySheet_(session,"Property Master").sh);
+      if(!props.some(x=>String(x.PropertyID)===propertyId&&String(x.Property_Status||"Active")==="Active"))throw new Error("Select an active property for this Resident.");
+    }
+    patch.PropertyID=propertyId;
+  }
+  if(updates.Ownership_ID!==undefined)patch.Ownership_ID=cleanText_(updates.Ownership_ID,80);
+  if(updates.OwnerID!==undefined)patch.OwnerID=cleanText_(updates.OwnerID,80);
+  const finalPropertyId=patch.PropertyID!==undefined?patch.PropertyID:String(user.PropertyID||"").trim();
+  const finalOwnershipId=patch.Ownership_ID!==undefined?patch.Ownership_ID:String(user.Ownership_ID||"").trim();
+  if(nextRole==="Resident"&&finalPropertyId&&!finalOwnershipId){
+    const resolvedOwn=resolveResidentOwnership_(context.society,finalPropertyId,"",patch.OwnerID!==undefined?patch.OwnerID:user.OwnerID);
+    if(resolvedOwn.ownershipId)patch.Ownership_ID=resolvedOwn.ownershipId;
+    if(resolvedOwn.ownerId)patch.OwnerID=resolvedOwn.ownerId;
+  }
   if(!Object.keys(patch).length)throw new Error("No editable fields were supplied.");
   patch.Last_Updated_By=session.userId;patch.Last_Updated_At=new Date();
   updateByHeaders_(context.usersSheet,user.__row,patch,["Society_Code","Login_ID","UserID","Password_Salt","Password_Hash"]);
@@ -1471,13 +1575,18 @@ function adminSetUserStatus_(session,body){
 
 function adminApproveUser_(session,body) {
   requireRole_(session,["Admin"]);
-  const {usersSheet,rows} = societyAndUsers_(session.societyCode);
-  const user = rows.find(r => String(r.UserID) === String(body.userId));
+  const {society,usersSheet,rows} = societyAndUsers_(session.societyCode);
+  const user = rows.find(r => String(r.UserID || r.Access_ID) === String(body.userId));
   if (!user) throw new Error("User not found.");
-  if (!["Committee","Accountant","Resident"].includes(String(user.Role))) throw new Error("Admin account cannot be approved through this action.");
-  setCell_(usersSheet,user.__row,"Account_Status","Active");
-  setCell_(usersSheet,user.__row,"Approved_At",new Date());
-  setCell_(usersSheet,user.__row,"Approved_By",session.userId);
+  const role = normalizeRole_(user.Role);
+  if (!["Committee","Accountant","Resident"].includes(role)) throw new Error("Admin account cannot be approved through this action.");
+  const patch = { Role:role, Account_Status:"Active", Approved_At:new Date(), Approved_By:session.userId };
+  if (role === "Resident" && String(user.PropertyID || "").trim() && !String(user.Ownership_ID || "").trim()) {
+    const resolvedOwn = resolveResidentOwnership_(society, user.PropertyID, "", user.OwnerID);
+    if (resolvedOwn.ownershipId) patch.Ownership_ID = resolvedOwn.ownershipId;
+    if (resolvedOwn.ownerId) patch.OwnerID = resolvedOwn.ownerId;
+  }
+  updateByHeaders_(usersSheet,user.__row,patch,["Society_Code","Login_ID","UserID","Password_Salt","Password_Hash"]);
   invalidateSessionUserCache_(session.societyCode,body.userId);
   audit_(session,"USER_APPROVED",body.userId,"User account activated");
   return json_({status:"success",message:"User approved and activated."});
@@ -1485,8 +1594,8 @@ function adminApproveUser_(session,body) {
 function adminRejectUser_(session,body) {
   requireRole_(session,["Admin"]);
   const {usersSheet,rows} = societyAndUsers_(session.societyCode);
-  const user = rows.find(r => String(r.UserID) === String(body.userId));
-  if (!user || user.Role === "Admin") throw new Error("User not found or cannot be rejected.");
+  const user = rows.find(r => String(r.UserID || r.Access_ID) === String(body.userId));
+  if (!user || normalizeRole_(user.Role) === "Admin") throw new Error("User not found or cannot be rejected.");
   setCell_(usersSheet,user.__row,"Account_Status","Rejected");
   invalidateSessionUserCache_(session.societyCode,body.userId);
   audit_(session,"USER_REJECTED",body.userId,cleanText_(body.reason,250));
@@ -1497,7 +1606,7 @@ function adminSetKycStatus_(session,body) {
   const status=String(body.status||"");
   if(!["Verified","Rejected","Under Review"].includes(status)) throw new Error("Invalid KYC status.");
   const {usersSheet,rows}=societyAndUsers_(session.societyCode);
-  const user=rows.find(r=>String(r.UserID)===String(body.userId));
+  const user=rows.find(r=>String(r.UserID || r.Access_ID)===String(body.userId));
   if(!user) throw new Error("User not found.");
   setCell_(usersSheet,user.__row,"KYC_Status",status);
   invalidateSessionUserCache_(session.societyCode,body.userId);
@@ -2181,10 +2290,19 @@ function loginContext_(code, loginId) {
   if (!societyRow) {
     const societyMatches = societySheet.getRange(2, societyCodeCol, societyLast - 1, 1)
       .createTextFinder(String(code)).matchCase(false).matchEntireCell(true).findAll();
-    if (societyMatches.length !== 1) throw new Error("Society not found, duplicated or inactive.");
-    societyRow = societyMatches[0].getRow();
-    society = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
-    indexCache.put(societyIndexKey, String(societyRow), 300);
+    if (societyMatches.length === 1) {
+      societyRow = societyMatches[0].getRow();
+      society = objectFromRow_(societyHeaders, societySheet.getRange(societyRow, 1, 1, societyHeaders.length).getValues()[0]);
+      indexCache.put(societyIndexKey, String(societyRow), 300);
+    } else if (societyMatches.length === 0) {
+      const fallbackSocieties = findRowsByHeaderValue_(societySheet, "Society_Code", code);
+      if (fallbackSocieties.length !== 1) throw new Error("Society not found, duplicated or inactive.");
+      society = fallbackSocieties[0];
+      societyRow = society.__row;
+      indexCache.put(societyIndexKey, String(societyRow), 300);
+    } else {
+      throw new Error("Society not found, duplicated or inactive.");
+    }
   }
   if (String(society.Society_Status || "").trim().toLowerCase() !== "active") throw new Error("Society not found, duplicated or inactive.");
   society.Database_ID = society.Database_ID || society.Database_Spreadsheet_ID || society["Database Spreadsheet ID"];
@@ -2210,6 +2328,7 @@ function loginContext_(code, loginId) {
     .createTextFinder(String(loginId)).matchCase(false).matchEntireCell(true).findAll();
   // TextFinder narrows Login_ID candidates. For a small row span, read the
   // candidates together in one service call and validate Society_Code in code.
+  const matchedCandidates = [];
   const candidateRows = candidates.map(r => r.getRow()).sort((a,b)=>a-b);
   if (candidateRows.length) {
     const first = candidateRows[0], last = candidateRows[candidateRows.length-1];
@@ -2218,21 +2337,48 @@ function loginContext_(code, loginId) {
       const batch = usersSheet.getRange(first,1,span,userHeaders.length).getValues();
       for (let i=0;i<candidateRows.length;i++) {
         const row=candidateRows[i], candidate=objectFromRow_(userHeaders,batch[row-first]);
-        if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
-        if (user) throw new Error("Duplicate Login_ID found for this society.");
-        candidate.__row=row; user=candidate;
-        indexCache.put(userIndexKey, String(row), 300);
+        if (normalizeSociety_(candidate.Society_Code)!==code) continue;
+        candidate.__row=row;
+        matchedCandidates.push(candidate);
       }
     } else {
       // Avoid broad reads where duplicate IDs span an unusually large row range.
       for (let i=0;i<candidateRows.length;i++) {
         const row=candidateRows[i], values=usersSheet.getRange(row,1,1,userHeaders.length).getValues()[0];
         const candidate=objectFromRow_(userHeaders,values);
-        if (String(candidate.Society_Code||"").trim().toUpperCase()!==code) continue;
-        if (user) throw new Error("Duplicate Login_ID found for this society.");
-        candidate.__row=row; user=candidate;
-        indexCache.put(userIndexKey, String(row), 300);
+        if (normalizeSociety_(candidate.Society_Code)!==code) continue;
+        candidate.__row=row;
+        matchedCandidates.push(candidate);
       }
+    }
+  }
+  const hasActiveCandidate = matchedCandidates.some(c => String(c.Account_Status || "").trim().toLowerCase() === "active");
+  if (!user && !hasActiveCandidate) {
+    // Fallback scan handles whitespace-padded or numeric-formatted Login_ID cells missed by TextFinder.
+    matchedCandidates.length = 0;
+    const range = usersSheet.getRange(2, 1, userLast - 1, userHeaders.length);
+    const display = range.getDisplayValues(), values = range.getValues();
+    for (let i = 0; i < values.length; i++) {
+      const rawSoc = normalizeSociety_(display[i][societyCol - 1] || values[i][societyCol - 1]);
+      const rawLogin = normalizeLogin_(display[i][loginCol - 1] || values[i][loginCol - 1]);
+      if (rawSoc !== code || rawLogin !== loginId) continue;
+      const candidate = objectFromRow_(userHeaders, values[i]);
+      candidate.__row = i + 2;
+      matchedCandidates.push(candidate);
+    }
+  }
+  if (!user && matchedCandidates.length === 1) {
+    user = matchedCandidates[0];
+    indexCache.put(userIndexKey, String(user.__row), 300);
+  } else if (!user && matchedCandidates.length > 1) {
+    const activeMatches = matchedCandidates.filter(c => String(c.Account_Status || "").trim().toLowerCase() === "active");
+    if (activeMatches.length === 1) {
+      user = activeMatches[0];
+      indexCache.put(userIndexKey, String(user.__row), 300);
+    } else if (activeMatches.length > 1) {
+      throw new Error("Duplicate Login_ID found for this society.");
+    } else {
+      user = matchedCandidates[0];
     }
   }
   return { society, usersSheet, user };
@@ -2251,7 +2397,7 @@ function getCachedSessionUser_(societyCode,userId) {
   const rows=societyAndUsers_(societyCode).rows;
   const user=rows.find(r=>String(r.UserID || r.Access_ID)===String(userId));
   if(!user)return null;
-  const safe=Object.assign(publicUser_(user),{Ownership_ID:String(user.Ownership_ID||""),OwnerID:String(user.OwnerID||"")});
+  const safe=Object.assign(publicUser_(user),{Ownership_ID:String(user.Ownership_ID||"").trim(),OwnerID:String(user.OwnerID||"").trim()});
   // Short cache reduces a full Central Master read on every API request.
   // Account/role changes explicitly invalidate this entry; manual Sheet edits
   // take effect within at most 30 seconds.
@@ -2265,7 +2411,7 @@ function getUserRow_(session) {
 }
 function publicUser_(u) {
   if(!u) return {};
-  return {UserID:String(u.UserID||u.Access_ID||""),Login_ID:String(u.Login_ID||""),Full_Name:String(u.Full_Name||""),Email_ID:String(u.Email_ID||""),Mobile_No:String(u.Mobile_No||""),Role:String(u.Role||""),PropertyID:String(u.PropertyID||""),Ownership_ID:String(u.Ownership_ID||""),Account_Status:String(u.Account_Status||""),Profile_Address:String(u.Profile_Address||""),Emergency_Contact:String(u.Emergency_Contact||""),KYC_Status:String(u.KYC_Status||"Not Submitted"),KYC_Documents:parseJsonArray_(u.KYC_Documents).map(d=>({fileId:d.fileId,fileName:d.fileName,uploadedAt:d.uploadedAt,status:d.status})) ,Created_At:String(u.Created_At||"")};
+  return {UserID:String(u.UserID||u.Access_ID||"").trim(),Login_ID:String(u.Login_ID||"").trim(),Full_Name:String(u.Full_Name||""),Email_ID:String(u.Email_ID||"").trim(),Mobile_No:String(u.Mobile_No||""),Role:normalizeRole_(u.Role)||String(u.Role||"").trim(),PropertyID:String(u.PropertyID||"").trim(),Ownership_ID:String(u.Ownership_ID||"").trim(),Account_Status:String(u.Account_Status||"").trim(),Profile_Address:String(u.Profile_Address||""),Emergency_Contact:String(u.Emergency_Contact||""),KYC_Status:String(u.KYC_Status||"Not Submitted"),KYC_Documents:parseJsonArray_(u.KYC_Documents).map(d=>({fileId:d.fileId,fileName:d.fileName,uploadedAt:d.uploadedAt,status:d.status})) ,Created_At:String(u.Created_At||"")};
 }
 function requireSession_(token) {
   if(!token) throw new Error("Authentication required. Sign in again.");
@@ -2279,14 +2425,14 @@ function requireSession_(token) {
     CacheService.getScriptCache().remove("SESSION_"+token);
     throw new Error("Your account is inactive. Contact your society Admin.");
   }
-  const currentRole=String(user.Role||"");
+  const currentRole=normalizeRole_(user.Role);
   if(!["Admin","Committee","Accountant","Resident"].includes(currentRole)) {
     CacheService.getScriptCache().remove("SESSION_"+token);
     throw new Error("Your account role is not authorized. Contact your society Admin.");
   }
   session.role=currentRole;
-  session.propertyId=String(user.PropertyID||"");
-  session.ownershipId=String(user.Ownership_ID||"");session.ownerId=String(user.OwnerID||"");
+  session.propertyId=String(user.PropertyID||"").trim();
+  session.ownershipId=String(user.Ownership_ID||"").trim();session.ownerId=String(user.OwnerID||"").trim();
   session.fullName=String(user.Full_Name||session.fullName);
   session.email=String(user.Email_ID||session.email);
   session.mobile=String(user.Mobile_No||session.mobile);
@@ -2503,6 +2649,7 @@ function cleanEmail_(v){const s=normalizeEmail_(v);if(!/^[^\s@]+@[^\s@]+\.[^\s@]
 function normalizeEmail_(v){return String(v||"").trim().toLowerCase();}
 function normalizeLogin_(v){return String(v||"").trim().toLowerCase();}
 function normalizeSociety_(v){return String(v||"").trim().toUpperCase();}
+function normalizeRole_(v){const s=String(v==null?"":v).trim().toLowerCase();if(s==="admin")return "Admin";if(s==="committee")return "Committee";if(s==="accountant")return "Accountant";if(s==="resident")return "Resident";return "";}
 function ensureHeaders_(sh,headers){
   const last=sh.getLastColumn(), existing=last?sh.getRange(1,1,1,last).getValues()[0].map(String):[];
   if(!last){sh.getRange(1,1,1,headers.length).setValues([headers]);return;}
@@ -2531,7 +2678,7 @@ function audit_(s,action,id,remarks){
   try{const ss=SpreadsheetApp.openById(s.databaseId),sh=ss.getSheetByName("Audit Log");if(sh)sh.appendRow([Utilities.getUuid(),s.userId,action,"User Management",id,"", "",new Date(),remarks]);}catch(e){}
 }
 function nextReceipt_(sh){return "RCT-"+String(Math.max(sh.getLastRow(),1)).padStart(6,"0");}
-function errorCode_(e){const m=String(e&&e.message||e).toLowerCase();if(m.includes("too many sign-in attempts"))return "RATE_LIMITED";if(m.includes("permission denied")||m.includes("access denied"))return "PERMISSION_DENIED";if(m.includes("session")||m.includes("authentication")||m.includes("inactive")||m.includes("invalid credentials")||m.includes("unable to sign in"))return "AUTH_ERROR";if(m.includes("missing")||m.includes("invalid")||m.includes("required")||m.includes("not found")||m.includes("already exists")||m.includes("not effective"))return "VALIDATION_ERROR";return "SERVER_ERROR";}
+function errorCode_(e){const m=String(e&&e.message||e).toLowerCase();if(m.includes("too many sign-in attempts"))return "RATE_LIMITED";if(m.includes("permission denied")||m.includes("access denied"))return "PERMISSION_DENIED";if(m.includes("session")||m.includes("authentication")||m.includes("inactive")||m.includes("invalid credentials")||m.includes("unable to sign in")||m.includes("not authorized"))return "AUTH_ERROR";if(m.includes("missing")||m.includes("invalid")||m.includes("required")||m.includes("not found")||m.includes("already exists")||m.includes("not effective"))return "VALIDATION_ERROR";return "SERVER_ERROR";}
 function safeError_(e){const m=String(e&&e.message||e);return m.length>250?m.slice(0,250):m;}
 function json_(obj){return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);}
 
