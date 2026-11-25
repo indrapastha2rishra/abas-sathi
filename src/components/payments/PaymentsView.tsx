@@ -18,10 +18,17 @@ import {
   ArrowRight,
   FileCheck,
   PlusCircle,
+  RefreshCw,
+  Download,
 } from 'lucide-react';
 import { PaymentMode, FundInflowRegister } from '../../types/database';
 import { formatDateDisplay } from '../../utils/dateFormat';
 import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
+import {
+  filterResidentScopedRecords,
+  sortResidentInvoicesNewestFirst,
+  sortResidentReceiptsNewestFirst,
+} from '../../utils/residentPortalHelpers';
 
 interface Props {
   initialSubTab?: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record';
@@ -39,6 +46,9 @@ const fmtAmt = (v: unknown): string => toAmt(v).toFixed(2);
 export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) => {
   const {
     activeRole,
+    currentUser,
+    refreshActiveData,
+    isRefreshingData,
     setActiveTab,
     canAccessTab,
     hasPermission,
@@ -52,6 +62,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     bankAccounts,
     submitResidentPayment,
     uploadPrivateFile,
+    getPrivateFile,
     confirmAndAllocatePayment,
     setPreviewReceipt,
     t,
@@ -80,14 +91,22 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     }
   };
 
-  // Resident data is scoped to the authenticated flat/property in the UI; backend authorization must enforce the same scope.
+  // Resident data is scoped to the authenticated flat/ownership in the UI; backend authorization enforces the same scope.
   const residentScopedReceipts = useMemo(
-    () => (activeRole === 'Resident' ? receipts.filter(r => r.PropertyID === residentProperty?.PropertyID) : receipts),
-    [activeRole, receipts, residentProperty?.PropertyID]
+    () =>
+      activeRole === 'Resident'
+        ? sortResidentReceiptsNewestFirst(
+            filterResidentScopedRecords(receipts, residentProperty?.PropertyID, currentUser.Ownership_ID)
+          )
+        : receipts,
+    [activeRole, receipts, residentProperty?.PropertyID, currentUser.Ownership_ID]
   );
   const residentScopedAllocations = useMemo(
-    () => (activeRole === 'Resident' ? billAllocations.filter(a => a.PropertyID === residentProperty?.PropertyID) : billAllocations),
-    [activeRole, billAllocations, residentProperty?.PropertyID]
+    () =>
+      activeRole === 'Resident'
+        ? filterResidentScopedRecords(billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        : billAllocations,
+    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID]
   );
 
   const computedInvoices = useMemo(
@@ -98,13 +117,23 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
   // Resident "Pay Now" flow state
   const myInvoices = useMemo(
     () =>
-      computedInvoices.filter(
-        (i) =>
-          i.PropertyID === residentProperty?.PropertyID &&
-          !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(i.Invoice_Status || '').trim().toLowerCase()) &&
-          toAmt(i.Calculated_Outstanding) > 0
+      sortResidentInvoicesNewestFirst(
+        filterResidentScopedRecords(computedInvoices, residentProperty?.PropertyID, currentUser.Ownership_ID).filter(
+          (i) =>
+            !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(i.Invoice_Status || '').trim().toLowerCase()) &&
+            toAmt(i.Calculated_Outstanding) > 0
+        )
       ),
-    [computedInvoices, residentProperty?.PropertyID]
+    [computedInvoices, residentProperty?.PropertyID, currentUser.Ownership_ID]
+  );
+
+  const pendingResidentReceipts = useMemo(
+    () => residentScopedReceipts.filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'pending verification'),
+    [residentScopedReceipts]
+  );
+  const pendingResidentAmount = useMemo(
+    () => pendingResidentReceipts.reduce((s, r) => s + toAmt(r.Received_Amount), 0),
+    [pendingResidentReceipts]
   );
 
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>(
@@ -115,12 +144,19 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [residentRemarks, setResidentRemarks] = useState('');
   const [residentSubmitSuccess, setResidentSubmitSuccess] = useState('');
+  const [residentSubmitError, setResidentSubmitError] = useState('');
+  const [receiptSearch, setReceiptSearch] = useState('');
+  const [receiptStatusFilter, setReceiptStatusFilter] = useState('All');
+  const [proofDownloadError, setProofDownloadError] = useState('');
   const invoiceSelectionInitialized = useRef(false);
   useEffect(() => {
-    if (!invoiceSelectionInitialized.current && myInvoices.length) {
-      setSelectedInvoiceIds(myInvoices.map(i => i.InvoiceID));
+    const validIds = new Set(myInvoices.map((i) => i.InvoiceID));
+    if (!invoiceSelectionInitialized.current && myInvoices.length > 0) {
+      setSelectedInvoiceIds(myInvoices.map((i) => i.InvoiceID));
       invoiceSelectionInitialized.current = true;
+      return;
     }
+    setSelectedInvoiceIds((prev) => prev.filter((id) => validIds.has(id)));
   }, [myInvoices]);
 
   // Admin / Accountant "Record Payment" flow state
@@ -234,6 +270,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     e.preventDefault();
     if (payableTotal <= 0 || submittingPayment) return;
     setSubmittingPayment(true);
+    setResidentSubmitError('');
     try {
       const receipt = await submitResidentPayment({
         invoiceIds: selectedInvoiceIds, amount: payableTotal, mode: payMode, reference: payRef,
@@ -251,10 +288,38 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
       setResidentSubmitSuccess(`Payment submitted for verification. Transaction ID: ${receipt.Transaction_ID}.${attachmentMessage} An official receipt will be issued after confirmation.`);
       setProofFile(null);
       setPayRef('');
+      setResidentRemarks('');
       window.setTimeout(() => setResidentSubmitSuccess(''), 7000);
     } catch (error:any) {
-      window.alert(error?.message || 'Payment could not be submitted. Please check the payment register before retrying.');
+      setResidentSubmitError(error?.message || 'Payment could not be submitted. Please check the payment register before retrying.');
     } finally { setSubmittingPayment(false); }
+  };
+
+  const handleDownloadProof = async (rec: FundInflowRegister) => {
+    const fileRef = String(rec.File_Reference || '').trim();
+    if (!fileRef) return;
+    setProofDownloadError('');
+    if (/^https?:\/\//i.test(fileRef)) {
+      const a = document.createElement('a');
+      a.href = fileRef;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+      return;
+    }
+    try {
+      const res: any = await getPrivateFile(fileRef, rec.PropertyID);
+      const bytes = Uint8Array.from(atob(res.data.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: res.data.mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.data.fileName || `payment-proof-${rec.Transaction_ID}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setProofDownloadError(err?.message || 'Unable to download payment proof.');
+    }
   };
 
   // Admin/Accountant confirmation modal state
@@ -558,9 +623,41 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
 
             {/* Invoices Selection List */}
             <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
-              <h3 className="font-bold text-sm text-[#29352D] mb-3">
-                Select Bills to Pay / বকেয়া বিল নির্বাচন করুন
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 className="font-bold text-sm text-[#29352D]">
+                  Select Bills to Pay / বকেয়া বিল নির্বাচন করুন
+                </h3>
+                {myInvoices.length > 0 && (
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvoiceIds(myInvoices.map((i) => i.InvoiceID))}
+                      className="font-semibold text-[#536B4D] hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInvoiceIds([])}
+                      className="font-semibold text-gray-500 hover:underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {pendingResidentReceipts.length > 0 && (
+                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900 flex items-start gap-2">
+                  <Clock className="h-4 w-4 shrink-0 text-amber-700 mt-0.5" />
+                  <span>
+                    You already have <strong>{pendingResidentReceipts.length}</strong> payment(s) totalling{' '}
+                    <strong>₹{pendingResidentAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong> awaiting admin verification. Avoid duplicate transfers.
+                  </span>
+                </div>
+              )}
+
               {myInvoices.length > 0 ? (
                 <div className="space-y-2">
                   {myInvoices.map((inv) => {
@@ -622,6 +719,12 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                 <div className="my-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
                   {residentSubmitSuccess}
+                </div>
+              )}
+              {residentSubmitError && (
+                <div className="my-4 p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {residentSubmitError}
                 </div>
               )}
 
@@ -709,103 +812,216 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
       )}
 
       {/* SUBTAB 2: RECEIPT REGISTER */}
-      {subTab === 'receipts' && (
-        <div className="rounded-2xl border border-[#E8E1D4] bg-white overflow-hidden shadow-2xs">
-          <div className="p-4 border-b border-[#E8E1D4] bg-[#F7F4EC] flex justify-between items-center">
-            <div>
-              <h3 className="font-bold text-[#29352D] text-sm">{activeRole === 'Resident' ? 'My Receipts / আমার রসিদ' : 'Fund Inflow Register / প্রাপ্তি রেজিস্টার'}</h3>
-              <p className="text-xs text-gray-500">{activeRole === 'Resident' ? 'Your receipts and bill-wise payment adjustments' : 'Official Society Receipts and Inflow Log'}</p>
-            </div>
-            <span className="text-xs text-gray-500">{residentScopedReceipts.length} Total Receipts</span>
-          </div>
+      {subTab === 'receipts' && (() => {
+        const filteredReceipts = activeRole === 'Resident'
+          ? residentScopedReceipts.filter((rec) => {
+              const q = receiptSearch.trim().toLowerCase();
+              const matchesQuery = !q ||
+                String(rec.Receipt_Number || '').toLowerCase().includes(q) ||
+                String(rec.Transaction_ID || '').toLowerCase().includes(q) ||
+                String(rec.Received_Reference || '').toLowerCase().includes(q) ||
+                String(rec.Received_Mode || '').toLowerCase().includes(q);
+              const matchesStatus = receiptStatusFilter === 'All' || String(rec.Receipt_Status || '').trim() === receiptStatusFilter;
+              return matchesQuery && matchesStatus;
+            })
+          : residentScopedReceipts;
+        const confirmedSum = residentScopedReceipts
+          .filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
+          .reduce((s, r) => s + toAmt(r.Received_Amount), 0);
+        const advanceSum = residentScopedReceipts
+          .filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
+          .reduce((s, r) => s + toAmt(r.Unallocated_Amount), 0);
+        return (
+          <div className="space-y-4">
+            {activeRole === 'Resident' && (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+                  <p className="text-xs text-gray-500">Confirmed Payments</p>
+                  <p className="mt-1 text-lg font-bold text-emerald-700">₹{confirmedSum.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                </div>
+                <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+                  <p className="text-xs text-gray-500">Pending Verification</p>
+                  <p className="mt-1 text-lg font-bold text-amber-700">
+                    {pendingResidentReceipts.length} (₹{pendingResidentAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })})
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+                  <p className="text-xs text-gray-500">Advance Credit</p>
+                  <p className="mt-1 text-lg font-bold text-[#536B4D]">₹{advanceSum.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+                </div>
+                <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs text-gray-500">Total Receipts</p>
+                    <p className="mt-1 text-lg font-bold text-[#29352D]">{residentScopedReceipts.length}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void refreshActiveData()}
+                    disabled={isRefreshingData}
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E8E1D4] px-2.5 py-1.5 text-xs font-semibold text-[#536B4D] hover:bg-[#F7F4EC] cursor-pointer"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingData ? 'animate-spin' : ''}`} />
+                    <span>Sync</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#536B4D] text-white">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Receipt No</th>
-                  <th className="px-4 py-3 font-semibold">Date</th>
-                  <th className="px-4 py-3 font-semibold">Flat No</th>
-                  <th className="px-4 py-3 font-semibold">Payer Name</th>
-                  <th className="px-4 py-3 font-semibold">Mode & Ref</th>
-                  <th className="px-4 py-3 font-semibold text-right">Received (₹)</th>
-                  <th className="px-4 py-3 font-semibold text-right">Unallocated (₹)</th>
-                  <th className="px-4 py-3 font-semibold text-center">Status</th>
-                  <th className="px-4 py-3 font-semibold text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E8E1D4]">
-                {residentScopedReceipts.map((rec) => (
-                  <React.Fragment key={rec.Transaction_ID}>
-                  <tr className="hover:bg-neutral-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateDisplay(rec.Date_Of_Received, '—')}</td>
-                    <td className="px-4 py-3 font-bold text-[#536B4D]">{rec.Flat_No}</td>
-                    <td className="px-4 py-3 font-medium">{rec.Owner_Name}</td>
-                    <td className="px-4 py-3 font-mono text-[11px] text-gray-600">
-                      {rec.Received_Mode} • {rec.Received_Reference}
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                      ₹{fmtAmt(rec.Received_Amount)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-amber-700">
-                      ₹{fmtAmt(rec.Unallocated_Amount)}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span
-                        className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          rec.Receipt_Status === 'Confirmed'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {rec.Receipt_Status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right space-x-2">
-                      {rec.Receipt_Status === 'Pending Verification' && activeRole !== 'Resident' && hasPermission('Payments','Can_Approve') ? (
-                        <button
-                          onClick={() => setConfirmingReceipt(rec)}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-bold text-[11px] hover:bg-emerald-800 shadow-2xs cursor-pointer"
-                        >
-                          Verify & Allocate
-                        </button>
-                      ) : rec.Receipt_Status === 'Confirmed' ? (
-                        <button onClick={() => setPreviewReceipt(rec)} className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">View Receipt</button>
-                      ) : <span className="text-[10px] text-amber-700">Awaiting verification</span>}
-                    </td>
-                  </tr>
-                  {activeRole === 'Resident' && residentScopedAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).length > 0 && (
-                    <tr className="bg-[#F7F4EC]/70">
-                      <td colSpan={9} className="px-4 py-3">
-                        <div className="font-semibold text-[#536B4D] mb-1">Bill-wise Allocation / বিল অনুযায়ী সমন্বয়</div>
-                        <div className="flex flex-wrap gap-2">
-                          {residentScopedAllocations.filter(a => a.Transaction_ID === rec.Transaction_ID).map(a => (
-                            <span key={a.Allocation_ID} className="rounded-lg border border-[#E8E1D4] bg-white px-3 py-2 text-[11px]">
-                              <strong className="block text-[#29352D]">{a.Invoice_Number}</strong>
-                              <span className="block text-gray-500">Invoice: ₹{toAmt(a.Invoice_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                              <span className="block text-emerald-700">Allocated: ₹{toAmt(a.Allocated_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                              <span className="block text-amber-700">Balance After: ₹{toAmt(a.Outstanding_After).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  </React.Fragment>
-                ))}
-                {residentScopedReceipts.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-gray-500 italic">
-                      No receipts recorded yet.
-                    </td>
-                  </tr>
+            {proofDownloadError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{proofDownloadError}</span>
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white overflow-hidden shadow-2xs">
+              <div className="p-4 border-b border-[#E8E1D4] bg-[#F7F4EC] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-[#29352D] text-sm">{activeRole === 'Resident' ? 'My Payment History & Receipts / আমার রসিদ' : 'Fund Inflow Register / প্রাপ্তি রেজিস্টার'}</h3>
+                  <p className="text-xs text-gray-500">{activeRole === 'Resident' ? 'Your submitted payments, official receipts, and bill-wise adjustments' : 'Official Society Receipts and Inflow Log'}</p>
+                </div>
+                {activeRole === 'Resident' ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search receipt or UTR..."
+                        value={receiptSearch}
+                        onChange={(e) => setReceiptSearch(e.target.value)}
+                        className="rounded-xl border border-[#E8E1D4] bg-white pl-8 pr-3 py-1.5 text-xs text-[#29352D]"
+                      />
+                    </div>
+                    <select
+                      value={receiptStatusFilter}
+                      onChange={(e) => setReceiptStatusFilter(e.target.value)}
+                      className="rounded-xl border border-[#E8E1D4] bg-white px-2.5 py-1.5 text-xs text-[#29352D]"
+                    >
+                      <option value="All">All Statuses</option>
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Pending Verification">Pending Verification</option>
+                      <option value="Rejected">Rejected</option>
+                    </select>
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-500">{filteredReceipts.length} Total Receipts</span>
                 )}
-              </tbody>
-            </table>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#536B4D] text-white">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Receipt No</th>
+                      <th className="px-4 py-3 font-semibold">Date</th>
+                      <th className="px-4 py-3 font-semibold">Flat No</th>
+                      <th className="px-4 py-3 font-semibold">Payer Name</th>
+                      <th className="px-4 py-3 font-semibold">Mode & Ref</th>
+                      <th className="px-4 py-3 font-semibold text-right">Received (₹)</th>
+                      <th className="px-4 py-3 font-semibold text-right">Unallocated (₹)</th>
+                      <th className="px-4 py-3 font-semibold text-center">Status</th>
+                      <th className="px-4 py-3 font-semibold text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#E8E1D4]">
+                    {filteredReceipts.map((rec) => {
+                      const statusLower = String(rec.Receipt_Status || '').trim().toLowerCase();
+                      const isConfirmed = statusLower === 'confirmed';
+                      const isPending = statusLower === 'pending verification';
+                      const isRejected = statusLower === 'rejected' || statusLower === 'cancelled' || statusLower === 'bounced';
+                      const allocs = residentScopedAllocations.filter(
+                        (a) => String(a.Transaction_ID || '').trim() === String(rec.Transaction_ID || '').trim()
+                      );
+                      return (
+                        <React.Fragment key={rec.Transaction_ID}>
+                          <tr className="hover:bg-neutral-50 transition-colors">
+                            <td className="px-4 py-3 font-bold text-[#29352D]">{rec.Receipt_Number || rec.Transaction_ID}</td>
+                            <td className="px-4 py-3 text-gray-500">{formatDateDisplay(rec.Date_Of_Received, '—')}</td>
+                            <td className="px-4 py-3 font-bold text-[#536B4D]">{rec.Flat_No}</td>
+                            <td className="px-4 py-3 font-medium">{rec.Owner_Name}</td>
+                            <td className="px-4 py-3 font-mono text-[11px] text-gray-600">
+                              {rec.Received_Mode} • {rec.Received_Reference || '—'}
+                            </td>
+                            <td className="px-4 py-3 text-right font-bold text-[#29352D]">
+                              ₹{fmtAmt(rec.Received_Amount)}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-amber-700">
+                              ₹{fmtAmt(rec.Unallocated_Amount)}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span
+                                className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                  isConfirmed
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : isRejected
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {rec.Receipt_Status}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right space-x-2">
+                              {isPending && activeRole !== 'Resident' && hasPermission('Payments','Can_Approve') ? (
+                                <button
+                                  onClick={() => setConfirmingReceipt(rec)}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-bold text-[11px] hover:bg-emerald-800 shadow-2xs cursor-pointer"
+                                >
+                                  Verify & Allocate
+                                </button>
+                              ) : isConfirmed ? (
+                                <button onClick={() => setPreviewReceipt(rec)} className="text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">View Receipt</button>
+                              ) : isRejected ? (
+                                <span className="text-[10px] text-red-700 font-semibold">{rec.Receipt_Status}</span>
+                              ) : (
+                                <span className="text-[10px] text-amber-700">Awaiting verification</span>
+                              )}
+                              {rec.File_Reference && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDownloadProof(rec)}
+                                  className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer"
+                                >
+                                  <Download className="h-3 w-3" />
+                                  <span>Proof</span>
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {activeRole === 'Resident' && allocs.length > 0 && (
+                            <tr className="bg-[#F7F4EC]/70">
+                              <td colSpan={9} className="px-4 py-3">
+                                <div className="font-semibold text-[#536B4D] mb-1">Bill-wise Allocation / বিল অনুযায়ী সমন্বয়</div>
+                                <div className="flex flex-wrap gap-2">
+                                  {allocs.map((a) => (
+                                    <span key={a.Allocation_ID} className="rounded-lg border border-[#E8E1D4] bg-white px-3 py-2 text-[11px]">
+                                      <strong className="block text-[#29352D]">{a.Invoice_Number}</strong>
+                                      <span className="block text-gray-500">Invoice: ₹{toAmt(a.Invoice_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                                      <span className="block text-emerald-700">Allocated: ₹{toAmt(a.Allocated_Amount).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                                      <span className="block text-amber-700">Balance After: ₹{toAmt(a.Outstanding_After).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                    {filteredReceipts.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="px-4 py-8 text-center text-gray-500 italic">
+                          No receipts recorded yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* SUBTAB 3: BILL-WISE ALLOCATION REGISTER */}
       {subTab === 'allocation' && (

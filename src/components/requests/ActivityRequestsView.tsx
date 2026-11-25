@@ -16,9 +16,13 @@ import {
   Search,
   Filter,
   Check,
+  RefreshCw,
+  Download,
+  AlertCircle,
 } from 'lucide-react';
 import { ActivityRequestRegister } from '../../types/database';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { filterResidentScopedRecords, sortActivityRequestsNewestFirst } from '../../utils/residentPortalHelpers';
 
 export const ActivityRequestsView: React.FC = () => {
   const {
@@ -30,11 +34,15 @@ export const ActivityRequestsView: React.FC = () => {
     currentUser,
     residentProperty,
     uploadPrivateFile,
+    getPrivateFile,
+    refreshActiveData,
+    isRefreshingData,
     t,
   } = useApp();
 
-  const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed' | 'rejected'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [actionError, setActionError] = useState('');
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<ActivityRequestRegister | null>(null);
 
@@ -82,26 +90,68 @@ export const ActivityRequestsView: React.FC = () => {
     } catch (error:any) { window.alert(error?.message || 'Request update failed.'); }
   };
 
-  // Filter requests
-  const visibleRequests = activityRequests.filter((req) => {
-    // If resident, only show own flat's requests
-    if (activeRole === 'Resident' && req.PropertyID !== residentProperty?.PropertyID) {
-      return false;
+  const handleOpenAttachment = async (fileRef: string, propId?: string) => {
+    const clean = String(fileRef || '').trim();
+    if (!clean) return;
+    setActionError('');
+    if (/^https?:\/\//i.test(clean)) {
+      const a = document.createElement('a');
+      a.href = clean;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+      return;
     }
+    try {
+      const res: any = await getPrivateFile(clean, propId || residentProperty?.PropertyID);
+      const bytes = Uint8Array.from(atob(res.data.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: res.data.mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = res.data.fileName || 'request-attachment';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to download attachment.');
+    }
+  };
 
+  // Scope requests by active role + Ownership_ID and sort newest first
+  const roleScopedRequests = React.useMemo(
+    () =>
+      sortActivityRequestsNewestFirst(
+        activeRole === 'Resident'
+          ? filterResidentScopedRecords(activityRequests, residentProperty?.PropertyID, currentUser.Ownership_ID, {
+              allowBlankOwnership: true,
+              requestedByUserId: currentUser.UserID,
+            })
+          : activityRequests
+      ),
+    [activeRole, activityRequests, residentProperty?.PropertyID, currentUser.Ownership_ID, currentUser.UserID]
+  );
+
+  // Filter requests
+  const visibleRequests = roleScopedRequests.filter((req) => {
+    const q = searchTerm.trim().toLowerCase();
     const matchesSearch =
-      req.Subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      req.Request_Number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      req.Request_Category.toLowerCase().includes(searchTerm.toLowerCase());
+      !q ||
+      String(req.Subject || '').toLowerCase().includes(q) ||
+      String(req.Request_Number || '').toLowerCase().includes(q) ||
+      String(req.Request_Category || '').toLowerCase().includes(q) ||
+      String(req.Description || '').toLowerCase().includes(q);
 
+    const status = String(req.Request_Status || '').trim();
     const matchesFilter =
       activeFilter === 'all'
         ? true
         : activeFilter === 'pending'
-        ? req.Request_Status === 'Pending'
+        ? status === 'Pending'
         : activeFilter === 'in_progress'
-        ? req.Request_Status === 'In Progress'
-        : req.Request_Status === 'Completed';
+        ? status === 'In Progress'
+        : activeFilter === 'completed'
+        ? status === 'Completed'
+        : status === 'Rejected' || status === 'Cancelled';
 
     return matchesSearch && matchesFilter;
   });
@@ -120,14 +170,32 @@ export const ActivityRequestsView: React.FC = () => {
           </p>
         </div>
 
-        {hasPermission('Activity Requests','Can_Create') && <button
-          onClick={() => setIsNewModalOpen(true)}
-          className="flex items-center gap-2 rounded-xl bg-[#536B4D] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#3F523A] transition-colors cursor-pointer self-start sm:self-auto"
-        >
-          <PlusCircle className="h-4 w-4" />
-          <span>Raise New Request</span>
-        </button>}
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => void refreshActiveData()}
+            disabled={isRefreshingData}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 text-xs font-semibold text-[#536B4D] hover:bg-[#F7F4EC] cursor-pointer"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingData ? 'animate-spin' : ''}`} />
+            <span>{isRefreshingData ? 'Syncing…' : 'Sync'}</span>
+          </button>
+          {hasPermission('Activity Requests','Can_Create') && <button
+            onClick={() => setIsNewModalOpen(true)}
+            className="flex items-center gap-2 rounded-xl bg-[#536B4D] px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#3F523A] transition-colors cursor-pointer"
+          >
+            <PlusCircle className="h-4 w-4" />
+            <span>Raise New Request</span>
+          </button>}
+        </div>
       </div>
+
+      {actionError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-800 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{actionError}</span>
+        </div>
+      )}
 
       {/* Filter Tabs */}
       <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white p-4 rounded-2xl border border-[#E8E1D4] shadow-2xs">
@@ -149,7 +217,7 @@ export const ActivityRequestsView: React.FC = () => {
               activeFilter === 'all' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
-            All Tickets ({activityRequests.length})
+            All Tickets ({roleScopedRequests.length})
           </button>
           <button
             onClick={() => setActiveFilter('pending')}
@@ -157,7 +225,7 @@ export const ActivityRequestsView: React.FC = () => {
               activeFilter === 'pending' ? 'bg-white text-red-700 shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
-            Pending ({activityRequests.filter((r) => r.Request_Status === 'Pending').length})
+            Pending ({roleScopedRequests.filter((r) => r.Request_Status === 'Pending').length})
           </button>
           <button
             onClick={() => setActiveFilter('in_progress')}
@@ -165,7 +233,7 @@ export const ActivityRequestsView: React.FC = () => {
               activeFilter === 'in_progress' ? 'bg-white text-blue-700 shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
-            In Progress ({activityRequests.filter((r) => r.Request_Status === 'In Progress').length})
+            In Progress ({roleScopedRequests.filter((r) => r.Request_Status === 'In Progress').length})
           </button>
           <button
             onClick={() => setActiveFilter('completed')}
@@ -173,7 +241,15 @@ export const ActivityRequestsView: React.FC = () => {
               activeFilter === 'completed' ? 'bg-white text-emerald-700 shadow-xs' : 'text-[#29352D]/70'
             }`}
           >
-            Completed
+            Completed ({roleScopedRequests.filter((r) => r.Request_Status === 'Completed').length})
+          </button>
+          <button
+            onClick={() => setActiveFilter('rejected')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+              activeFilter === 'rejected' ? 'bg-white text-neutral-800 shadow-xs' : 'text-[#29352D]/70'
+            }`}
+          >
+            Rejected ({roleScopedRequests.filter((r) => r.Request_Status === 'Rejected' || r.Request_Status === 'Cancelled').length})
           </button>
         </div>
       </div>
@@ -260,6 +336,31 @@ export const ActivityRequestsView: React.FC = () => {
                   <span className="font-bold">Committee Action Note: </span>
                   <span>{req.Admin_Remarks}</span>
                 </div>
+              </div>
+            )}
+
+            {(req.Attachment || req.Completion_Proof) && (
+              <div className="flex flex-wrap gap-3 text-xs">
+                {req.Attachment && (
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenAttachment(req.Attachment, req.PropertyID)}
+                    className="inline-flex items-center gap-1 font-semibold text-[#536B4D] hover:underline cursor-pointer"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>View Request Attachment</span>
+                  </button>
+                )}
+                {req.Completion_Proof && (
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenAttachment(req.Completion_Proof, req.PropertyID)}
+                    className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:underline cursor-pointer"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>View Completion Proof</span>
+                  </button>
+                )}
               </div>
             )}
           </div>

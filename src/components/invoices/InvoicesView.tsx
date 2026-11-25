@@ -16,12 +16,15 @@ import {
   CheckCircle,
   FileText,
   Calculator,
+  CreditCard,
+  RefreshCw,
 } from 'lucide-react';
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
 import type { InvoiceRegister } from '../../types/database';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
 import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { filterResidentScopedRecords, sortResidentInvoicesNewestFirst } from '../../utils/residentPortalHelpers';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
@@ -60,6 +63,9 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     cancelInvoice,
     setPreviewInvoice,
     activeRole,
+    currentUser,
+    refreshActiveData,
+    isRefreshingData,
     setActiveTab,
     canAccessTab,
     hasPermission,
@@ -140,10 +146,31 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     } catch (error:any) { window.alert(error?.message || 'Invoice could not be saved. Please retry.'); }
   };
 
-  // Resident scope: only the authenticated flat. For residents, payment/outstanding values come strictly from confirmed Fund Inflow + Bill Wise Details.
+  // Resident scope: only the authenticated flat & ownership. Payment/outstanding values come strictly from confirmed Fund Inflow + Bill Wise Details.
+  const residentScopedInvoices = React.useMemo(
+    () =>
+      activeRole === 'Resident'
+        ? filterResidentScopedRecords(invoices, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        : invoices,
+    [activeRole, invoices, residentProperty?.PropertyID, currentUser.Ownership_ID]
+  );
+  const residentScopedReceipts = React.useMemo(
+    () =>
+      activeRole === 'Resident'
+        ? filterResidentScopedRecords(receipts, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        : receipts,
+    [activeRole, receipts, residentProperty?.PropertyID, currentUser.Ownership_ID]
+  );
+  const residentScopedAllocs = React.useMemo(
+    () =>
+      activeRole === 'Resident'
+        ? filterResidentScopedRecords(billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        : billAllocations,
+    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID]
+  );
   const residentMetrics = React.useMemo(
-    () => calculateResidentInvoiceMetrics(invoices, receipts, billAllocations),
-    [invoices, receipts, billAllocations]
+    () => sortResidentInvoicesNewestFirst(calculateResidentInvoiceMetrics(residentScopedInvoices, residentScopedReceipts, residentScopedAllocs)),
+    [residentScopedInvoices, residentScopedReceipts, residentScopedAllocs]
   );
   // Staff Outstanding Bills formula: Net_Charge_Amount (Invoice_Register) - SUM(Allocated_Amount from Bill Wise Details by InvoiceID)
   const staffInvoiceMetrics = React.useMemo(
@@ -151,7 +178,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     [invoices, billAllocations, receipts]
   );
   const invoicesForView = activeRole === 'Resident'
-    ? residentMetrics.filter(inv => inv.PropertyID === residentProperty?.PropertyID)
+    ? residentMetrics
     : staffInvoiceMetrics;
   // Filtered invoices
   const filteredInvoices = invoicesForView.filter((inv) => {
@@ -178,59 +205,114 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
         <div>
           <h1 className="text-xl font-bold tracking-tight text-[#29352D] flex items-center gap-2">
             <Receipt className="h-5 w-5 text-[#536B4D]" />
-            {t.navMaintenanceInvoices} / রক্ষণাবেক্ষণ ও ইনভয়েস
+            {activeRole === 'Resident' ? `${t.navMyBills} / আমার বিলসমূহ` : `${t.navMaintenanceInvoices} / রক্ষণাবেক্ষণ ও ইনভয়েস`}
           </h1>
           <p className="text-xs text-gray-500">
-            Automated rate-based invoicing, snapshot retention, and outstanding ledger
+            {activeRole === 'Resident'
+              ? `Live maintenance bills and confirmed payment adjustments for Flat ${residentProperty?.Flat_No || '—'}`
+              : 'Automated rate-based invoicing, snapshot retention, and outstanding ledger'}
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
-          <button
-            onClick={() => handleSelectSubTab('register')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeSubTab === 'register'
-                ? 'bg-white text-[#536B4D] shadow-xs'
-                : 'text-[#29352D]/70 hover:text-[#29352D]'
-            }`}
-          >
-            {activeRole === 'Resident' ? 'My Bills' : `Invoice Register (${invoices.length})`}
-          </button>
-          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_Create') && (
+        <div className="flex flex-wrap items-center gap-2">
+          {activeRole === 'Resident' && (
             <button
-              onClick={() => handleSelectSubTab('generate')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeSubTab === 'generate'
+              type="button"
+              onClick={() => void refreshActiveData()}
+              disabled={isRefreshingData}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#E8E1D4] bg-white px-3 py-1.5 text-xs font-semibold text-[#536B4D] hover:bg-[#F7F4EC] cursor-pointer"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshingData ? 'animate-spin' : ''}`} />
+              <span>{isRefreshingData ? 'Syncing…' : 'Sync'}</span>
+            </button>
+          )}
+          <div className="flex flex-wrap gap-1 bg-[#F7F4EC] p-1 rounded-xl border border-[#E8E1D4]">
+            <button
+              onClick={() => handleSelectSubTab('register')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeSubTab === 'register'
                   ? 'bg-white text-[#536B4D] shadow-xs'
                   : 'text-[#29352D]/70 hover:text-[#29352D]'
               }`}
             >
-              <PlusCircle className="h-3.5 w-3.5" />
-              Generate Invoice
+              {activeRole === 'Resident' ? `My Bills (${invoicesForView.length})` : `Invoice Register (${invoices.length})`}
             </button>
-          )}
-          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
-            onClick={() => handleSelectSubTab('rates')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeSubTab === 'rates'
-                ? 'bg-white text-[#536B4D] shadow-xs'
-                : 'text-[#29352D]/70 hover:text-[#29352D]'
-            }`}
-          >
-            Rate Master
-          </button>}
-          {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
-            onClick={() => handleSelectSubTab('outstanding')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-              activeSubTab === 'outstanding'
-                ? 'bg-white text-red-700 shadow-xs'
-                : 'text-[#29352D]/70 hover:text-[#29352D]'
-            }`}
-          >
-            Outstanding Dues
-          </button>}
+            {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_Create') && (
+              <button
+                onClick={() => handleSelectSubTab('generate')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeSubTab === 'generate'
+                    ? 'bg-white text-[#536B4D] shadow-xs'
+                    : 'text-[#29352D]/70 hover:text-[#29352D]'
+                }`}
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                Generate Invoice
+              </button>
+            )}
+            {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
+              onClick={() => handleSelectSubTab('rates')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeSubTab === 'rates'
+                  ? 'bg-white text-[#536B4D] shadow-xs'
+                  : 'text-[#29352D]/70 hover:text-[#29352D]'
+              }`}
+            >
+              Rate Master
+            </button>}
+            {activeRole !== 'Resident' && hasPermission('Maintenance & Invoices','Can_View') && <button
+              onClick={() => handleSelectSubTab('outstanding')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeSubTab === 'outstanding'
+                  ? 'bg-white text-red-700 shadow-xs'
+                  : 'text-[#29352D]/70 hover:text-[#29352D]'
+              }`}
+            >
+              Outstanding Dues
+            </button>}
+          </div>
         </div>
       </div>
+
+      {activeRole === 'Resident' && (() => {
+        const totalBilled = residentMetrics.reduce((s, inv) => s + Number(inv.Net_Charge_Amount || 0), 0);
+        const totalPaid = residentMetrics.reduce((s, inv) => s + Number(inv.Paid_Amount || 0), 0);
+        const totalDue = residentMetrics.reduce((s, inv) => s + Number(inv.Outstanding_Amount || 0), 0);
+        const unpaidCount = residentMetrics.filter((inv) => Number(inv.Outstanding_Amount || 0) > 0).length;
+        const canPay = (hasPermission('Pay Now', 'Can_View') && hasPermission('Pay Now', 'Can_Create')) || (hasPermission('Payments', 'Can_View') && hasPermission('Payments', 'Can_Create'));
+        return (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+              <p className="text-xs text-gray-500">Total Billed</p>
+              <p className="mt-1 text-lg font-bold text-[#29352D]">₹{totalBilled.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+            </div>
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+              <p className="text-xs text-gray-500">Paid (Confirmed)</p>
+              <p className="mt-1 text-lg font-bold text-emerald-700">₹{totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+            </div>
+            <div className="rounded-2xl border border-red-100 bg-white p-4 flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs text-gray-500">Outstanding Dues</p>
+                <p className="mt-1 text-lg font-bold text-red-700">₹{totalDue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p>
+              </div>
+              {canPay && totalDue > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('resident_pay')}
+                  className="inline-flex items-center gap-1 rounded-xl bg-[#C97958] px-3 py-2 text-xs font-bold text-white hover:bg-[#A95D3E] cursor-pointer shrink-0"
+                >
+                  <CreditCard className="h-3.5 w-3.5" />
+                  <span>Pay</span>
+                </button>
+              )}
+            </div>
+            <div className="rounded-2xl border border-[#E8E1D4] bg-white p-4">
+              <p className="text-xs text-gray-500">Unpaid / Overdue Bills</p>
+              <p className="mt-1 text-lg font-bold text-amber-700">{unpaidCount} of {residentMetrics.length}</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {activeSubTab === 'outstanding' && (() => {
         const activeOutstanding = invoicesForView.filter((inv) => {

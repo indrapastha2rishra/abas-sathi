@@ -26,6 +26,7 @@ import {
   AuditLog,
   FinancialYearMaster,
   AccountHeadMaster,
+  PropertyUtilityDetails,
   PaymentMode,
 } from '../types/database';
 
@@ -96,7 +97,10 @@ interface AppContextType {
   auditLogs: AuditLog[];
   financialYears: FinancialYearMaster[];
   accountHeads: AccountHeadMaster[];
+  propertyUtilities: PropertyUtilityDetails[];
   users: UserMaster[];
+  isRefreshingData: boolean;
+  refreshActiveData: () => Promise<void>;
 
   // Modals & previews
   previewInvoice: InvoiceRegister | null;
@@ -223,6 +227,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => (initialModules.auditLogs?.data || []) as AuditLog[]);
   const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>(() => (initialModules.financialYears?.data || []) as FinancialYearMaster[]);
   const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>(() => (initialModules.accountHeads?.data || []) as AccountHeadMaster[]);
+  const [propertyUtilities, setPropertyUtilities] = useState<PropertyUtilityDetails[]>(() => (initialModules.propertyUtilityDetails?.data || []) as PropertyUtilityDetails[]);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
+  const forceRefreshRef = useRef(false);
+  const refreshResolversRef = useRef<Array<() => void>>([]);
 
   // Document preview modals
   const [previewInvoice, setPreviewInvoice] = useState<InvoiceRegister | null>(null);
@@ -473,6 +482,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         case 'preventiveMaintenance': setPreventiveMaintenance(normalizedRows as PreventiveMaintenanceMaster[]); break;
         case 'financialYears': setFinancialYears(normalizedRows as FinancialYearMaster[]); break;
         case 'accountHeads': setAccountHeads(normalizedRows as AccountHeadMaster[]); break;
+        case 'propertyUtilityDetails': setPropertyUtilities(normalizedRows as PropertyUtilityDetails[]); break;
         case 'auditLogs': setAuditLogs(normalizedRows as AuditLog[]); break;
         case 'rolePermissions': {
           const freshPermissions = normalizedRows as RolePermissionRecord[];
@@ -494,7 +504,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       payments_record: ['receipts','invoices','properties','owners','ownershipHistory','bankAccounts','billWiseDetails'],
       payments_receipts: ['receipts','invoices','properties','billWiseDetails'], payments_allocation: ['receipts','invoices','billWiseDetails','properties','owners','ownershipHistory'],
       payments_advances: ['receipts','invoices','billWiseDetails','properties'], resident_flat: ['properties','owners','ownershipHistory','propertyUtilityDetails','tenants'],
-      resident_bills: ['invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory','receipts','billWiseDetails'], resident_history: ['receipts','billWiseDetails'],
+      resident_bills: ['properties','owners','ownershipHistory','invoices','receipts','billWiseDetails'], resident_pay: ['invoices','properties','owners','ownershipHistory','receipts','billWiseDetails'], resident_history: ['properties','owners','ownershipHistory','receipts','billWiseDetails','invoices'],
       resident_requests: ['activityRequests','properties','ownershipHistory'], requests_all: ['activityRequests','properties'], requests_pending: ['activityRequests','properties'],
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'],
@@ -507,8 +517,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       reports_balancesheet: ['invoices','receipts','expenses','bankAccounts','accountHeads','financialYears'],
       reports_year_end: ['financialYears','bankAccounts'],
       financial_rv: ['accountHeads','financialYears'], financial_pv: ['accountHeads','financialYears'], financial_jv: ['accountHeads','financialYears'], financial_cv: ['accountHeads','financialYears'],
-      resident_notices: ['notices','gallery','galleryPhotos'], resident_reports: ['properties','owners','ownershipHistory','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
+      resident_notices: ['properties','ownershipHistory','tenants','notices','gallery','galleryPhotos'], resident_reports: ['properties','owners','ownershipHistory','tenants','propertyUtilityDetails','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos'], settings_maintenance: ['preventiveMaintenance','properties'], settings_audit: ['auditLogs']
     };
+    const isForcedRefresh = forceRefreshRef.current;
+    forceRefreshRef.current = false;
     const load = async () => {
       try {
         const permModuleMap: Record<string, string> = {
@@ -520,12 +532,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ratePropertyMapping: 'Maintenance & Invoices', propertyUtilityDetails: 'Properties & Residents',
           financialYears: 'Financial Year Management', accountHeads: 'Account Heads', auditLogs: 'Audit Log',
         };
+        const residentPermAliases: Record<string, string[]> = {
+          properties: ['Properties & Residents', 'My Flat', 'Resident Portal'],
+          owners: ['Owner Management', 'My Flat', 'Resident Portal'],
+          ownershipHistory: ['Ownership History', 'My Flat', 'Resident Portal'],
+          tenants: ['Tenant Management', 'My Flat', 'Resident Portal'],
+          propertyUtilityDetails: ['Properties & Residents', 'My Flat', 'Resident Portal'],
+          invoices: ['Maintenance & Invoices', 'My Bills', 'Pay Now', 'Resident Portal'],
+          receipts: ['Payments', 'Fund Inflow', 'Payment History', 'Pay Now', 'My Bills', 'Resident Portal'],
+          billWiseDetails: ['Bill Wise Details', 'Payments', 'My Bills', 'Payment History', 'Pay Now', 'Resident Portal'],
+          activityRequests: ['Activity Requests', 'Resident Portal'],
+          notices: ['Notices', 'Notices & Gallery', 'Resident Portal'],
+          gallery: ['Gallery', 'Notices & Gallery', 'Resident Portal'],
+          galleryPhotos: ['Gallery', 'Notices & Gallery', 'Resident Portal'],
+        };
         const effectiveRoleForLoad = isResidentMode ? 'Resident' : actualRole;
         const requested = Array.from(new Set([...(modulePlan[activeTab] || []), 'rolePermissions'])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(activeRole)) && (key !== 'expenses' || activeRole !== 'Resident'));
         const permittedRequested = requested.filter(key => {
           if (key === 'auditLogs' && !['Admin','Accountant'].includes(activeRole)) return false;
           if (key === 'rolePermissions') return true;
           if (rolePermissions.length === 0) return true;
+          if (effectiveRoleForLoad === 'Resident') {
+            const candidates = residentPermAliases[key];
+            if (candidates) {
+              return candidates.some(m => permissionGranted(rolePermissions, 'Resident', m, 'Can_View'));
+            }
+          }
           const modName = permModuleMap[key];
           if (!modName) return true;
           if (key === 'receipts') {
@@ -631,7 +663,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const dashCoreModules = activeRole === 'Resident'
             ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos']
             : ['properties','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
-          const allDashWarm = dashCoreModules.every((mod) => {
+          const allDashWarm = !isForcedRefresh && dashCoreModules.every((mod) => {
             const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
             return c && Date.now() - c.at < readCacheTtlMs;
           });
@@ -640,7 +672,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           const dashDataPromise = allDashWarm
             ? Promise.resolve()
-            : apiCall<any>('getRoleDashboardData', { viewAsResident: isResidentMode })
+            : apiCall<any>('getRoleDashboardData', { viewAsResident: isResidentMode, ...(isForcedRefresh ? { refresh: true } : {}) })
                 .then((result) => {
                   const entries = Object.entries(result.data || {});
                   const now = Date.now();
@@ -709,7 +741,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Progressive per-module loading: each screen updates as soon as each module resolves.
           const tasks = permittedRequested.map((mod) => {
             if (mod === 'rolePermissions') return loadPermissionsFast();
-            return loadOne(mod)
+            return loadOne(mod, isForcedRefresh)
               .then((rows) => applyModuleRows(mod, rows))
               .catch((err) => {
                 console.error('ABAS SATHI module load error', { module: mod, role: activeRole, error: String(err || 'Unknown error') });
@@ -728,11 +760,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clearAllUserDataCaches();
           localStorage.removeItem('abasSathiSession'); window.location.reload();
         }
+      } finally {
+        if (!cancelled) setIsRefreshingData(false);
+        const pendingResolvers = refreshResolversRef.current.splice(0);
+        pendingResolvers.forEach((resolve) => resolve());
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [googleConfig.appsScriptWebAppUrl, activeTab, activeRole, isResidentMode]);
+  }, [googleConfig.appsScriptWebAppUrl, activeTab, activeRole, isResidentMode, refreshNonce]);
+
+  const refreshActiveData = async () => {
+    let session: any = {};
+    try { session = JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch {}
+    if (!session.token) return;
+    const sessionRole = normalizeAuthRole(session.user?.role) || session.user?.role;
+    const scopeKey = buildScopeKey(session.societyCode, session.user?.userId, sessionRole, isResidentMode);
+    for (const key of Array.from(moduleDataCache.current.keys())) {
+      if (key.startsWith(`${scopeKey}:`)) moduleDataCache.current.delete(key);
+    }
+    invalidateScopedSnapshotModules(scopeKey);
+    forceRefreshRef.current = true;
+    setIsRefreshingData(true);
+    await new Promise<void>((resolve) => {
+      refreshResolversRef.current.push(resolve);
+      setRefreshNonce((n) => n + 1);
+    });
+  };
 
   // Helper to add audit log
   const logAction = (action: AuditLog['Action_Type'], module: string, recordId: string, oldVal: string, newVal: string, remarks: string) => {
@@ -753,7 +807,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Find resident's property
   const residentProperty = currentUser.PropertyID
-    ? properties.find((p) => String(p.PropertyID || '').trim() === String(currentUser.PropertyID || '').trim()) || null
+    ? properties.find((p) => String(p.PropertyID || '').trim().toUpperCase() === String(currentUser.PropertyID || '').trim().toUpperCase()) || null
     : (activeRole === 'Resident' ? null : (properties[0] || null));
 
   const switchUser = (userId: string) => {
@@ -769,7 +823,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser.PropertyID || currentUser.Ownership_ID || ownerships.length === 0) return;
     const match = ownerships.find(
       (o) =>
-        String(o.PropertyID || '').trim() === String(currentUser.PropertyID || '').trim() &&
+        String(o.PropertyID || '').trim().toUpperCase() === String(currentUser.PropertyID || '').trim().toUpperCase() &&
         String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
     );
     if (match?.Ownership_ID) {
@@ -820,6 +874,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (tab === 'profile') return true;
     if (tab === 'settings_role_permissions') return actualRole === 'Admin';
     if (tab === 'settings_master') return activeRole !== 'Resident' && actualRole !== 'Resident' && ['Account Heads','Financial Year Management','Bank Accounts','Properties & Residents','Owner Management','Expenses'].some(m=>hasPermission(m,'Can_View'));
+    const effectiveRole = isResidentMode ? 'Resident' : actualRole;
+    if (effectiveRole === 'Resident') {
+      const residentAliases: Record<string, string[]> = {
+        dashboard: ['Dashboard', 'Resident Portal'],
+        resident_flat: ['My Flat', 'Properties & Residents'],
+        resident_bills: ['My Bills', 'Maintenance & Invoices'],
+        resident_pay: ['Pay Now', 'Payments'],
+        resident_history: ['Payment History', 'Payments', 'Fund Inflow'],
+        resident_requests: ['Activity Requests'],
+        resident_notices: ['Notices & Gallery', 'Notices', 'Gallery'],
+        resident_reports: ['Resident Portal', 'Reports', 'My Bills'],
+      };
+      const candidates = residentAliases[tab];
+      if (candidates) {
+        const reqAction = actionForTab(tab);
+        return candidates.some((m) => hasPermission(m, 'Can_View') && hasPermission(m, reqAction));
+      }
+    }
     const moduleName = moduleForTab(tab);
     return moduleName ? hasPermission(moduleName, 'Can_View') && hasPermission(moduleName, actionForTab(tab)) : false;
   };
@@ -908,18 +980,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): Promise<FundInflowRegister> => {
     const prop =
       (params.propertyId
-        ? properties.find(p => String(p.PropertyID || '').trim() === String(params.propertyId).trim())
+        ? properties.find(p => String(p.PropertyID || '').trim().toUpperCase() === String(params.propertyId).trim().toUpperCase())
         : null) ||
       residentProperty ||
       properties[0];
     if (!prop) throw new Error('No property is linked to this account.');
     const ownership =
+      (activeRole === 'Resident' && currentUser.Ownership_ID
+        ? ownerships.find(
+            o =>
+              String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase() &&
+              String(o.Ownership_ID || '').trim().toUpperCase() === String(currentUser.Ownership_ID || '').trim().toUpperCase()
+          )
+        : undefined) ||
       ownerships.find(
         o =>
-          String(o.PropertyID || '').trim() === String(prop.PropertyID || '').trim() &&
+          String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase() &&
           String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
       ) ||
-      ownerships.find(o => String(o.PropertyID || '').trim() === String(prop.PropertyID || '').trim());
+      ownerships.find(o => String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase());
     if (!ownership) throw new Error('Current ownership record is not available.');
     const result: any = await apiCall('submitPayment', {
       propertyId: prop.PropertyID, ownershipId: ownership.Ownership_ID,
@@ -1004,9 +1083,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): Promise<ActivityRequestRegister> => {
     const prop = residentProperty || properties[0];
     if (!prop) throw new Error('No property is linked to this account.');
-    const own = ownerships.find(o => o.PropertyID === prop.PropertyID && o.Ownership_Status === 'Current');
-    if (!own) throw new Error('Current ownership record not found.');
-    const record = { PropertyID: prop.PropertyID, Ownership_ID: own.Ownership_ID,
+    const own =
+      (currentUser.Ownership_ID
+        ? ownerships.find(
+            o =>
+              String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase() &&
+              String(o.Ownership_ID || '').trim().toUpperCase() === String(currentUser.Ownership_ID || '').trim().toUpperCase()
+          )
+        : undefined) ||
+      ownerships.find(
+        o =>
+          String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase() &&
+          String(o.Ownership_Status || '').trim().toLowerCase() === 'current'
+      ) ||
+      ownerships.find(
+        o => String(o.PropertyID || '').trim().toUpperCase() === String(prop.PropertyID || '').trim().toUpperCase()
+      );
+    const ownershipIdToUse = own?.Ownership_ID || currentUser.Ownership_ID || '';
+    if (!ownershipIdToUse) throw new Error('Current ownership record not found.');
+    const record = { PropertyID: prop.PropertyID, Ownership_ID: ownershipIdToUse,
       Requested_By: currentUser.UserID, Request_Date: new Date().toISOString().slice(0,10),
       Request_Category: params.category, Subject: params.subject, Description: params.description,
       Priority: params.priority, Attachment: params.attachment || '', Assigned_To: 'Pending Assignment',
@@ -1075,7 +1170,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         auditLogs,
         financialYears,
         accountHeads,
+        propertyUtilities,
         users,
+        isRefreshingData,
+        refreshActiveData,
         previewInvoice,
         setPreviewInvoice,
         previewReceipt,

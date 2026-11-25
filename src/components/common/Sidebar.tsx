@@ -10,15 +10,15 @@ type NavGroup={id:string;label:string;icon:any;items:NavItem[]};
 export const Sidebar:React.FC<Props> = ({isOpen,onClose}) => {
   const {activeRole,actualRole,activeTab,setActiveTab,t,hasPermission} = useApp();
   const nav=(id:string)=>{setActiveTab(id);if(window.innerWidth<768)onClose();};
-  const residentItems:NavItem[]=[
-    {id:'dashboard',label:t.navDashboard,module:'Dashboard',icon:LayoutDashboard},
-    {id:'resident_flat',label:t.navMyFlat,module:'My Flat',icon:Home},
-    {id:'resident_bills',label:t.navMyBills,module:'My Bills',icon:Receipt},
-    {id:'resident_pay',label:t.navPayNow,module:'Pay Now',action:'Can_Create',icon:CreditCard},
-    {id:'resident_history',label:t.navPaymentHistory,module:'Payment History',icon:Clock},
+  const residentItems:(NavItem&{aliases?:string[]})[]=[
+    {id:'dashboard',label:t.navDashboard,module:'Dashboard',aliases:['Resident Portal'],icon:LayoutDashboard},
+    {id:'resident_flat',label:t.navMyFlat,module:'My Flat',aliases:['Properties & Residents'],icon:Home},
+    {id:'resident_bills',label:t.navMyBills,module:'My Bills',aliases:['Maintenance & Invoices'],icon:Receipt},
+    {id:'resident_pay',label:t.navPayNow,module:'Pay Now',aliases:['Payments'],action:'Can_Create',icon:CreditCard},
+    {id:'resident_history',label:t.navPaymentHistory,module:'Payment History',aliases:['Payments','Fund Inflow'],icon:Clock},
     {id:'resident_requests',label:t.navActivityRequests,module:'Activity Requests',icon:Wrench},
-    {id:'resident_notices',label:t.navNoticesGallery,module:'Notices & Gallery',icon:Image},
-    {id:'resident_reports',label:'My Reports',module:'Resident Portal',icon:BarChart3}
+    {id:'resident_notices',label:t.navNoticesGallery,module:'Notices & Gallery',aliases:['Notices','Gallery'],icon:Image},
+    {id:'resident_reports',label:t.navMyReports,module:'Resident Portal',aliases:['Reports','My Bills'],icon:BarChart3}
   ];
   const groups:NavGroup[]=[
     {id:'properties',label:t.navPropertiesResidents,icon:Building2,items:[{id:'properties_all',label:t.navAllProperties,module:'Properties & Residents'},{id:'properties_owners',label:t.navOwnerDirectory,module:'Owner Management'},{id:'properties_history',label:t.navOwnershipHistory,module:'Ownership History'},{id:'properties_tenants',label:t.navTenantDetails,module:'Tenant Management'}]},
@@ -30,7 +30,7 @@ export const Sidebar:React.FC<Props> = ({isOpen,onClose}) => {
     {id:'reports',label:t.navReports,icon:BarChart3,items:[{id:'reports_monthly',label:t.navMonthlyReceiptPayment,module:'Reports'},{id:'reports_property_due',label:t.navPropertyOutstanding,module:'Reports'},{id:'reports_ownership_due',label:t.navOwnershipOutstanding,module:'Reports'},{id:'reports_year_end',label:'Year-End Closing & Carry Forward',module:'Reports',action:'Can_Create'},{id:'reports_balancesheet',label:t.navBalanceSheet,module:'Reports'}]},
     {id:'settings',label:t.navSettings,icon:Settings,items:[{id:'settings_google',label:'Google Backend Setup',module:'Settings'},{id:'settings_users',label:t.navUserManagement,module:'User Management'},{id:'settings_role_permissions',label:'Role Permission Management',module:'Role Permission Management'},{id:'settings_maintenance',label:t.navPreventiveMaintenance,module:'Preventive Maintenance'},{id:'settings_audit',label:t.navAuditLog,module:'Audit Log'}]}
   ];
-  const visibleResident=residentItems.filter(item=>hasPermission(item.module,'Can_View')&&hasPermission(item.module,item.action||'Can_View'));
+  const visibleResident=residentItems.filter(item=>{const mods=[item.module,...(item.aliases||[])];const reqAction=item.action||'Can_View';return mods.some(m=>hasPermission(m,'Can_View')&&hasPermission(m,reqAction));});
   const visibleGroups=groups.map(g=>({...g,items:g.items.filter(i=>hasPermission(i.module,'Can_View')&&hasPermission(i.module,i.action||'Can_View'))})).filter(g=>g.items.length>0);
   const visibleDashboard=hasPermission('Dashboard','Can_View');
 

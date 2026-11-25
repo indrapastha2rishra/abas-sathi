@@ -11,9 +11,9 @@ import { Printer, X, CheckCircle2 } from 'lucide-react';
 export const ReceiptPrintModal: React.FC = () => {
   const { previewReceipt, setPreviewReceipt, billAllocations, t, activeRole, residentProperty } = useApp();
 
-  if (!previewReceipt || previewReceipt.Receipt_Status !== 'Confirmed' || !previewReceipt.Receipt_Number) return null;
+  if (!previewReceipt || String(previewReceipt.Receipt_Status || '').trim().toLowerCase() !== 'confirmed' || !previewReceipt.Receipt_Number) return null;
 
-  const allocations = billAllocations.filter((a) => a.Transaction_ID === previewReceipt.Transaction_ID && (activeRole !== 'Resident' || a.PropertyID === residentProperty?.PropertyID));
+  const allocations = billAllocations.filter((a) => String(a.Transaction_ID || '').trim() === String(previewReceipt.Transaction_ID || '').trim() && (activeRole !== 'Resident' || String(a.PropertyID || '').trim().toUpperCase() === String(residentProperty?.PropertyID || '').trim().toUpperCase()));
 
   const handlePrint = () => {
     window.print();

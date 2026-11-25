@@ -78,6 +78,7 @@ export const translations = {
     navRaiseRequest: 'Raise Service Request',
     navMyRequests: 'My Requests',
     navNoticesGallery: 'Notices & Gallery',
+    navMyReports: 'My Reports',
 
     // Common Actions
     actionSearch: 'Search...',
@@ -213,6 +214,7 @@ export const translations = {
     navRaiseRequest: 'নতুন রিকোয়েস্ট পাঠান',
     navMyRequests: 'আমার রিকোয়েস্টসমূহ',
     navNoticesGallery: 'নোটিশ ও সোসাইটি গ্যালারি',
+    navMyReports: 'আমার রিপোর্ট',
 
     // Common Actions
     actionSearch: 'অনুসন্ধান করুন...',
