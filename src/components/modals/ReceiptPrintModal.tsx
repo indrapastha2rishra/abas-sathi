@@ -9,7 +9,10 @@ import { formatDateDisplay } from '../../utils/dateFormat';
 import { Printer, X, CheckCircle2 } from 'lucide-react';
 
 export const ReceiptPrintModal: React.FC = () => {
-  const { previewReceipt, setPreviewReceipt, billAllocations, t, activeRole, residentProperty } = useApp();
+  const { previewReceipt, setPreviewReceipt, billAllocations, t, activeRole, residentProperty, societySettings } = useApp();
+
+  const societyName = societySettings.societyName || '[Society Name]';
+  const societyAddress = societySettings.societyAddress || '[Society Address]';
 
   if (!previewReceipt || String(previewReceipt.Receipt_Status || '').trim().toLowerCase() !== 'confirmed' || !previewReceipt.Receipt_Number) return null;
 
@@ -20,10 +23,10 @@ export const ReceiptPrintModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto no-print backdrop-blur-xs">
-      <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden border border-[#E8E1D4] my-8 animate-in fade-in zoom-in-95 duration-200">
+    <div data-testid="receipt-print-modal" className="invoice-print-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 overflow-y-auto backdrop-blur-xs print:static print:bg-transparent print:p-0 print:overflow-visible">
+      <div className="relative w-full max-w-2xl max-h-[92vh] flex flex-col rounded-2xl bg-white shadow-2xl overflow-hidden border border-[#E8E1D4] animate-in fade-in zoom-in-95 duration-200 print:max-h-none print:shadow-none print:border-none print:overflow-visible">
         {/* Modal Controls Header */}
-        <div className="flex items-center justify-between border-b border-[#E8E1D4] bg-[#F7F4EC] px-6 py-4">
+        <div className="invoice-print-controls shrink-0 flex items-center justify-between border-b border-[#E8E1D4] bg-[#F7F4EC] px-6 py-4">
           <div className="flex items-center gap-2">
             <span className="h-3 w-3 rounded-full bg-emerald-600"></span>
             <span className="font-semibold text-[#29352D] text-sm md:text-base">
@@ -49,25 +52,15 @@ export const ReceiptPrintModal: React.FC = () => {
         </div>
 
         {/* Printable Money Receipt Document Body */}
-        <div className="p-8 md:p-10 bg-white text-[#29352D] print:p-0">
+        <div className="p-6 md:p-8 bg-white text-[#29352D] overflow-y-auto flex-1 print:p-0 print:overflow-visible">
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-start justify-between border-b-2 border-emerald-700 pb-5 gap-4">
             <div>
-              <div className="flex items-center gap-2">
-                <div className="w-10 h-10 rounded-xl bg-emerald-700 flex items-center justify-center text-white font-bold text-lg shadow-sm">
-                  AS
-                </div>
-                <div>
-                  <h1 className="text-xl font-bold tracking-tight text-[#29352D]">
-                    {t.appNameBengali} / {t.appName}
-                  </h1>
-                  <p className="text-xs font-medium text-[#C97958]">{t.tagline}</p>
-                </div>
-              </div>
-              <p className="mt-2 text-xs text-[#29352D]/80">
-                {t.apartmentName}
-                <br />
-                {t.apartmentAddress}
+              <h1 className="text-xl font-bold tracking-tight text-[#29352D]">
+                {societyName}
+              </h1>
+              <p className="mt-1.5 text-xs text-[#29352D]/80 max-w-sm whitespace-pre-line">
+                {societyAddress}
               </p>
             </div>
             <div className="text-left md:text-right">
@@ -150,7 +143,7 @@ export const ReceiptPrintModal: React.FC = () => {
             <div className="text-center">
               <div className="w-32 border-b border-gray-400 mb-1"></div>
               <p className="font-semibold text-[#29352D]">Authorized Signatory</p>
-              <p className="text-[10px]">Abas Sathi Housing Society RWA</p>
+              <p className="text-[10px]">{societyName}</p>
             </div>
           </div>
         </div>

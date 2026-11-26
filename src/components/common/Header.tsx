@@ -33,15 +33,14 @@ export const Header: React.FC<Props> = ({ onToggleSidebar }) => {
     activityRequests,
     receipts,
     setActiveTab,
+    societySettings,
   } = useApp();
 
   const [residentModeNotice, setResidentModeNotice] = useState('');
-  const [society] = useState(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
-      return { name: u.societyName || '', address: u.societyAddress || '' };
-    } catch { return { name: '', address: '' }; }
-  });
+  const society = {
+    name: societySettings.societyName || '',
+    address: societySettings.societyAddress || '',
+  };
   const signOut = () => {
     const session = (() => { try { return JSON.parse(localStorage.getItem('abasSathiSession') || '{}'); } catch { return {}; } })();
     // Start server-side token revocation before navigating away. keepalive allows

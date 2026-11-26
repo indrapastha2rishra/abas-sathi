@@ -51,6 +51,13 @@ export interface GoogleBackendConfig {
   appsScriptWebAppUrl: string;
 }
 
+export interface SocietySettings {
+  societyCode: string;
+  societyName: string;
+  societyAddress: string;
+  societyRegistrationNo: string;
+}
+
 interface AppContextType {
   language: Language;
   setLanguage: (lang: Language) => void;
@@ -157,9 +164,11 @@ interface AppContextType {
 
   createNotice: (notice: Omit<NoticeMaster, 'Notice_ID' | 'Notice_Number' | 'Created_At' | 'Created_By'>) => Promise<void>;
 
-  // Backend settings
+  // Backend & society settings
   googleConfig: GoogleBackendConfig;
   updateGoogleConfig: (config: Partial<GoogleBackendConfig>) => void;
+  societySettings: SocietySettings;
+  updateSocietySettings: (settings: Partial<SocietySettings>) => Promise<SocietySettings>;
   uploadPrivateFile: (file: File, category: string, propertyId?: string, ownerId?: string, relatedModule?: string, relatedRecordId?: string) => Promise<{fileId:string;fileName:string;mimeType:string}>;
   createModuleRecord: (module: string, record: Record<string, unknown>) => Promise<any>;
   updateModuleRecord: (module: string, recordId: string, record: Record<string, unknown>) => Promise<any>;
@@ -228,6 +237,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [financialYears, setFinancialYears] = useState<FinancialYearMaster[]>(() => (initialModules.financialYears?.data || []) as FinancialYearMaster[]);
   const [accountHeads, setAccountHeads] = useState<AccountHeadMaster[]>(() => (initialModules.accountHeads?.data || []) as AccountHeadMaster[]);
   const [propertyUtilities, setPropertyUtilities] = useState<PropertyUtilityDetails[]>(() => (initialModules.propertyUtilityDetails?.data || []) as PropertyUtilityDetails[]);
+  const [societySettings, setSocietySettings] = useState<SocietySettings>(() => {
+    try {
+      const s = initialSession || {};
+      const summaryCacheKey = s.societyCode && s.user?.userId ? `abasSathiDashboardSummary:${s.societyCode}:${s.user.userId}` : '';
+      const cachedSummary = summaryCacheKey ? JSON.parse(sessionStorage.getItem(summaryCacheKey) || 'null') : null;
+      const soc = cachedSummary?.society || {};
+      return {
+        societyCode: String(soc.societyCode || s.societyCode || '').trim(),
+        societyName: String(soc.societyName || s.societyName || '').trim(),
+        societyAddress: String(soc.societyAddress || s.societyAddress || '').trim(),
+        societyRegistrationNo: String(soc.societyRegistrationNo || s.societyRegistrationNo || '').trim(),
+      };
+    } catch {
+      return { societyCode: '', societyName: '', societyAddress: '', societyRegistrationNo: '' };
+    }
+  });
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [isRefreshingData, setIsRefreshingData] = useState(false);
   const forceRefreshRef = useRef(false);
@@ -280,6 +305,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return next;
     });
+  };
+
+  const syncSocietyToSession = (next: SocietySettings) => {
+    try {
+      const latest = JSON.parse(localStorage.getItem('abasSathiSession') || '{}');
+      if (latest.token) {
+        latest.societyCode = next.societyCode || latest.societyCode || '';
+        latest.societyName = next.societyName;
+        latest.societyAddress = next.societyAddress;
+        latest.societyRegistrationNo = next.societyRegistrationNo;
+        localStorage.setItem('abasSathiSession', JSON.stringify(latest));
+      }
+    } catch {}
+  };
+
+  const updateSocietySettings = async (patch: Partial<SocietySettings>): Promise<SocietySettings> => {
+    const payload = {
+      societyName: String(patch.societyName ?? societySettings.societyName ?? '').trim(),
+      societyAddress: String(patch.societyAddress ?? societySettings.societyAddress ?? '').trim(),
+      societyRegistrationNo: String(patch.societyRegistrationNo ?? societySettings.societyRegistrationNo ?? '').trim(),
+    };
+    const result: any = await apiCall('updateSocietySettings', payload);
+    const serverSoc = result?.society || {};
+    const next: SocietySettings = {
+      societyCode: String(serverSoc.societyCode || societySettings.societyCode || '').trim(),
+      societyName: String(serverSoc.societyName ?? payload.societyName).trim(),
+      societyAddress: String(serverSoc.societyAddress ?? payload.societyAddress).trim(),
+      societyRegistrationNo: String(serverSoc.societyRegistrationNo ?? payload.societyRegistrationNo).trim(),
+    };
+    setSocietySettings(next);
+    syncSocietyToSession(next);
+    return next;
   };
 
   const t = translations[language];
@@ -509,7 +566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       expenses_add: ['expenses','expenseCategories','bankAccounts'], expenses_register: ['expenses','expenseCategories','bankAccounts'],
       expenses_categories: ['expenseCategories','expenses','bankAccounts'],
       reports_monthly: ['invoices','receipts','expenses','properties','owners','billWiseDetails','bankAccounts','financialYears'],
-      reports_fy: ['invoices','receipts','expenses','properties','owners','billWiseDetails','bankAccounts','financialYears'],
+      reports_fy: ['invoices','receipts','expenses','properties','owners','billWiseDetails','bankAccounts','financialYears','rates'],
       reports_expense_summary: ['expenses','expenseCategories','bankAccounts'],
       reports_property_due: ['invoices','receipts','billWiseDetails','properties','owners','ownershipHistory'],
       reports_owner_due: ['invoices','receipts','billWiseDetails','properties','owners','ownershipHistory'],
@@ -660,9 +717,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (activeTab === 'dashboard') {
           // Check if dashboard modules are already warm (<30s); otherwise fetch getRoleDashboardData once and populate all module caches.
-          const dashCoreModules = activeRole === 'Resident'
+          const dashCoreCandidates = activeRole === 'Resident'
             ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos']
-            : ['properties','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
+            : ['properties','tenants','invoices','receipts','billWiseDetails','expenses','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
+          const dashCoreModules = rolePermissions.length > 0
+            ? dashCoreCandidates.filter((mod) => permittedRequested.includes(mod))
+            : dashCoreCandidates;
           const allDashWarm = !isForcedRefresh && dashCoreModules.every((mod) => {
             const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
             return c && Date.now() - c.at < readCacheTtlMs;
@@ -699,7 +759,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           let hasFreshSummary = false;
           try {
             const cachedSummary = JSON.parse(sessionStorage.getItem(summaryCacheKey) || 'null');
-            if (cachedSummary && Date.now() - Number(cachedSummary.at || 0) < 60000) hasFreshSummary = true;
+            if (cachedSummary && Date.now() - Number(cachedSummary.at || 0) < 60000) {
+              hasFreshSummary = true;
+              if (cachedSummary.society && !cancelled) {
+                const nextSoc: SocietySettings = {
+                  societyCode: String(cachedSummary.society.societyCode || session.societyCode || '').trim(),
+                  societyName: String(cachedSummary.society.societyName || session.societyName || '').trim(),
+                  societyAddress: String(cachedSummary.society.societyAddress || session.societyAddress || '').trim(),
+                  societyRegistrationNo: String(cachedSummary.society.societyRegistrationNo || session.societyRegistrationNo || '').trim(),
+                };
+                setSocietySettings(nextSoc);
+              }
+            }
           } catch {}
           const summaryPromise = hasFreshSummary
             ? Promise.resolve()
@@ -707,6 +778,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 apiCall<any>('getDashboardSummary', { viewAsResident: isResidentMode })
                   .then((result) => {
                     try { sessionStorage.setItem(summaryCacheKey, JSON.stringify({ at: Date.now(), summary: result.summary || {}, society: result.society || {} })); } catch {}
+                    if (result.society && !cancelled) {
+                      const nextSoc: SocietySettings = {
+                        societyCode: String(result.society.societyCode || session.societyCode || '').trim(),
+                        societyName: String(result.society.societyName || session.societyName || '').trim(),
+                        societyAddress: String(result.society.societyAddress || session.societyAddress || '').trim(),
+                        societyRegistrationNo: String(result.society.societyRegistrationNo || session.societyRegistrationNo || '').trim(),
+                      };
+                      setSocietySettings(nextSoc);
+                      syncSocietyToSession(nextSoc);
+                    }
                     console.info('ABAS SATHI dashboard summary timing', { role: activeRole, status: result.status || 'unknown' });
                   })
                   .catch((err) => {
@@ -780,6 +861,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (key.startsWith(`${scopeKey}:`)) moduleDataCache.current.delete(key);
     }
     invalidateScopedSnapshotModules(scopeKey);
+    clearFundBalanceCache(session.societyCode, session.user?.userId);
     forceRefreshRef.current = true;
     setIsRefreshingData(true);
     await new Promise<void>((resolve) => {
@@ -1192,6 +1274,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createNotice,
         googleConfig,
         updateGoogleConfig,
+        societySettings,
+        updateSocietySettings,
         uploadPrivateFile,
         createModuleRecord,
         updateModuleRecord,

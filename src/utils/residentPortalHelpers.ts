@@ -133,7 +133,11 @@ export function filterResidentGalleryEvents(
   return buildActiveGalleryEvents(visibleGallery, galleryPhotos);
 }
 
-export function sortResidentInvoicesNewestFirst<T extends Partial<InvoiceRegister>>(invoices: T[]): T[] {
+export type SortableInvoiceLike = Omit<Partial<InvoiceRegister>, 'Invoice_Status'> & {
+  Invoice_Status?: InvoiceRegister['Invoice_Status'] | string;
+};
+
+export function sortResidentInvoicesNewestFirst<T extends SortableInvoiceLike>(invoices: T[]): T[] {
   return [...(invoices || [])].sort((a, b) => {
     const dateA =
       toReportDateKey(a.Billing_Date) ||
@@ -320,8 +324,8 @@ export interface ResidentStatementRow {
 }
 
 export function buildResidentStatementLedger(
-  invoices: InvoiceRegister[],
-  receipts: FundInflowRegister[],
+  invoices: SortableInvoiceLike[],
+  receipts: Array<Partial<FundInflowRegister>>,
   options: { fromDate?: string; toDate?: string } = {}
 ) {
   const excludedInv = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);

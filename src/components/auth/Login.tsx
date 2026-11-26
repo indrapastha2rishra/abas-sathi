@@ -226,6 +226,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
         user: sessionUser,
         societyName: result.user.societyName || '',
         societyAddress: result.user.societyAddress || '',
+        societyRegistrationNo: result.user.societyRegistrationNo || '',
         societyCode: code,
       };
 

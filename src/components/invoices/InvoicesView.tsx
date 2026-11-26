@@ -427,7 +427,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                           <button onClick={() => setPreviewInvoice(inv as any)} className="flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer">
                             <Printer className="h-3.5 w-3.5" /><span>View</span>
                           </button>
-                          {activeRole==='Admin'&&hasPermission('Maintenance & Invoices','Can_Delete')&&inv.Invoice_Status!=='Cancelled'&&Number(inv.Paid_Amount||0)===0&&<button onClick={async()=>{const reason=window.prompt('Invoice cancellation reason:');if(!reason?.trim())return;try{await cancelInvoice(inv.InvoiceID,reason);}catch(e:any){window.alert(e?.message||'Invoice cancellation failed.');}}} className="text-xs font-semibold text-red-700 hover:underline">Cancel</button>}
+                          {activeRole==='Admin'&&hasPermission('Maintenance & Invoices','Can_Delete')&&inv.Invoice_Status!=='Cancelled'&&Number(inv.Paid_Amount||0)===0&&inv.InvoiceID&&<button onClick={async()=>{const reason=window.prompt('Invoice cancellation reason:');if(!reason?.trim()||!inv.InvoiceID)return;try{await cancelInvoice(inv.InvoiceID,reason);}catch(e:any){window.alert(e?.message||'Invoice cancellation failed.');}}} className="text-xs font-semibold text-red-700 hover:underline">Cancel</button>}
                         </div>
                       </td>
                     </tr>

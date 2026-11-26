@@ -77,8 +77,14 @@ test('computePropertyOutstandingRows uses confirmed receipts + bill allocations 
         Invoice_Status: 'Paid',
       } as any,
     ],
-    receipts: [{ Transaction_ID: 'TXN-1', Receipt_Status: 'Confirmed' } as any],
-    billAllocations: [{ Transaction_ID: 'TXN-1', InvoiceID: 'INV-1', Allocated_Amount: 1000 } as any],
+    receipts: [
+      { Transaction_ID: 'TXN-1', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-2', Receipt_Status: 'Confirmed' } as any,
+    ],
+    billAllocations: [
+      { Transaction_ID: 'TXN-1', InvoiceID: 'INV-1', Allocated_Amount: 1000 } as any,
+      { Transaction_ID: 'TXN-2', InvoiceID: 'INV-2', Allocated_Amount: 2500 } as any,
+    ],
   });
 
   const p1 = rows.find((r) => r.propertyId === 'P1')!;
@@ -91,7 +97,7 @@ test('computePropertyOutstandingRows uses confirmed receipts + bill allocations 
   assert.equal(p2.status, 'Clear');
 });
 
-test('computeOwnerOutstandingRows and computeOwnershipOutstandingClient aggregate properly', () => {
+test('computeOwnerOutstandingRows and computeOwnershipOutstandingClient aggregate properly and treat unallocated as 0 paid', () => {
   const invoices = [
     {
       InvoiceID: 'I1',
@@ -120,8 +126,8 @@ test('computeOwnerOutstandingRows and computeOwnershipOutstandingClient aggregat
   ];
   const ownerRows = computeOwnerOutstandingRows({
     invoices,
-    receipts: [],
-    billAllocations: [],
+    receipts: [{ Transaction_ID: 'TXN-A', Receipt_Status: 'Confirmed' } as any],
+    billAllocations: [{ Transaction_ID: 'TXN-A', InvoiceID: 'I1', Ownership_ID: 'OSH-1', Allocated_Amount: 500 } as any],
     owners: [{ OwnerID: 'O1', Owner_Name: 'Owner One' } as any],
     properties: [],
   });
@@ -129,9 +135,10 @@ test('computeOwnerOutstandingRows and computeOwnershipOutstandingClient aggregat
   assert.equal(ownerRows[0].Property_Count, 2);
   assert.equal(ownerRows[0].Outstanding, 2500);
 
+  // When Bill Wise Details has no allocations, Paid is strictly 0 (ignores Fund Inflow / legacy Paid_Amount)
   const ownershipRes = computeOwnershipOutstandingClient({
     invoices,
-    receipts: [],
+    receipts: [{ Transaction_ID: 'TXN-UNALLOC', Receipt_Status: 'Confirmed', Received_Amount: 900 } as any],
     billAllocations: [],
     ownerships: [{ Ownership_ID: 'OSH-1', Ownership_Status: 'Current', Ownership_Start_Date: '2025-04-01' } as any],
     properties: [],
@@ -139,7 +146,8 @@ test('computeOwnerOutstandingRows and computeOwnershipOutstandingClient aggregat
   });
   assert.equal(ownershipRes.summary.ownershipCount, 2);
   assert.equal(ownershipRes.summary.unlinkedInvoiceCount, 1);
-  assert.equal(ownershipRes.summary.totalOutstanding, 2500);
+  assert.equal(ownershipRes.data.find((d) => d.Ownership_ID === 'OSH-1')?.Total_Paid, 0);
+  assert.equal(ownershipRes.summary.totalOutstanding, 3000);
 });
 
 test('resolveFYRangeForMonth matches Financial Year Master or Indian FY fallback', () => {

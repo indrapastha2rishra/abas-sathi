@@ -354,7 +354,7 @@ export const ActivityRequestsView: React.FC = () => {
                 {req.Completion_Proof && (
                   <button
                     type="button"
-                    onClick={() => void handleOpenAttachment(req.Completion_Proof, req.PropertyID)}
+                    onClick={() => void handleOpenAttachment(req.Completion_Proof || '', req.PropertyID || undefined)}
                     className="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:underline cursor-pointer"
                   >
                     <Download className="h-3.5 w-3.5" />

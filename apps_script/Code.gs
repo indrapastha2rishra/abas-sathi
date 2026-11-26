@@ -102,7 +102,8 @@ function doPost(e) {
       case "restoreSocietyBackup": return restoreSocietyBackup_(session, body);
       case "listSocietyBackups": return listSocietyBackups_(session, body);
       case "listRecoveryOperations": return listRecoveryOperations_(session, body);
-      case "getMyProfile": return json_({status:"success",profile:publicUser_(getUserRow_(session))});
+      case "getMyProfile": return json_({status:"success",profile:publicUser_(getUserRow_(session)),society:liveSocietyPublic_(session)});
+      case "updateSocietySettings": return updateSocietySettings_(session,body);
       case "adminCreateUser": return adminCreateUser_(session,body);
       case "adminListUsers": return adminListUsers_(session);
       case "adminUpdateUser": return adminUpdateUser_(session,body);
@@ -396,6 +397,8 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
   // Sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
   const allocatedByOwnership = {};
   (billRows || []).forEach(b => {
+    const allocStatus = String(b.Allocation_Status || b.Status || "").trim().toLowerCase();
+    if (allocStatus && ["cancelled","canceled","rejected","void","reversed"].indexOf(allocStatus) >= 0) return;
     const txnId = String(b.Transaction_ID || "").trim();
     if (txnId && Object.prototype.hasOwnProperty.call(receiptStatusByTxn, txnId) && receiptStatusByTxn[txnId] !== "confirmed") {
       return;
@@ -408,7 +411,7 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
     allocatedByOwnership[resolvedKey] = fundMoney_((allocatedByOwnership[resolvedKey] || 0) + Math.max(0, fundMoney_(b.Allocated_Amount)));
   });
 
-  const useBillWiseAllocations = Array.isArray(billRows) && billRows.length > 0;
+  const useBillWiseAllocations = Array.isArray(billRows);
   let unlinkedInvoiceCount = 0;
 
   const data = Object.keys(grouped).map(key => {
@@ -624,12 +627,10 @@ function finalizeYearEndClosing_(session,body){
 }
 
 function invoiceDueDetails_(invoiceRows, receiptRows, billRows) {
-  const confirmedTxn = {};
+  const receiptStatusByTxn = {};
   (receiptRows || []).forEach(r => {
     const txnId = String(r.Transaction_ID || "").trim();
-    if (String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed" && txnId) {
-      confirmedTxn[txnId] = true;
-    }
+    if (txnId) receiptStatusByTxn[txnId] = String(r.Receipt_Status || r.Status || "").trim().toLowerCase();
   });
   const invoiceIdByNumber = {};
   (invoiceRows || []).forEach(inv => {
@@ -639,19 +640,21 @@ function invoiceDueDetails_(invoiceRows, receiptRows, billRows) {
   });
   const allocatedByInvoice = {};
   (billRows || []).forEach(b => {
-    if (!confirmedTxn[String(b.Transaction_ID || "").trim()]) return;
+    const allocStatus = String(b.Allocation_Status || b.Status || "").trim().toLowerCase();
+    if (allocStatus && ["cancelled","canceled","rejected","void","reversed"].indexOf(allocStatus) >= 0) return;
+    const txnId = String(b.Transaction_ID || "").trim();
+    if (txnId && Object.prototype.hasOwnProperty.call(receiptStatusByTxn, txnId) && receiptStatusByTxn[txnId] !== "confirmed") return;
     const id = String(b.InvoiceID || "").trim() || invoiceIdByNumber[String(b.Invoice_Number || "").trim()] || "";
-    if (id) allocatedByInvoice[id] = fundMoney_((allocatedByInvoice[id] || 0) + fundMoney_(b.Allocated_Amount));
+    if (id) allocatedByInvoice[id] = fundMoney_((allocatedByInvoice[id] || 0) + Math.max(0, fundMoney_(b.Allocated_Amount)));
   });
   return (invoiceRows || []).map(inv => {
     const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
     const excluded = ["cancelled", "draft", "pending_approval", "pending approval"].includes(statusRaw);
     const id = String(inv.InvoiceID || "").trim();
-    const net = fundMoney_(inv.Net_Charge_Amount);
-    const hasAlloc = Object.prototype.hasOwnProperty.call(allocatedByInvoice, id);
-    const paid = excluded ? 0 : Math.min(net, Math.max(0, hasAlloc ? allocatedByInvoice[id] : fundMoney_(inv.Paid_Amount)));
-    const rawDue = inv.Outstanding_Amount;
-    const due = excluded ? 0 : (hasAlloc || rawDue === "" || rawDue === null || rawDue === undefined ? Math.max(0, fundMoney_(net - paid)) : Math.max(0, fundMoney_(rawDue)));
+    const net = Math.max(0, fundMoney_(inv.Net_Charge_Amount));
+    const allocated = Math.max(0, allocatedByInvoice[id] || 0);
+    const paid = excluded ? 0 : Math.min(net, allocated);
+    const due = excluded ? 0 : Math.max(0, fundMoney_(net - allocated));
     return { inv, excluded, net, paid, due };
   });
 }
@@ -865,7 +868,11 @@ function getReports_(session, body) {
     const ob=openingBalanceAtDate_(ss,from);
     const totalReceipts=fundMoney_(receipts.reduce((a,x)=>a+fundMoney_(x.Received_Amount),0));
     const totalPaidExpenses=fundMoney_(expenses.reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0));
-    return json_({status:"success",reportType:type,period:{from,to},data:{fyName:ob.fy?ob.fy.FY_Name:"",openingFundBalance:ob.openingBalance,openingSource:ob.openingSource,closingFundBalance:fundMoney_(ob.openingBalance+totalReceipts-totalPaidExpenses),invoiceCount:filteredInv.length,receiptCount:receipts.length,expenseCount:expenses.length,billed:fundMoney_(filteredInv.reduce((a,x)=>a+x.net,0)),receipts:totalReceipts,paidExpenses:totalPaidExpenses,outstanding:fundMoney_(filteredInv.reduce((a,x)=>a+x.due,0))},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
+    const maintenanceInv = filteredInv.filter(({ inv }) => /maintenance/i.test(String(inv.Purpose || "")));
+    const maintenanceBilled = fundMoney_(maintenanceInv.reduce((a, x) => a + x.net, 0));
+    const maintenanceCollected = fundMoney_(maintenanceInv.reduce((a, x) => a + x.paid, 0));
+    const maintenanceCollectionRate = maintenanceBilled > 0 ? Number(((maintenanceCollected / maintenanceBilled) * 100).toFixed(1)) : 0;
+    return json_({status:"success",reportType:type,period:{from,to},data:{fyName:ob.fy?ob.fy.FY_Name:"",openingFundBalance:ob.openingBalance,openingSource:ob.openingSource,closingFundBalance:fundMoney_(ob.openingBalance+totalReceipts-totalPaidExpenses),invoiceCount:filteredInv.length,receiptCount:receipts.length,expenseCount:expenses.length,billed:fundMoney_(filteredInv.reduce((a,x)=>a+x.net,0)),receipts:totalReceipts,paidExpenses:totalPaidExpenses,outstanding:fundMoney_(filteredInv.reduce((a,x)=>a+x.due,0)),maintenanceBilled,maintenanceCollected,maintenanceCollectionRate},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="balanceSheet") {
     const journal=ss.getSheetByName("_Journal Ledger");
@@ -1156,9 +1163,10 @@ function getDashboardSummary_(session, body) {
   const receiptSheet=ss.getSheetByName("Fund Inflow Register"),requestSheet=ss.getSheetByName("Activity Request Register");
   const receipts = hasModuleReadPermission_(session,"receipts",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"receipts",ss,receiptSheet):read("Fund Inflow Register")):[];
   const requests = hasModuleReadPermission_(session,"activityRequests",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"activityRequests",ss,requestSheet):read("Activity Request Register")):[];
+  const billWiseRows = hasModuleReadPermission_(session,"billWiseDetails",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"billWiseDetails",ss,ss.getSheetByName("Bill Wise Details")):read("Bill Wise Details")):[];
   const paid = receipts.filter(r => String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed");
-  const outstanding = invoices.reduce((sum,r) => sum + Math.max(0,Number(r.Outstanding_Amount || 0)),0);
-  const payload={status:"success",society:societyPublic_(viewSession),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").trim().toLowerCase()!=="vacant").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:outstanding,pendingRequests:requests.filter(r=>String(r.Request_Status||"").trim().toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}};
+  const outstanding = invoiceDueDetails_(invoices, receipts, billWiseRows).reduce((sum,item) => sum + (item.excluded ? 0 : item.due), 0);
+  const payload={status:"success",society:liveSocietyPublic_(viewSession),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").trim().toLowerCase()!=="vacant").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:fundMoney_(outstanding),pendingRequests:requests.filter(r=>String(r.Request_Status||"").trim().toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}};
   const serialized=JSON.stringify(payload);if(serialized.length<=95000)cache.put(cacheKey,serialized,20);
   return json_(payload);
 }
@@ -1356,7 +1364,103 @@ function scopeRecords_(session,key,records,ss) {
   });
   return [];
 }
-function societyPublic_(session) { return {societyCode:session.societyCode,societyName:session.societyName,societyAddress:session.societyAddress}; }
+function extractSocietyRegistrationNo_(society) {
+  if (!society) return "";
+  return String(
+    society.Society_Registration_No ||
+    society.Registration_No ||
+    society.Registered_No ||
+    society.Reg_No ||
+    society.Society_Reg_No ||
+    society.Registration_Number ||
+    society["Registration No"] ||
+    society["Society Registration No"] ||
+    ""
+  ).trim();
+}
+function societyPublic_(session) {
+  return {
+    societyCode: session.societyCode,
+    societyName: session.societyName || "",
+    societyAddress: session.societyAddress || "",
+    societyRegistrationNo: session.societyRegistrationNo || ""
+  };
+}
+function liveSocietyPublic_(session) {
+  const code = normalizeSociety_(session && session.societyCode);
+  if (!code) return societyPublic_(session || {});
+  const cache = CacheService.getScriptCache();
+  const metaKey = "SOC_META_" + sha256_(code);
+  const cached = cache.get(metaKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (e) { cache.remove(metaKey); }
+  }
+  try {
+    const master = SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
+    const societySheet = master.getSheetByName("Society Master");
+    const rows = societySheet ? findRowsByHeaderValue_(societySheet, "Society_Code", code) : [];
+    const society = rows[0];
+    if (society) {
+      const meta = {
+        societyCode: code,
+        societyName: String(society.Society_Name || session.societyName || "").trim(),
+        societyAddress: String(society.Society_Address || society.Registered_Address || society.Address || session.societyAddress || "").trim(),
+        societyRegistrationNo: extractSocietyRegistrationNo_(society) || String(session.societyRegistrationNo || "")
+      };
+      cache.put(metaKey, JSON.stringify(meta), 60);
+      return meta;
+    }
+  } catch (e) {}
+  return societyPublic_(session || {});
+}
+function updateSocietySettings_(session, body) {
+  requireRole_(session, ["Admin"]);
+  const code = normalizeSociety_(session.societyCode);
+  const societyName = cleanText_(body.societyName, 200);
+  const societyAddress = cleanText_(body.societyAddress, 400);
+  const societyRegistrationNo = cleanText_(body.societyRegistrationNo, 120);
+  if (!societyName) throw new Error("Society Name is required.");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const master = SpreadsheetApp.openById(getConfigValue_("CENTRAL_MASTER_SPREADSHEET_ID"));
+    const societySheet = master.getSheetByName("Society Master");
+    if (!societySheet) throw new Error("Missing Central Master tab: Society Master");
+    ensureHeaders_(societySheet, ["Society_Name", "Society_Address", "Society_Registration_No"]);
+    const rows = findRowsByHeaderValue_(societySheet, "Society_Code", code);
+    if (rows.length !== 1) throw new Error("Society record not found.");
+    const current = rows[0];
+    const patch = {
+      Society_Name: societyName,
+      Society_Address: societyAddress,
+      Society_Registration_No: societyRegistrationNo
+    };
+    const headers = headerMap_(societySheet);
+    if (headers.indexOf("Registered_Address") >= 0) patch.Registered_Address = societyAddress;
+    if (headers.indexOf("Registration_No") >= 0) patch.Registration_No = societyRegistrationNo;
+    updateByHeaders_(societySheet, current.__row, patch, ["Society_Code", "Database_ID", "Society_Status"]);
+    const cache = CacheService.getScriptCache();
+    cache.remove("AUTH_HEADERS_" + sha256_(String(societySheet.getParent().getId()) + "|" + societySheet.getName()));
+    cache.remove("SOC_META_" + sha256_(code));
+    const updatedMeta = { societyCode: code, societyName, societyAddress, societyRegistrationNo };
+    cache.put("SOC_META_" + sha256_(code), JSON.stringify(updatedMeta), 60);
+    session.societyName = societyName;
+    session.societyAddress = societyAddress;
+    session.societyRegistrationNo = societyRegistrationNo;
+    if (body && body.token) {
+      cache.put("SESSION_" + body.token, JSON.stringify(session), CONFIG.SESSION_TTL_SECONDS);
+    }
+    bumpDashboardCacheVersion_(code);
+    auditEvent_(session, "UPDATE", "Society Master", code, "Society profile updated", {
+      Society_Name: current.Society_Name || "",
+      Society_Address: current.Society_Address || current.Registered_Address || "",
+      Society_Registration_No: extractSocietyRegistrationNo_(current)
+    }, updatedMeta);
+    return json_({ status: "success", society: updatedMeta });
+  } finally {
+    lock.releaseLock();
+  }
+}
 
 function login_(body) {
   const authStartedAt = Date.now();
@@ -1456,6 +1560,7 @@ function login_(body) {
     societyCode: code,
     societyName: String(society.Society_Name || ""),
     societyAddress: String(society.Society_Address || society.Registered_Address || society.Address || ""),
+    societyRegistrationNo: extractSocietyRegistrationNo_(society),
     databaseId: String(society.Database_ID),
     fullName: String(user.Full_Name || ""),
     userId: resolvedUserId,

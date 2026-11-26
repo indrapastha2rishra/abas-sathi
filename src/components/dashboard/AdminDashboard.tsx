@@ -24,18 +24,24 @@ import {
   Wallet,
   AlertCircle,
   Home,
+  Printer,
 } from 'lucide-react';
-import { calculateFundSummary } from '../../utils/calculations';
 import { formatDateDisplay, getMonthShortName } from '../../utils/dateFormat';
 import { readFundBalanceCache, writeFundBalanceCache } from '../../utils/localDataCache';
 import {
   computeOwnershipOutstandingClient,
   getFloorMeta,
   groupOwnershipOutstandingByFloor,
+  toReportAmount,
+  toReportDateKey,
 } from '../../utils/reportHelpers';
 import {
   buildActiveGalleryEvents,
+  computeDashboardFundSummary,
+  computeDashboardInvoiceSummary,
+  DASHBOARD_DONUT_CIRCUMFERENCE,
   filterActiveNotices,
+  resolveDashboardFY,
   sortOwnershipOutstandingByFlatAsc,
 } from '../../utils/dashboardHelpers';
 
@@ -51,18 +57,23 @@ export const AdminDashboard: React.FC = () => {
     bankAccounts,
     activityRequests,
     billAllocations,
+    rates,
     tenants,
     preventiveMaintenance,
+    financialYears,
     notices,
     gallery,
     galleryPhotos,
     getPrivateFile,
+    setPreviewInvoice,
     t,
     setActiveTab,
     getFundBalanceSummary,
     hasPermission,
+    activeRole,
     actualRole,
     isResidentMode,
+    isRefreshingData,
     toggleResidentMode,
   } = useApp();
   const sessionInfo = (() => {
@@ -70,18 +81,18 @@ export const AdminDashboard: React.FC = () => {
   })();
   const [fundBalanceSummary,setFundBalanceSummary]=useState<any>(() => readFundBalanceCache(sessionInfo.societyCode, sessionInfo.user?.userId));
   const [residentModeNotice, setResidentModeNotice] = useState<string>('');
-  useEffect(()=>{if(!['Admin','Accountant','Committee'].includes(currentUser.Role))return;let live=true;getFundBalanceSummary().then((r:any)=>{if(live && r?.data){setFundBalanceSummary(r.data);writeFundBalanceCache(sessionInfo.societyCode, sessionInfo.user?.userId, r.data);}}).catch((e:any)=>console.warn('Fund balance summary unavailable:',e?.message||e));return()=>{live=false;};},[currentUser.Role]);
+  useEffect(()=>{if(!['Admin','Accountant','Committee'].includes(currentUser.Role)||activeRole==='Resident'||isRefreshingData)return;let live=true;getFundBalanceSummary().then((r:any)=>{if(live && r?.data){setFundBalanceSummary(r.data);writeFundBalanceCache(sessionInfo.societyCode, sessionInfo.user?.userId, r.data);}}).catch((e:any)=>console.warn('Fund balance summary unavailable:',e?.message||e));return()=>{live=false;};},[currentUser.Role,activeRole,isRefreshingData]);
 
   // Metrics
   const totalProperties = properties.length;
-  const occupiedProperties = properties.filter((p) => p.Occupancy_Status !== 'Vacant').length;
+  const occupiedProperties = properties.filter((p) => String(p.Occupancy_Status || '').trim().toLowerCase() !== 'vacant').length;
   const today = new Date();
   const localDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   const todayKey = localDateKey(today);
   const isActiveTenant = (tenant: any) => {
     if (String(tenant.Status || '').trim().toLowerCase() !== 'active') return false;
-    const start = String(tenant.Occupancy_Start_Date || '').slice(0, 10);
-    const end = String(tenant.Occupancy_End_Date || '').slice(0, 10);
+    const start = toReportDateKey(tenant.Occupancy_Start_Date);
+    const end = toReportDateKey(tenant.Occupancy_End_Date);
     return (!start || start <= todayKey) && (!end || end >= todayKey);
   };
   const tenantPropertyIds = new Set(tenants.filter(isActiveTenant).map((t: any) => String(t.PropertyID || '')).filter(Boolean));
@@ -90,58 +101,48 @@ export const AdminDashboard: React.FC = () => {
   const occupancyRate = totalProperties > 0 ? ((occupiedProperties / totalProperties) * 100).toFixed(1) : '0';
   const tenantRate = totalProperties > 0 ? ((tenantProperties / totalProperties) * 100).toFixed(1) : '0';
 
-  // Dashboard financial metrics use confirmed Fund Inflow + Bill Wise Details as the
-  // allocation ledger. Legacy invoices with no allocation rows fall back to Paid_Amount.
-  const confirmedTransactionIds = new Set(receipts
-    .filter(r => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
-    .map(r => String(r.Transaction_ID || '')));
-  const allocationsByInvoice = new Map<string, number>();
-  billAllocations.forEach(row => {
-    if (!confirmedTransactionIds.has(String(row.Transaction_ID || ''))) return;
-    const invoiceId = String(row.InvoiceID || '');
-    if (invoiceId) allocationsByInvoice.set(invoiceId, (allocationsByInvoice.get(invoiceId) || 0) + Number(row.Allocated_Amount || 0));
-  });
-  const excludedInvoiceStatuses = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);
-  const issuedInvoices = invoices.filter(inv => !excludedInvoiceStatuses.has(String(inv.Invoice_Status || '').trim().toLowerCase()));
-  const invoiceMetrics = issuedInvoices.map(inv => {
-    const allocated = allocationsByInvoice.get(String(inv.InvoiceID || ''));
-    const net = Number(inv.Net_Charge_Amount || 0);
-    const paid = Math.min(net, Math.max(0, allocated !== undefined ? allocated : Number(inv.Paid_Amount || 0)));
-    const due = Math.max(0, net - paid);
-    const status = due <= 0 ? 'Paid' : paid > 0 ? 'Partially Paid' : (String(inv.Due_Date || '').slice(0,10) && String(inv.Due_Date || '').slice(0,10) < todayKey ? 'Overdue' : 'Unpaid');
-    return { ...inv, Paid_Amount: paid, Outstanding_Amount: due, Invoice_Status: status };
-  });
-  const totalBilled = issuedInvoices.reduce((sum, inv) => sum + Number(inv.Net_Charge_Amount || 0), 0);
-  const totalCollected = invoiceMetrics.reduce((sum, inv) => sum + Number(inv.Paid_Amount || 0), 0);
-  const collectionRate = totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0';
-  const paidCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Paid').length;
-  const partialCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Partially Paid').length;
-  const unpaidCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Unpaid').length;
-  const overdueCount = invoiceMetrics.filter(i => i.Invoice_Status === 'Overdue').length;
+  // Active Financial Year resolved from server/Financial Year Master with Indian FY fallback.
+  const activeFYRange = useMemo(
+    () =>
+      resolveDashboardFY({
+        todayKey,
+        financialYears,
+        serverFy: fundBalanceSummary?.fy,
+      }),
+    [todayKey, financialYears, fundBalanceSummary?.fy]
+  );
+  const financialYearLabel = activeFYRange.fyName;
 
-  // Flats with outstanding dues
+  // Dashboard financial metrics match InvoicesView (Net_Charge_Amount - SUM(Allocated_Amount from Bill Wise Details by InvoiceID)).
+  const {
+    issuedInvoices,
+    outstandingRows,
+    totalOutstanding,
+    collectionRate,
+    maintenanceBilled,
+    maintenanceCollected,
+    maintenanceCollectionRate,
+    paidCount,
+    partialCount,
+    unpaidCount,
+    overdueCount,
+    donutSegments,
+  } = useMemo(
+    () =>
+      computeDashboardInvoiceSummary({
+        invoices,
+        receipts,
+        billAllocations,
+        rates,
+        periodStart: activeFYRange.startDate,
+        periodEnd: activeFYRange.endDate,
+      }),
+    [invoices, receipts, billAllocations, rates, activeFYRange.startDate, activeFYRange.endDate]
+  );
 
   // Last six calendar months: actual confirmed receipts from Fund Inflow Register.
-  const toAmount = (val: unknown) => {
-    if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
-    const cleaned = String(val ?? '').replace(/[^0-9.-]/g, '');
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-  const toLocalDateKey = (value: unknown): string => {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    if (/^\d{4}\/\d{2}\/\d{2}$/.test(raw)) return raw.replace(/\//g, '-');
-    const dmy = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
-    if (raw.includes('T') || /[Zz]|[+-]\d{2}:?\d{2}$/.test(raw)) {
-      const parsed = new Date(raw);
-      if (!Number.isNaN(parsed.getTime())) return localDateKey(parsed);
-    }
-    const parsed = new Date(raw);
-    return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : localDateKey(parsed);
-  };
+  const toAmount = toReportAmount;
+  const toLocalDateKey = toReportDateKey;
   const now = new Date();
   const confirmedReceipts = receipts.filter(
     (rec) => String(rec.Receipt_Status || (rec as any).Status || '').trim().toLowerCase() === 'confirmed'
@@ -165,51 +166,20 @@ export const AdminDashboard: React.FC = () => {
   const sixMonthTotalCollection = collectionTrend.reduce((sum, item) => sum + item.collected, 0);
   const averageMonthlyCollection = sixMonthTotalCollection / collectionTrend.length;
 
-  // Current Indian financial year (1 April – 31 March).
-  const financialYearStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  const financialYearLabel = `FY ${financialYearStart}-${financialYearStart + 1}`;
-  // Authoritative opening balance is read from Fund Balance Register on the server.
-  // Never derive FY opening from Bank Account Master once the register is configured.
-  const openingBalanceTotal = Number(fundBalanceSummary?.openingFundBalance ?? 0);
-  const fundSummary = calculateFundSummary({
-    openingBalance: openingBalanceTotal,
-    receipts: receipts.map((r) => ({
-      ...r,
-      Receipt_Status: String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() === 'confirmed' ? 'Confirmed' : r.Receipt_Status,
-      Date_Of_Received: toLocalDateKey(r.Date_Of_Received) || r.Date_Of_Received,
-      Received_Amount: toAmount(r.Received_Amount),
-    })),
-    expenses: expenses.map((e) => ({
-      ...e,
-      Expense_Status: String(e.Expense_Status || '').trim().toLowerCase() === 'paid' ? 'Paid' : e.Expense_Status,
-      Payment_Date: toLocalDateKey(e.Payment_Date) || e.Payment_Date,
-      Payment_Amount: toAmount(e.Payment_Amount),
-    })),
-    invoices: invoices.map((i) => ({
-      ...i,
-      Billing_Date: toLocalDateKey(i.Billing_Date) || i.Billing_Date,
-      Outstanding_Amount: toAmount(i.Outstanding_Amount),
-    })),
-    startDate: `${financialYearStart}-04-01`, endDate: `${financialYearStart + 1}-03-31`,
-  });
-  if (fundBalanceSummary) {
-    if (receipts.length === 0 && typeof fundBalanceSummary.totalFundReceived === 'number') {
-      fundSummary.totalFundReceived = Number(fundBalanceSummary.totalFundReceived || 0);
-    }
-    if (expenses.length === 0 && typeof fundBalanceSummary.totalFundUtilized === 'number') {
-      fundSummary.totalFundUtilized = Number(fundBalanceSummary.totalFundUtilized || 0);
-    }
-    fundSummary.availableFund = fundSummary.openingFundBalance + fundSummary.totalFundReceived - fundSummary.totalFundUtilized;
-  }
+  const fundSummary = useMemo(
+    () =>
+      computeDashboardFundSummary({
+        fyRange: activeFYRange,
+        fundBalanceSummary,
+        receipts,
+        expenses,
+        invoices,
+        bankAccounts,
+        totalOutstanding,
+      }),
+    [activeFYRange, fundBalanceSummary, receipts, expenses, invoices, bankAccounts, totalOutstanding]
+  );
 
-  // Bill Wise Details is the allocation ledger. Only confirmed receipt allocations
-  // reduce invoice dues. Legacy invoices without allocation rows use Paid_Amount.
-  // Reuse the confirmed-receipt allocation map built above.
-  const outstandingRows = invoiceMetrics
-    .filter(inv => inv.Outstanding_Amount > 0)
-    .sort((a, b) => String(a.Due_Date || '').localeCompare(String(b.Due_Date || '')));
-  const totalOutstanding = outstandingRows.reduce((sum, inv) => sum + inv.Outstanding_Amount, 0);
-  fundSummary.outstandingCollection = totalOutstanding;
   const ownershipOutstanding = useMemo(
     () =>
       computeOwnershipOutstandingClient({
@@ -235,7 +205,7 @@ export const AdminDashboard: React.FC = () => {
     .slice(0, 4);
   const scheduledMaintenance = [...preventiveMaintenance]
     .filter(item => !['Completed', 'Cancelled'].includes(String(item.Maintenance_Status || '')))
-    .sort((a, b) => String(a.Next_Service_Date || '').localeCompare(String(b.Next_Service_Date || '')))
+    .sort((a, b) => toLocalDateKey(a.Next_Service_Date).localeCompare(toLocalDateKey(b.Next_Service_Date)))
     .slice(0, 5);
   const activeNotices = useMemo(
     () => filterActiveNotices(notices, todayKey),
@@ -371,7 +341,7 @@ export const AdminDashboard: React.FC = () => {
           <div className="flex items-center gap-1.5 text-xs text-[#29352D]/70 mt-1">
             <span className="font-semibold text-[#536B4D]">Blocks: {new Set(properties.map(p => p.Block_Tower).filter(Boolean)).size}</span>
             <span>•</span>
-            <span className="font-semibold text-[#536B4D]">Active records: {properties.filter(p => p.Property_Status === 'Active').length}</span>
+            <span className="font-semibold text-[#536B4D]">Active records: {properties.filter(p => String(p.Property_Status || '').trim().toLowerCase() === 'active').length}</span>
           </div>
         </div>}
 
@@ -404,16 +374,19 @@ export const AdminDashboard: React.FC = () => {
         </div>}
 
         {/* 4. Maintenance Collection Rate */}
-        {hasPermission('Maintenance & Invoices','Can_View') && <div className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
+        {hasPermission('Maintenance & Invoices','Can_View') && <div data-testid="kpi-maintenance-collection-rate" className="rounded-2xl border border-[#E8E1D4] bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-[#29352D]/70">{t.statCollectionRate}</span>
             <div className="p-2 rounded-xl bg-amber-100 text-amber-800">
               <TrendingUp className="h-5 w-5" />
             </div>
           </div>
-          <p className="text-2xl font-bold text-[#29352D] mt-2">{collectionRate}%</p>
-          <p className="text-xs text-amber-700 font-semibold mt-1">
-            Total Outstanding: ₹{totalOutstanding.toLocaleString('en-IN')}
+          <p className="text-2xl font-bold text-[#29352D] mt-2">{maintenanceCollectionRate}%</p>
+          <p className="text-[11px] text-[#29352D]/70 mt-1">
+            ₹{maintenanceCollected.toLocaleString('en-IN', { maximumFractionDigits: 2 })} / ₹{maintenanceBilled.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ({financialYearLabel})
+          </p>
+          <p className="text-xs text-amber-700 font-semibold mt-0.5">
+            Total Outstanding: ₹{totalOutstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
           </p>
         </div>}
       </div>
@@ -544,7 +517,7 @@ export const AdminDashboard: React.FC = () => {
               <span>{t.statOutstandingCollectionDesc}</span>
             </div>
             <p className="text-[10px] text-amber-600 mt-0.5">
-              Unrealized flat dues (FY 26-27)
+              Unrealized flat dues ({financialYearLabel})
             </p>
           </div>
         </div>
@@ -558,7 +531,7 @@ export const AdminDashboard: React.FC = () => {
             <h3 className="text-sm font-bold text-[#29352D]">
               Maintenance Status / রক্ষণাবেক্ষণ অবস্থা
             </h3>
-            <span className="text-xs text-gray-500">{invoices.length} Invoices</span>
+            <span className="text-xs text-gray-500">{issuedInvoices.length} Invoices</span>
           </div>
 
           {/* Graphical Donut Representation */}
@@ -573,28 +546,21 @@ export const AdminDashboard: React.FC = () => {
                   stroke="#E8E1D4"
                   strokeWidth="12"
                 />
-                {/* Paid slice */}
-                <circle
-                  cx="50"
-                  cy="50"
-                  r="38"
-                  fill="transparent"
-                  stroke="#536B4D"
-                  strokeWidth="12"
-                  strokeDasharray={`${(paidCount / (invoices.length || 1)) * 238.7} 238.7`}
-                  strokeDashoffset="0"
-                />
-                {/* Overdue slice */}
-                <circle
-                  cx="50"
-                  cy="50"
-                  r="38"
-                  fill="transparent"
-                  stroke="#C97958"
-                  strokeWidth="12"
-                  strokeDasharray={`${(overdueCount / (invoices.length || 1)) * 238.7} 238.7`}
-                  strokeDashoffset={`-${(paidCount / (invoices.length || 1)) * 238.7}`}
-                />
+                {donutSegments.map((seg) =>
+                  seg.count > 0 ? (
+                    <circle
+                      key={seg.status}
+                      cx="50"
+                      cy="50"
+                      r="38"
+                      fill="transparent"
+                      stroke={seg.color}
+                      strokeWidth="12"
+                      strokeDasharray={`${seg.length} ${DASHBOARD_DONUT_CIRCUMFERENCE}`}
+                      strokeDashoffset={String(seg.offset)}
+                    />
+                  ) : null
+                )}
               </svg>
               <div className="absolute text-center">
                 <span className="text-xl font-bold text-[#29352D]">{collectionRate}%</span>
@@ -748,7 +714,7 @@ export const AdminDashboard: React.FC = () => {
               <thead className="bg-[#F7F4EC] text-[#29352D]">
                 <tr>
                   <th className="px-3 py-2.5 font-bold">Ownership ID</th>
-                  <th className="px-3 py-2.5 font-bold">Flat</th>
+                  <th className="px-3 py-2.5 font-bold">PropertyID / Flat</th>
                   <th className="px-3 py-2.5 font-bold">Floor</th>
                   <th className="px-3 py-2.5 font-bold">Owner</th>
                   <th className="px-3 py-2.5 font-bold">Ownership Period</th>
@@ -764,7 +730,12 @@ export const AdminDashboard: React.FC = () => {
                 {sortedOwnershipOutstandingRows.slice(0, 8).map((r, i) => (
                   <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50 transition-colors">
                     <td className="px-3 py-2.5 font-mono text-gray-600">{r.Ownership_ID}</td>
-                    <td className="px-3 py-2.5 font-bold text-[#536B4D]">{r.Flat_No || r.PropertyID}</td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-bold text-[#536B4D]">{r.Flat_No || r.PropertyID}</span>
+                      {r.PropertyID && r.Flat_No && r.PropertyID !== r.Flat_No && (
+                        <span className="block text-[10px] font-mono text-gray-500">{r.PropertyID}</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 font-medium text-gray-700">{getFloorMeta(r.Floor_No).floorLabel}</td>
                     <td className="px-3 py-2.5 font-medium text-[#29352D]">{r.Owner_Name || r.OwnerID || '—'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
@@ -805,6 +776,113 @@ export const AdminDashboard: React.FC = () => {
           {sortedOwnershipOutstandingRows.length > 8 && (
             <p className="mt-3 text-[11px] text-gray-500">
               Showing top 8 of {sortedOwnershipOutstandingRows.length} ownership record(s) sorted by Flat No.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Invoice-wise Outstanding Bills (Net_Charge_Amount - Allocated_Amount by InvoiceID) */}
+      {hasPermission('Maintenance & Invoices', 'Can_View') && (
+        <div data-testid="dashboard-outstanding-bills" className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
+            <div>
+              <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
+                <Receipt className="h-4 w-4 text-[#C97958]" />
+                Outstanding Bills (Invoice-wise) / বকেয়া বিল তালিকা
+              </h3>
+              <p className="text-xs text-gray-500">
+                Total Outstanding:{' '}
+                <strong className="text-red-700">
+                  ₹{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>{' '}
+                across {outstandingRows.length} pending invoice(s) • Formula: Net_Charge_Amount − Allocated_Amount (Bill Wise Details)
+              </p>
+            </div>
+            <button
+              onClick={() => setActiveTab('invoices_outstanding')}
+              className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1 cursor-pointer"
+            >
+              View All Outstanding Bills <ArrowUpRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#F7F4EC] text-[#29352D]">
+                <tr>
+                  <th className="px-3 py-2.5 font-bold">Invoice No.</th>
+                  <th className="px-3 py-2.5 font-bold">Flat / PropertyID</th>
+                  <th className="px-3 py-2.5 font-bold">Owner</th>
+                  <th className="px-3 py-2.5 font-bold">Purpose</th>
+                  <th className="px-3 py-2.5 font-bold">Due Date</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Net Charge</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Paid (Allocated)</th>
+                  <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
+                  <th className="px-3 py-2.5 font-bold text-center">Status</th>
+                  <th className="px-3 py-2.5 font-bold text-center">Bill</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E8E1D4]">
+                {outstandingRows.slice(0, 8).map((inv) => (
+                  <tr key={inv.InvoiceID} className="hover:bg-neutral-50 transition-colors">
+                    <td className="px-3 py-2.5 font-mono font-semibold text-[#29352D]">{inv.Invoice_Number || inv.InvoiceID}</td>
+                    <td className="px-3 py-2.5">
+                      <span className="font-bold text-[#536B4D]">{inv.Flat_Number || inv.PropertyID}</span>
+                      {inv.PropertyID && inv.Flat_Number && inv.PropertyID !== inv.Flat_Number && (
+                        <span className="block text-[10px] font-mono text-gray-500">{inv.PropertyID}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium text-[#29352D]">{inv.Owner_Name || inv.OwnerID || '—'}</td>
+                    <td className="px-3 py-2.5 text-gray-700">{inv.Purpose || '—'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{formatDateDisplay(inv.Due_Date, '—')}</td>
+                    <td className="px-3 py-2.5 text-right font-medium">
+                      ₹{inv.Net_Charge_Amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-emerald-700">
+                      ₹{inv.Allocated_Amount_Total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-right font-bold text-red-700">
+                      ₹{inv.Calculated_Outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          inv.Invoice_Status === 'Overdue'
+                            ? 'bg-red-100 text-red-800'
+                            : inv.Invoice_Status === 'Partially Paid'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {inv.Invoice_Status}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewInvoice(inv)}
+                        aria-label={`Print invoice ${inv.Invoice_Number || inv.InvoiceID}`}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        <span>View</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {outstandingRows.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="px-3 py-6 text-center text-gray-500">
+                      All issued invoices are fully settled.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {outstandingRows.length > 8 && (
+            <p className="mt-3 text-[11px] text-gray-500">
+              Showing top 8 of {outstandingRows.length} outstanding invoice(s).
             </p>
           )}
         </div>

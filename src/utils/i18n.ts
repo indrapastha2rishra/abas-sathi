@@ -119,7 +119,7 @@ export const translations = {
     statTotalProperties: 'Total Properties',
     statOccupancyRate: 'Occupancy Rate',
     statTenantRate: 'Tenant Rate',
-    statCollectionRate: 'Collection Rate',
+    statCollectionRate: 'Maintenance Collection Rate',
     statTotalOutstanding: 'Total Outstanding',
     statMonthlyCollection: 'This Month Collection',
     statPendingApprovals: 'Pending Approvals',

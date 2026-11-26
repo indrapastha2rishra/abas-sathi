@@ -144,3 +144,27 @@ test('ignores allocations linked to non-confirmed receipts when receipts are pro
   assert.equal(result[1].Calculated_Outstanding, 0);
   assert.equal(result[1].Invoice_Status, 'Cancelled');
 });
+
+test('handles single payment split across multiple invoices and excludes cancelled allocations', () => {
+  const invoices = [
+    makeInvoice({ InvoiceID: 'INV-A', Invoice_Number: 'INV/01', Net_Charge_Amount: 2000, Due_Date: '2026-05-20' }),
+    makeInvoice({ InvoiceID: 'INV-B', Invoice_Number: 'INV/02', Net_Charge_Amount: 3000, Due_Date: '2026-05-20' }),
+  ];
+  const receipts = [
+    makeReceipt({ Transaction_ID: 'TXN-SPLIT', Received_Amount: 3500, Receipt_Status: 'Confirmed' }),
+  ];
+  const allocations = [
+    makeAllocation({ Allocation_ID: 'AL-1', Transaction_ID: 'TXN-SPLIT', InvoiceID: 'INV-A', Allocated_Amount: 2000 }),
+    makeAllocation({ Allocation_ID: 'AL-2', Transaction_ID: 'TXN-SPLIT', InvoiceID: 'INV-B', Allocated_Amount: 1500 }),
+    makeAllocation({ Allocation_ID: 'AL-VOID', Transaction_ID: 'TXN-SPLIT', InvoiceID: 'INV-B', Allocated_Amount: 500, Status: 'Cancelled' } as any),
+  ];
+
+  const result = computeInvoiceOutstandingBills(invoices, allocations, receipts, new Date('2026-05-01T00:00:00Z'));
+  assert.equal(result[0].Allocated_Amount_Total, 2000);
+  assert.equal(result[0].Calculated_Outstanding, 0);
+  assert.equal(result[0].Invoice_Status, 'Paid');
+
+  assert.equal(result[1].Allocated_Amount_Total, 1500);
+  assert.equal(result[1].Calculated_Outstanding, 1500);
+  assert.equal(result[1].Invoice_Status, 'Partially Paid');
+});

@@ -29,6 +29,8 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
   const {
     googleConfig,
     updateGoogleConfig,
+    societySettings,
+    updateSocietySettings,
     currentUser,
     users,
     auditLogs,
@@ -40,6 +42,8 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
   const [activeTab, setActiveTab] = useState<'google' | 'users' | 'apartment' | 'maintenance' | 'audit' | 'role_permissions' | 'master' | 'documents' | 'backup'>( 
     initialSubTab === 'settings_users'
       ? 'users'
+      : initialSubTab === 'settings_apartment'
+      ? 'apartment'
       : initialSubTab === 'settings_maintenance'
       ? 'maintenance'
       : initialSubTab === 'settings_audit'
@@ -55,6 +59,44 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
   const [webAppUrl, setWebAppUrl] = useState(googleConfig.appsScriptWebAppUrl);
   const [saveNotice, setSaveNotice] = useState('');
   const [copiedScript, setCopiedScript] = useState(false);
+
+  // Society profile form state
+  const [societyNameInput, setSocietyNameInput] = useState(societySettings.societyName);
+  const [societyAddressInput, setSocietyAddressInput] = useState(societySettings.societyAddress);
+  const [societyRegNoInput, setSocietyRegNoInput] = useState(societySettings.societyRegistrationNo);
+  const [societySaveMsg, setSocietySaveMsg] = useState('');
+  const [societySaveErr, setSocietySaveErr] = useState('');
+  const [savingSociety, setSavingSociety] = useState(false);
+
+  React.useEffect(() => {
+    setSocietyNameInput(societySettings.societyName);
+    setSocietyAddressInput(societySettings.societyAddress);
+    setSocietyRegNoInput(societySettings.societyRegistrationNo);
+  }, [societySettings.societyName, societySettings.societyAddress, societySettings.societyRegistrationNo]);
+
+  const handleSaveSocietySettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!societyNameInput.trim()) {
+      setSocietySaveErr('Society Name is required.');
+      return;
+    }
+    setSavingSociety(true);
+    setSocietySaveErr('');
+    setSocietySaveMsg('');
+    try {
+      await updateSocietySettings({
+        societyName: societyNameInput.trim(),
+        societyAddress: societyAddressInput.trim(),
+        societyRegistrationNo: societyRegNoInput.trim(),
+      });
+      setSocietySaveMsg('Society Profile saved and synced across Money Receipts and Invoices.');
+      setTimeout(() => setSocietySaveMsg(''), 4000);
+    } catch (err: any) {
+      setSocietySaveErr(err?.message || 'Unable to update Society Profile.');
+    } finally {
+      setSavingSociety(false);
+    }
+  };
 
   const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,6 +131,14 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
           }`}
         >
           ★ Google Backend Setup Guide
+        </button>
+        <button
+          onClick={() => setActiveTab('apartment')}
+          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === 'apartment' ? 'bg-white text-[#536B4D] shadow-xs' : 'text-[#29352D]/70'
+          }`}
+        >
+          Society Profile
         </button>
         <button
           onClick={() => setActiveTab('users')}
@@ -131,6 +181,104 @@ export const SettingsView: React.FC<{ initialSubTab?: string }> = ({ initialSubT
         <button onClick={() => setActiveTab('documents')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='documents'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Documents</button>
         {currentUser.Role === 'Admin' && <button onClick={() => setActiveTab('backup')} className={`px-3.5 py-2 rounded-xl text-xs font-bold ${activeTab==='backup'?'bg-white text-[#536B4D] shadow-xs':'text-[#29352D]/70'}`}>Backup & Restore</button>}
       </div>
+
+      {/* SOCIETY PROFILE SETTINGS */}
+      {activeTab === 'apartment' && (
+        <div className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs space-y-4">
+          <div className="flex items-start justify-between gap-4 border-b border-[#E8E1D4] pb-4">
+            <div>
+              <h3 className="text-base font-bold text-[#29352D] flex items-center gap-2">
+                <Building2 className="h-5 w-5 text-[#536B4D]" />
+                Society Profile & Print Header Settings
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">
+                Dynamically displayed on Money Receipts and Invoices for Admin, Committee, Accountant, and Resident accounts.
+              </p>
+            </div>
+            {societySettings.societyCode && (
+              <span className="px-2.5 py-1 rounded-lg bg-[#F7F4EC] border border-[#E8E1D4] text-xs font-mono font-bold text-[#536B4D]">
+                {societySettings.societyCode}
+              </span>
+            )}
+          </div>
+
+          <form onSubmit={handleSaveSocietySettings} className="space-y-4 text-xs max-w-2xl">
+            {societySaveMsg && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-semibold">
+                {societySaveMsg}
+              </div>
+            )}
+            {societySaveErr && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 font-semibold">
+                {societySaveErr}
+              </div>
+            )}
+
+            <div>
+              <label htmlFor="society-name-input" className="block font-semibold text-[#29352D] mb-1">
+                Society Name
+              </label>
+              <input
+                id="society-name-input"
+                type="text"
+                value={societyNameInput}
+                onChange={(e) => setSocietyNameInput(e.target.value)}
+                disabled={currentUser.Role !== 'Admin'}
+                placeholder="Enter official registered Society Name"
+                className="w-full rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 text-[#29352D] disabled:bg-neutral-100"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="society-address-input" className="block font-semibold text-[#29352D] mb-1">
+                Society Address
+              </label>
+              <textarea
+                id="society-address-input"
+                rows={3}
+                value={societyAddressInput}
+                onChange={(e) => setSocietyAddressInput(e.target.value)}
+                disabled={currentUser.Role !== 'Admin'}
+                placeholder="Enter full Society Address"
+                className="w-full rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 text-[#29352D] disabled:bg-neutral-100"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="society-regno-input" className="block font-semibold text-[#29352D] mb-1">
+                Society Registration No.
+              </label>
+              <input
+                id="society-regno-input"
+                type="text"
+                value={societyRegNoInput}
+                onChange={(e) => setSocietyRegNoInput(e.target.value)}
+                disabled={currentUser.Role !== 'Admin'}
+                placeholder="e.g. KOL/ACT/2024/0001"
+                className="w-full rounded-xl border border-[#E8E1D4] bg-white px-3 py-2 text-[#29352D] disabled:bg-neutral-100"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[11px] text-gray-500">
+                {currentUser.Role === 'Admin'
+                  ? 'Changes are saved directly to Society Master.'
+                  : 'Only Admin can modify Society Profile settings.'}
+              </span>
+              {currentUser.Role === 'Admin' && (
+                <button
+                  type="submit"
+                  disabled={savingSociety}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#536B4D] text-white font-bold hover:bg-[#3F523A] disabled:opacity-60 cursor-pointer"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>{savingSociety ? 'Saving...' : 'Save Society Profile'}</span>
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* TAB 1: GOOGLE CLOUD, SHEETS & APPS SCRIPT SETUP (SECTION 2, 14, 15) */}
       {activeTab === 'google' && (

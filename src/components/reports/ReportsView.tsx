@@ -25,6 +25,7 @@ import {
   toReportAmount,
   toReportDateKey,
 } from '../../utils/reportHelpers';
+import { computeMaintenanceCollectionRate } from '../../utils/dashboardHelpers';
 import {
   BarChart3,
   Download,
@@ -53,6 +54,8 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     bankAccounts,
     accountHeads,
     financialYears,
+    rates,
+    societySettings,
     getReport,
     getFundBalanceSummary,
     setActiveTab,
@@ -506,6 +509,14 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     const receiptsTotal = fyRec.reduce((s, r) => s + toReportAmount(r.Received_Amount), 0);
     const paidTotal = fyExp.reduce((s, e) => s + toReportAmount(e.Payment_Amount), 0);
     const outstanding = fyInv.reduce((s, x) => s + x.due, 0);
+    const maintRateInfo = computeMaintenanceCollectionRate({
+      invoices,
+      receipts,
+      billAllocations,
+      rates,
+      periodStart: from,
+      periodEnd: to,
+    });
     return {
       fyName: activeFYRange.fyName,
       openingFundBalance: fyOpeningFallback,
@@ -518,8 +529,11 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
       receipts: receiptsTotal,
       paidExpenses: paidTotal,
       outstanding,
+      maintenanceBilled: maintRateInfo.maintenanceBilled,
+      maintenanceCollected: maintRateInfo.maintenanceCollected,
+      maintenanceCollectionRate: maintRateInfo.maintenanceCollectionRate,
     };
-  }, [activeFYRange, invoices, receipts, billAllocations, expenses, fyOpeningFallback, fundBalanceSummary]);
+  }, [activeFYRange, invoices, receipts, billAllocations, expenses, rates, fyOpeningFallback, fundBalanceSummary]);
 
   const fySummary = useMemo(() => {
     if (activeReport === 'fy' && serverReport?.data) {
@@ -713,7 +727,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
               <button
                 onClick={() => {
                   const rows: string[][] = [
-                    ['Abas Sathi Housing Society - Monthly Receipt & Payment Statement'],
+                    [`${societySettings.societyName || 'Housing Society'} - Monthly Receipt & Payment Statement`],
                     ['Period', monthPeriodLabel],
                     ['Opening Source', openingBankSource],
                     ['Opening Balance', computedOpeningAtMonthStart.toFixed(2)],
@@ -888,6 +902,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                     ['Paid Expenses', toReportAmount(fySummary.paidExpenses).toFixed(2)],
                     ['Closing / Available Fund Balance', toReportAmount(fySummary.closingFundBalance).toFixed(2)],
                     ['FY Invoice Outstanding', toReportAmount(fySummary.outstanding).toFixed(2)],
+                    ['Maintenance Collection Rate (%)', `${fySummary.maintenanceCollectionRate ?? '0'}%`],
                   ];
                   handleExportCSV(`Financial_Year_${(fySummary.fyName || activeFYRange.fyName).replace(/\s+/g, '_')}`, rows);
                 }}
@@ -928,6 +943,13 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
               <span className="text-amber-900">Outstanding Maintenance Dues (FY)</span>
               <strong className="block text-xl text-red-700 mt-1">{formatINR(fySummary.outstanding)}</strong>
               <span className="text-[11px] text-amber-800 mt-1 block">Net billed less confirmed allocations</span>
+            </div>
+            <div className="rounded-xl bg-white border border-[#E8E1D4] p-4">
+              <span className="text-gray-600">Maintenance Collection Rate</span>
+              <strong className="block text-xl text-[#536B4D] mt-1">{fySummary.maintenanceCollectionRate ?? '0'}%</strong>
+              <span className="text-[11px] text-gray-500 mt-1 block">
+                {formatINR(fySummary.maintenanceCollected)} / {formatINR(fySummary.maintenanceBilled)} allocated (Maintenance only)
+              </span>
             </div>
           </div>
         </div>
@@ -1249,10 +1271,11 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
               <button
                 onClick={() => {
                   const rows = [
-                    ['Floor_No', 'Ownership_ID', 'Flat_No', 'Owner_Name', 'Start_Date', 'End_Date', 'Status', 'Invoices', 'Billed', 'Allocated_Paid', 'Outstanding', 'Link_Status'],
+                    ['Floor_No', 'Ownership_ID', 'PropertyID', 'Flat_No', 'Owner_Name', 'Start_Date', 'End_Date', 'Status', 'Invoices', 'Billed', 'Allocated_Paid', 'Outstanding', 'Link_Status'],
                     ...filteredOwnershipRows.map((r: any) => [
                       getFloorMeta(r.Floor_No).floorLabel,
                       String(r.Ownership_ID || ''),
+                      String(r.PropertyID || ''),
                       String(r.Flat_No || r.PropertyID || ''),
                       String(r.Owner_Name || r.OwnerID || ''),
                       formatDateDisplay(r.Ownership_Start_Date, '—'),
@@ -1374,7 +1397,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                       <thead className="bg-[#F7F4EC] text-[#29352D] border-b border-[#E8E1D4]">
                         <tr>
                           <th className="p-3 font-bold">Ownership ID</th>
-                          <th className="p-3 font-bold">Flat</th>
+                          <th className="p-3 font-bold">PropertyID / Flat</th>
                           <th className="p-3 font-bold">Owner</th>
                           <th className="p-3 font-bold">Ownership Period</th>
                           <th className="p-3 font-bold">Status</th>
@@ -1389,7 +1412,12 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                         {grp.rows.map((r: any, i: number) => (
                           <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50">
                             <td className="p-3 font-mono">{r.Ownership_ID}</td>
-                            <td className="p-3 font-semibold text-[#536B4D]">{r.Flat_No || r.PropertyID}</td>
+                            <td className="p-3">
+                              <span className="font-semibold text-[#536B4D]">{r.Flat_No || r.PropertyID}</span>
+                              {r.PropertyID && r.Flat_No && r.PropertyID !== r.Flat_No && (
+                                <span className="block text-[10px] font-mono text-gray-500">{r.PropertyID}</span>
+                              )}
+                            </td>
                             <td className="p-3">{r.Owner_Name || r.OwnerID || '—'}</td>
                             <td className="p-3 whitespace-nowrap">
                               {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
@@ -1441,7 +1469,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                   <tr>
                     <th className="p-3">Floor</th>
                     <th className="p-3">Ownership ID</th>
-                    <th className="p-3">Flat</th>
+                    <th className="p-3">PropertyID / Flat</th>
                     <th className="p-3">Owner</th>
                     <th className="p-3">Ownership Period</th>
                     <th className="p-3">Status</th>
@@ -1457,7 +1485,12 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                     <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50">
                       <td className="p-3 font-semibold text-[#29352D]">{getFloorMeta(r.Floor_No).floorLabel}</td>
                       <td className="p-3 font-mono">{r.Ownership_ID}</td>
-                      <td className="p-3 font-semibold">{r.Flat_No || r.PropertyID}</td>
+                      <td className="p-3">
+                        <span className="font-semibold">{r.Flat_No || r.PropertyID}</span>
+                        {r.PropertyID && r.Flat_No && r.PropertyID !== r.Flat_No && (
+                          <span className="block text-[10px] font-mono text-gray-500">{r.PropertyID}</span>
+                        )}
+                      </td>
                       <td className="p-3">{r.Owner_Name || r.OwnerID || '—'}</td>
                       <td className="p-3 whitespace-nowrap">
                         {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}

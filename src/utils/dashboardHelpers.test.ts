@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildActiveGalleryEvents,
+  computeDashboardFundSummary,
+  computeDashboardInvoiceSummary,
+  computeMaintenanceCollectionRate,
+  DASHBOARD_DONUT_CIRCUMFERENCE,
   filterActiveNotices,
+  resolveDashboardFY,
   sortOwnershipOutstandingByFlatAsc,
 } from './dashboardHelpers';
 import type { GalleryMaster, GalleryPhoto, NoticeMaster } from '../types/database';
@@ -152,4 +157,157 @@ test('buildActiveGalleryEvents connects Gallery Master with Gallery_Photos in di
     ['GAL-1-cover', 'PHO-1', 'PHO-2']
   );
   assert.equal(events[0].photos[1].caption, 'Pandal Inauguration');
+});
+
+test('computeDashboardInvoiceSummary matches Admin Panel invoice rules and builds all 4 donut segments', () => {
+  const summary = computeDashboardInvoiceSummary({
+    invoices: [
+      { InvoiceID: 'I1', Invoice_Number: 'INV-1', Net_Charge_Amount: '₹2,000.00', Due_Date: '2026-05-20', Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'I2', Invoice_Number: 'INV-2', Net_Charge_Amount: 2000, Due_Date: '2026-05-20', Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'I3', Invoice_Number: 'INV-3', Net_Charge_Amount: 2000, Due_Date: '2026-05-20', Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'I4', Invoice_Number: 'INV-4', Net_Charge_Amount: 2000, Due_Date: '15/04/2026', Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'I5', Invoice_Number: 'INV-5', Net_Charge_Amount: 5000, Due_Date: '2026-04-01', Invoice_Status: 'Cancelled' } as any,
+    ],
+    receipts: [
+      { Transaction_ID: ' TXN-1 ', Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-2', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-PEND', Receipt_Status: 'Pending Verification' } as any,
+    ],
+    billAllocations: [
+      { Transaction_ID: 'TXN-1', InvoiceID: '', Invoice_Number: 'INV-1', Allocated_Amount: '₹2,000' } as any,
+      { Transaction_ID: 'TXN-2', InvoiceID: ' I2 ', Allocated_Amount: 1000 } as any,
+      { Transaction_ID: 'TXN-PEND', InvoiceID: 'I3', Allocated_Amount: 2000 } as any,
+    ],
+    now: new Date('2026-05-01T00:00:00'),
+  });
+
+  assert.equal(summary.issuedInvoices.length, 4);
+  assert.equal(summary.paidCount, 1);
+  assert.equal(summary.partialCount, 1);
+  assert.equal(summary.unpaidCount, 1);
+  assert.equal(summary.overdueCount, 1);
+  assert.equal(summary.totalBilled, 8000);
+  assert.equal(summary.totalCollected, 3000);
+  assert.equal(summary.totalOutstanding, 5000);
+  assert.equal(summary.collectionRate, '37.5');
+
+  const totalArcLength = summary.donutSegments.reduce((s, seg) => s + seg.length, 0);
+  assert.ok(Math.abs(totalArcLength - DASHBOARD_DONUT_CIRCUMFERENCE) < 1e-6);
+  assert.equal(summary.donutSegments[0].offset, 0);
+  assert.ok(summary.donutSegments[1].offset < 0);
+  assert.ok(summary.donutSegments[2].offset < summary.donutSegments[1].offset);
+  assert.ok(summary.donutSegments[3].offset < summary.donutSegments[2].offset);
+});
+
+test('resolveDashboardFY and computeDashboardFundSummary mirror ReportsView FY summary rules', () => {
+  const fyRange = resolveDashboardFY({
+    todayKey: '2026-05-15',
+    financialYears: [
+      { FY_ID: 'FY26', FY_Name: 'FY 2026-2027', Start_Date: '2026-04-01', End_Date: '2027-03-31', Is_Current: true } as any,
+    ],
+  });
+  assert.equal(fyRange.fyName, 'FY 2026-2027');
+
+  const summary = computeDashboardFundSummary({
+    fyRange,
+    fundBalanceSummary: { openingFundBalance: 100000 },
+    receipts: [
+      { Transaction_ID: 'T1', Status: 'Confirmed', Date_Of_Received: '10/04/2026', Received_Amount: '₹2,500.25' } as any,
+      { Transaction_ID: 'T2', Receipt_Status: 'Pending Verification', Date_Of_Received: '2026-04-12', Received_Amount: 5000 } as any,
+    ],
+    expenses: [
+      { Expense_Status: 'Paid', Payment_Date: '2026-04-20', Payment_Amount: '₹1,000.10' } as any,
+    ],
+    invoices: [],
+    bankAccounts: [{ BankAccount_ID: 'B1', Opening_Balance: 999999 } as any],
+    totalOutstanding: 4500.5,
+  });
+
+  assert.equal(summary.openingFundBalance, 100000);
+  assert.equal(summary.totalFundReceived, 2500.25);
+  assert.equal(summary.totalFundUtilized, 1000.1);
+  assert.equal(summary.availableFund, 101500.15);
+  assert.equal(summary.outstandingCollection, 4500.5);
+});
+
+test('computeMaintenanceCollectionRate includes only issued Maintenance invoices in billing period with Bill Wise Details', () => {
+  const result = computeMaintenanceCollectionRate({
+    invoices: [
+      {
+        InvoiceID: 'M1',
+        Invoice_Number: 'INV-M1',
+        Purpose: 'Monthly Maintenance',
+        Billing_Date: '2026-04-01',
+        Bill_Period_From: '2026-04-01',
+        Bill_Period_To: '2026-04-30',
+        Net_Charge_Amount: 4000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      {
+        InvoiceID: 'M2',
+        Invoice_Number: 'INV-M2',
+        Purpose: 'Quarterly Maintenance',
+        Billing_Date: '2026-05-01',
+        Bill_Period_From: '2026-05-01',
+        Bill_Period_To: '2026-05-31',
+        Net_Charge_Amount: 6000,
+        Invoice_Status: 'Partially Paid',
+      } as any,
+      {
+        InvoiceID: 'M-DRAFT',
+        Purpose: 'Monthly Maintenance',
+        Billing_Date: '2026-05-01',
+        Bill_Period_From: '2026-05-01',
+        Bill_Period_To: '2026-05-31',
+        Net_Charge_Amount: 5000,
+        Invoice_Status: 'Draft',
+      } as any,
+      {
+        InvoiceID: 'M-CANCEL',
+        Purpose: 'Monthly Maintenance',
+        Billing_Date: '2026-05-01',
+        Bill_Period_From: '2026-05-01',
+        Bill_Period_To: '2026-05-31',
+        Net_Charge_Amount: 5000,
+        Invoice_Status: 'Cancelled',
+      } as any,
+      {
+        InvoiceID: 'SF-1',
+        Purpose: 'Sinking Fund',
+        Billing_Date: '2026-05-01',
+        Bill_Period_From: '2026-05-01',
+        Bill_Period_To: '2026-05-31',
+        Net_Charge_Amount: 10000,
+        Invoice_Status: 'Paid',
+      } as any,
+      {
+        InvoiceID: 'M-PREV-FY',
+        Purpose: 'Monthly Maintenance',
+        Billing_Date: '2026-03-01',
+        Bill_Period_From: '2026-03-01',
+        Bill_Period_To: '2026-03-31',
+        Net_Charge_Amount: 3000,
+        Invoice_Status: 'Paid',
+      } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'T1', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'T2', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'T3', Receipt_Status: 'Confirmed' } as any,
+    ],
+    billAllocations: [
+      { Transaction_ID: 'T1', InvoiceID: 'M1', Allocated_Amount: 4000 } as any,
+      { Transaction_ID: 'T2', InvoiceID: 'M2', Allocated_Amount: 1500 } as any,
+      { Transaction_ID: 'T3', InvoiceID: 'SF-1', Allocated_Amount: 10000 } as any,
+      { Transaction_ID: 'T3', InvoiceID: 'M-PREV-FY', Allocated_Amount: 3000 } as any,
+    ],
+    periodStart: '2026-04-01',
+    periodEnd: '2027-03-31',
+  });
+
+  // Only M1 (4000) + M2 (6000) = 10000 billed; 4000 + 1500 = 5500 collected -> 55.0%
+  assert.equal(result.maintenanceInvoiceCount, 2);
+  assert.equal(result.maintenanceBilled, 10000);
+  assert.equal(result.maintenanceCollected, 5500);
+  assert.equal(result.maintenanceCollectionRate, '55.0');
 });

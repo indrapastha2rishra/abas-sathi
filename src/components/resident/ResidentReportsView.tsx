@@ -241,7 +241,7 @@ export const ResidentReportsView: React.FC = () => {
             <div><span className="text-gray-500 block">Opening Balance</span><strong className="text-[#29352D]">{money(ledger.openingBalance)}</strong></div>
             <div><span className="text-gray-500 block">Period Billed (Debit)</span><strong className="text-[#29352D]">{money(ledger.periodDebit)}</strong></div>
             <div><span className="text-gray-500 block">Confirmed Paid (Credit)</span><strong className="text-emerald-700">{money(ledger.periodCredit)}</strong></div>
-            <div><span className="text-gray-500 block">Closing Balance</span><strong className="text-red-700">{money(ledger.closingBalance)}</strong></div>
+            <div><span className="text-gray-500 block">Net Closing Balance</span><strong className={ledger.closingBalance > 0 ? 'text-red-700' : 'text-emerald-700'}>{money(ledger.closingBalance)}</strong></div>
           </div>
 
           <div className="overflow-x-auto">

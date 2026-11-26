@@ -98,18 +98,19 @@ export function toReportDateKey(value: unknown): string {
 }
 
 const EXCLUDED_INVOICE_STATUSES = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);
+const EXCLUDED_ALLOCATION_STATUSES = new Set(['cancelled', 'canceled', 'rejected', 'void', 'reversed']);
 
 export function computeConfirmedInvoiceMetrics(
   invoices: InvoiceRegister[],
   receipts: FundInflowRegister[],
   billAllocations: BillWiseDetails[]
 ) {
-  const confirmedTxnIds = new Set(
-    (receipts || [])
-      .filter((r) => String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() === 'confirmed')
-      .map((r) => String(r.Transaction_ID || '').trim())
-      .filter(Boolean)
-  );
+  const receiptStatusByTxnId = new Map<string, string>();
+  (receipts || []).forEach((r) => {
+    const txnId = String(r.Transaction_ID || '').trim();
+    if (!txnId) return;
+    receiptStatusByTxnId.set(txnId, String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase());
+  });
   const invoiceIdByNumber = new Map<string, string>();
   (invoices || []).forEach((inv) => {
     const id = String(inv.InvoiceID || '').trim();
@@ -118,7 +119,10 @@ export function computeConfirmedInvoiceMetrics(
   });
   const allocationsByInvoice = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
-    if (!confirmedTxnIds.has(String(row.Transaction_ID || '').trim())) return;
+    const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
+    if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
+    const txnId = String(row.Transaction_ID || '').trim();
+    if (txnId && receiptStatusByTxnId.has(txnId) && receiptStatusByTxnId.get(txnId) !== 'confirmed') return;
     const invoiceId =
       String(row.InvoiceID || '').trim() ||
       invoiceIdByNumber.get(String(row.Invoice_Number || '').trim()) ||
@@ -126,7 +130,7 @@ export function computeConfirmedInvoiceMetrics(
     if (invoiceId) {
       allocationsByInvoice.set(
         invoiceId,
-        Math.round(((allocationsByInvoice.get(invoiceId) || 0) + toReportAmount(row.Allocated_Amount)) * 100) / 100
+        Math.round(((allocationsByInvoice.get(invoiceId) || 0) + Math.max(0, toReportAmount(row.Allocated_Amount))) * 100) / 100
       );
     }
   });
@@ -135,14 +139,10 @@ export function computeConfirmedInvoiceMetrics(
     .filter((inv) => !EXCLUDED_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
     .map((inv) => {
       const invoiceId = String(inv.InvoiceID || '').trim();
-      const hasAlloc = allocationsByInvoice.has(invoiceId);
-      const net = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
-      const paid = Math.min(net, Math.max(0, hasAlloc ? (allocationsByInvoice.get(invoiceId) || 0) : toReportAmount(inv.Paid_Amount)));
-      const rawDue = inv.Outstanding_Amount as unknown;
-      const due =
-        hasAlloc || rawDue === '' || rawDue === null || rawDue === undefined
-          ? Math.max(0, Math.round((net - paid) * 100) / 100)
-          : Math.max(0, toReportAmount(rawDue));
+      const net = Math.max(0, Math.round(toReportAmount(inv.Net_Charge_Amount) * 100) / 100);
+      const allocated = Math.max(0, Math.round((allocationsByInvoice.get(invoiceId) || 0) * 100) / 100);
+      const paid = Math.min(net, allocated);
+      const due = Math.max(0, Math.round((net - allocated) * 100) / 100);
       return { inv, net, paid, due };
     });
 }
@@ -496,6 +496,8 @@ export function computeOwnershipOutstandingClient(params: {
   // Fetch and sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
   const allocatedByOwnership = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
+    const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
+    if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
     const txnId = String(row.Transaction_ID || '').trim();
     if (txnId && receiptStatusByTxnId.has(txnId) && receiptStatusByTxnId.get(txnId) !== 'confirmed') {
       return;
@@ -516,12 +518,11 @@ export function computeOwnershipOutstandingClient(params: {
     );
   });
 
-  const useBillWiseAllocations = (billAllocations || []).length > 0;
   let unlinkedInvoiceCount = 0;
 
   const data = Array.from(grouped.entries())
     .map(([key, entry]) => {
-      const paid = useBillWiseAllocations ? allocatedByOwnership.get(key) || 0 : entry._legacyPaid;
+      const paid = allocatedByOwnership.get(key) || 0;
       const totalPaid = Math.round(Math.max(0, paid) * 100) / 100;
       const outstanding = Math.max(0, Math.round((entry.Total_Billed - totalPaid) * 100) / 100);
       if (!entry._hasOwnershipId && outstanding > 0) {
