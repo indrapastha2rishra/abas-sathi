@@ -323,39 +323,79 @@ function postOpeningBalances_(session,body){
  * This preserves historical liability when a flat changes ownership.
  */
 function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows, ownerRows, receiptRows, billRows) {
-  const ownershipById = {};
-  (ownershipRows || []).forEach(x => { if (x.Ownership_ID) ownershipById[String(x.Ownership_ID).trim()] = x; });
-  const propertyById = {};
-  (propertyRows || []).forEach(x => { if (x.PropertyID) propertyById[String(x.PropertyID).trim()] = x; });
-  const ownerById = {};
-  (ownerRows || []).forEach(x => { if (x.OwnerID) ownerById[String(x.OwnerID).trim()] = x; });
+  function normName_(v) {
+    return String(v || "").trim().replace(/\s+/g, " ").toLowerCase();
+  }
+  const ownershipByIdUpper = {};
+  (ownershipRows || []).forEach(x => {
+    const id = String(x.Ownership_ID || x.OwnershipID || "").trim();
+    if (id) ownershipByIdUpper[id.toUpperCase()] = x;
+  });
+  const propertyByIdUpper = {};
+  (propertyRows || []).forEach(x => {
+    const id = String(x.PropertyID || x.Property_ID || "").trim();
+    if (id) propertyByIdUpper[id.toUpperCase()] = x;
+  });
+  const ownerByIdUpper = {};
+  (ownerRows || []).forEach(x => {
+    const id = String(x.OwnerID || x.Owner_ID || "").trim();
+    if (id) ownerByIdUpper[id.toUpperCase()] = x;
+  });
 
-  const receiptStatusByTxn = {};
+  const receiptByTxnUpper = {};
   (receiptRows || []).forEach(r => {
-    const txnId = String(r.Transaction_ID || "").trim();
-    if (txnId) receiptStatusByTxn[txnId] = String(r.Receipt_Status || r.Status || "").trim().toLowerCase();
+    const txnId = String(r.Transaction_ID || r.TransactionID || "").trim().toUpperCase();
+    if (!txnId) return;
+    receiptByTxnUpper[txnId] = {
+      status: String(r.Receipt_Status || r.Status || "").trim().toLowerCase(),
+      ownerId: String(r.OwnerID || r.Owner_ID || "").trim(),
+      ownerName: String(r.Owner_Name || "").trim(),
+      ownershipId: String(r.Ownership_ID || r.OwnershipID || "").trim(),
+      propertyId: String(r.PropertyID || r.Property_ID || "").trim()
+    };
   });
 
   const excludedStatuses = { cancelled: true, draft: true, pending_approval: true, "pending approval": true };
-  const keyByInvoiceId = {};
-  const keyByInvoiceNumber = {};
+  const issuedInvoiceByIdUpper = {};
+  const issuedInvoiceByNumberUpper = {};
+  const keyByUpperKey = {};
+  const keysByPropertyAndOwnerUpper = {};
   const grouped = {};
 
   (invoiceRows || []).forEach(inv => {
     const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
     if (excludedStatuses[statusRaw]) return;
-    const ownershipId = String(inv.Ownership_ID || "").trim();
-    const propertyId = String(inv.PropertyID || "").trim();
-    const ownerId = String(inv.OwnerID || "").trim();
+    const rawOwnershipId = String(inv.Ownership_ID || inv.OwnershipID || "").trim();
+    const history = rawOwnershipId ? (ownershipByIdUpper[rawOwnershipId.toUpperCase()] || {}) : {};
+    const ownershipId = String(history.Ownership_ID || rawOwnershipId).trim();
+    const propertyId = String(inv.PropertyID || inv.Property_ID || history.PropertyID || "").trim();
+    const ownerId = String(inv.OwnerID || inv.Owner_ID || history.OwnerID || "").trim();
     const key = ownershipId || ("UNLINKED:" + propertyId + ":" + ownerId);
-    const invId = String(inv.InvoiceID || "").trim();
-    const invNum = String(inv.Invoice_Number || "").trim();
-    if (invId) keyByInvoiceId[invId] = key;
-    if (invNum) keyByInvoiceNumber[invNum] = key;
+    keyByUpperKey[key.toUpperCase()] = key;
 
-    const history = ownershipById[ownershipId] || {};
-    const property = propertyById[propertyId] || {};
-    const owner = ownerById[ownerId] || {};
+    if (propertyId && ownerId) {
+      const poKey = propertyId.toUpperCase() + "::" + ownerId.toUpperCase();
+      if (!keysByPropertyAndOwnerUpper[poKey]) keysByPropertyAndOwnerUpper[poKey] = {};
+      keysByPropertyAndOwnerUpper[poKey][key] = true;
+    }
+
+    const property = propertyId ? (propertyByIdUpper[propertyId.toUpperCase()] || {}) : {};
+    const owner = ownerId ? (ownerByIdUpper[ownerId.toUpperCase()] || {}) : {};
+    const ownerName = String(inv.Owner_Name || owner.Owner_Name || "").trim();
+    const invId = String(inv.InvoiceID || inv.Invoice_ID || "").trim();
+    const invNum = String(inv.Invoice_Number || inv.Invoice_No || "").trim();
+    const meta = {
+      key,
+      invId,
+      invNum,
+      ownershipId,
+      propertyId,
+      ownerId,
+      ownerName
+    };
+    if (invId) issuedInvoiceByIdUpper[invId.toUpperCase()] = meta;
+    if (invNum) issuedInvoiceByNumberUpper[invNum.toUpperCase()] = meta;
+
     const floorRaw = property.Floor_No !== undefined && property.Floor_No !== ""
       ? property.Floor_No
       : (property["Floor No."] !== undefined && property["Floor No."] !== ""
@@ -371,7 +411,7 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
         Flat_No: String(inv.Flat_Number || inv.Flat_No || property.Flat_No || property["Flat No."] || ""),
         Floor_No: floorRaw === null || floorRaw === undefined ? "" : floorRaw,
         OwnerID: ownerId,
-        Owner_Name: String(inv.Owner_Name || owner.Owner_Name || ""),
+        Owner_Name: ownerName,
         Ownership_Start_Date: history.Ownership_Start_Date || "",
         Ownership_End_Date: history.Ownership_End_Date || "",
         Ownership_Status: history.Ownership_Status || "Historical record not found",
@@ -383,8 +423,13 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
         _legacyPaid: 0,
         _hasOwnershipId: Boolean(ownershipId)
       };
-    } else if (grouped[key].Floor_No === "" && floorRaw !== "" && floorRaw !== null && floorRaw !== undefined) {
-      grouped[key].Floor_No = floorRaw;
+    } else {
+      if (grouped[key].Floor_No === "" && floorRaw !== "" && floorRaw !== null && floorRaw !== undefined) {
+        grouped[key].Floor_No = floorRaw;
+      }
+      if (!grouped[key].OwnerID && ownerId) grouped[key].OwnerID = ownerId;
+      if (!grouped[key].Owner_Name && ownerName) grouped[key].Owner_Name = ownerName;
+      if (!grouped[key].PropertyID && propertyId) grouped[key].PropertyID = propertyId;
     }
 
     const net = Math.max(0, fundMoney_(inv.Net_Charge_Amount));
@@ -394,21 +439,74 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
     grouped[key]._legacyPaid = fundMoney_(grouped[key]._legacyPaid + legacyPaid);
   });
 
-  // Sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
+  // Check Paid from Bill Wise Details against mentioned Invoice (InvoiceID / Invoice_Number) and Owner wise
   const allocatedByOwnership = {};
   (billRows || []).forEach(b => {
     const allocStatus = String(b.Allocation_Status || b.Status || "").trim().toLowerCase();
     if (allocStatus && ["cancelled","canceled","rejected","void","reversed"].indexOf(allocStatus) >= 0) return;
-    const txnId = String(b.Transaction_ID || "").trim();
-    if (txnId && Object.prototype.hasOwnProperty.call(receiptStatusByTxn, txnId) && receiptStatusByTxn[txnId] !== "confirmed") {
-      return;
+
+    const txnIdUpper = String(b.Transaction_ID || b.TransactionID || "").trim().toUpperCase();
+    const recInfo = txnIdUpper && Object.prototype.hasOwnProperty.call(receiptByTxnUpper, txnIdUpper)
+      ? receiptByTxnUpper[txnIdUpper]
+      : null;
+    if (recInfo && recInfo.status !== "confirmed") return;
+
+    const amtVal = b.Allocated_Amount !== undefined && b.Allocated_Amount !== ""
+      ? b.Allocated_Amount
+      : (b.Allocation_Amount !== undefined && b.Allocation_Amount !== "" ? b.Allocation_Amount : b.Allocated_Amt);
+    const allocatedAmt = Math.max(0, fundMoney_(amtVal));
+    if (allocatedAmt <= 0) return;
+
+    const rowInvId = String(b.InvoiceID || b.Invoice_ID || "").trim();
+    const rowInvNum = String(b.Invoice_Number || b.Invoice_No || "").trim();
+    const rowOwnershipId = String(b.Ownership_ID || b.OwnershipID || "").trim();
+    const rowPropId = String(b.PropertyID || b.Property_ID || "").trim();
+    const rowOwnerId = String(b.OwnerID || b.Owner_ID || "").trim() || (recInfo ? recInfo.ownerId : "");
+    const resolvedRowOwner = rowOwnerId ? (ownerByIdUpper[rowOwnerId.toUpperCase()] || {}) : {};
+    const rowOwnerName = String(b.Owner_Name || "").trim() || (recInfo ? recInfo.ownerName : "") || String(resolvedRowOwner.Owner_Name || "").trim();
+
+    let resolvedKey = "";
+
+    if (rowInvId || rowInvNum) {
+      const matchedInv =
+        (rowInvId ? issuedInvoiceByIdUpper[rowInvId.toUpperCase()] : null) ||
+        (rowInvNum ? issuedInvoiceByNumberUpper[rowInvNum.toUpperCase()] : null);
+      if (!matchedInv) return;
+
+      const entry = grouped[matchedInv.key];
+      const targetOwnerId = matchedInv.ownerId || String((entry && entry.OwnerID) || "").trim();
+      const targetOwnerMaster = targetOwnerId ? (ownerByIdUpper[targetOwnerId.toUpperCase()] || {}) : {};
+      const targetOwnerName = matchedInv.ownerName || String((entry && entry.Owner_Name) || targetOwnerMaster.Owner_Name || "").trim();
+
+      if (rowOwnerId && targetOwnerId && rowOwnerId.toUpperCase() !== targetOwnerId.toUpperCase()) return;
+      if ((!rowOwnerId || !targetOwnerId) && rowOwnerName && targetOwnerName && normName_(rowOwnerName) !== normName_(targetOwnerName)) return;
+      if (rowOwnershipId && matchedInv.ownershipId && rowOwnershipId.toUpperCase() !== matchedInv.ownershipId.toUpperCase()) return;
+      if (rowPropId && matchedInv.propertyId && rowPropId.toUpperCase() !== matchedInv.propertyId.toUpperCase()) return;
+      resolvedKey = matchedInv.key;
+    } else {
+      if (rowOwnershipId) {
+        resolvedKey = keyByUpperKey[rowOwnershipId.toUpperCase()] || "";
+      } else if (rowPropId && rowOwnerId) {
+        const unlinkedKey = keyByUpperKey[("UNLINKED:" + rowPropId + ":" + rowOwnerId).toUpperCase()];
+        if (unlinkedKey) {
+          resolvedKey = unlinkedKey;
+        } else {
+          const candMap = keysByPropertyAndOwnerUpper[rowPropId.toUpperCase() + "::" + rowOwnerId.toUpperCase()];
+          const candKeys = candMap ? Object.keys(candMap) : [];
+          if (candKeys.length === 1) resolvedKey = candKeys[0];
+        }
+      }
+      if (!resolvedKey || !grouped[resolvedKey]) return;
+
+      const entry = grouped[resolvedKey];
+      const targetOwnerId = String(entry.OwnerID || "").trim();
+      const targetOwnerName = String(entry.Owner_Name || "").trim();
+      if (rowOwnerId && targetOwnerId && rowOwnerId.toUpperCase() !== targetOwnerId.toUpperCase()) return;
+      if (!rowOwnerId && rowOwnerName && targetOwnerName && normName_(rowOwnerName) !== normName_(targetOwnerName)) return;
+      if (rowPropId && entry.PropertyID && rowPropId.toUpperCase() !== String(entry.PropertyID).trim().toUpperCase()) return;
     }
-    const directOwnershipId = String(b.Ownership_ID || "").trim();
-    const invId = String(b.InvoiceID || "").trim();
-    const invNum = String(b.Invoice_Number || "").trim();
-    const resolvedKey = directOwnershipId || (invId ? (keyByInvoiceId[invId] || "") : "") || (invNum ? (keyByInvoiceNumber[invNum] || "") : "");
-    if (!resolvedKey) return;
-    allocatedByOwnership[resolvedKey] = fundMoney_((allocatedByOwnership[resolvedKey] || 0) + Math.max(0, fundMoney_(b.Allocated_Amount)));
+
+    allocatedByOwnership[resolvedKey] = fundMoney_((allocatedByOwnership[resolvedKey] || 0) + allocatedAmt);
   });
 
   const useBillWiseAllocations = Array.isArray(billRows);
@@ -832,7 +930,7 @@ function getReports_(session, body) {
       summary:result.summary,
       generatedAt:new Date().toISOString(),
       auditStatus:"system-generated",
-      note:"Outstanding is grouped by Ownership_ID with Paid amounts linked to Confirmed receipts in Fund Inflow Register and allocations in Bill Wise Details. Unlinked legacy invoices are shown separately and require manual ownership verification."
+      note:"Outstanding is grouped by Ownership_ID with Paid amounts checked from Bill Wise Details (Invoice & Owner wise) and Confirmed receipts in Fund Inflow Register. Unlinked legacy invoices are shown separately and require manual ownership verification."
     });
   }
   if(type==="expenseSummary") {
@@ -1087,6 +1185,32 @@ function hasModuleReadPermission_(session, key, effectiveRole) {
   if (!moduleName) return false;
   if (rolePermission_(session, moduleName, "Can_View", effectiveRole)) return true;
   if (key === "receipts" && rolePermission_(session, "Fund Inflow", "Can_View", effectiveRole)) return true;
+  if (effectiveRole !== "Resident") {
+    const role = effectiveRole || session.role;
+    const rows = rolePermissionRows_(session);
+    const hasExplicitFor = (mod) => rows.some(r => String(r.Role||"").trim().toLowerCase() === String(role).trim().toLowerCase() && String(r.Module_Name||"").trim().toLowerCase() === mod.toLowerCase());
+    if (key === "billWiseDetails") {
+      if (rolePermission_(session, "Payments", "Can_View", effectiveRole)
+        || rolePermission_(session, "Fund Inflow", "Can_View", effectiveRole)
+        || rolePermission_(session, "Maintenance & Invoices", "Can_View", effectiveRole)
+        || rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+        return true;
+      }
+    }
+    if (key === "ownershipHistory" && !hasExplicitFor("Ownership History")) {
+      if (rolePermission_(session, "Properties & Residents", "Can_View", effectiveRole)
+        || rolePermission_(session, "Maintenance & Invoices", "Can_View", effectiveRole)
+        || rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+        return true;
+      }
+    }
+    if (key === "invoices" && !hasExplicitFor("Maintenance & Invoices") && rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+      return true;
+    }
+    if (key === "receipts" && !hasExplicitFor("Payments") && rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+      return true;
+    }
+  }
   if (effectiveRole === "Resident") {
     const aliases = RESIDENT_PERMISSION_ALIASES_[key] || [];
     for (let i = 0; i < aliases.length; i++) {
@@ -1110,7 +1234,7 @@ function getDashboardData_(session,body) {
   const ss = SpreadsheetApp.openById(session.databaseId);
   let keys = role === "Resident"
     ? ["properties","owners","ownershipHistory","tenants","invoices","receipts","billWiseDetails","activityRequests","notices","gallery","galleryPhotos","propertyUtilityDetails"]
-    : ["properties","ownershipHistory","tenants","invoices","receipts","billWiseDetails",
+    : ["properties","owners","ownershipHistory","tenants","rates","financialYears","invoices","receipts","billWiseDetails",
        ...(role === "Admin" || role === "Committee" || role === "Accountant" ? ["activityRequests","expenses"] : []),
        "notices","gallery","galleryPhotos","preventiveMaintenance",
        ...(role === "Admin" || role === "Accountant" ? ["bankAccounts"] : [])];
@@ -1199,7 +1323,7 @@ function seedRolePermissionDefaults_(sh){
   const defaultMap={
     Admin:ROLE_PERMISSION_MODULES_,
     Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Bill Wise Details","Activity Requests","Expenses","Reports","Financial Year Management","Account Heads","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
-    Accountant:["Dashboard","Properties & Residents","Owner Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
+    Accountant:["Dashboard","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
     Resident:["Dashboard","Resident Portal","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Bill Wise Details","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"]
   };
   function perms(role,module){
@@ -1233,7 +1357,7 @@ function seedMissingRolesPermissions_(sh){
   const defaultMap={
     Admin:ROLE_PERMISSION_MODULES_,
     Committee:["Dashboard","Properties & Residents","Owner Management","Ownership History","Tenant Management","Maintenance & Invoices","Payments","Bill Wise Details","Activity Requests","Expenses","Reports","Financial Year Management","Account Heads","Notices","Gallery","Preventive Maintenance","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Notices & Gallery"],
-    Accountant:["Dashboard","Properties & Residents","Owner Management","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
+    Accountant:["Dashboard","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Fund Inflow","Bill Wise Details","Expenses","Reports","Financial Year Management","Account Heads","Bank Accounts","Financial Transactions","Resident Portal","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"],
     Resident:["Dashboard","Resident Portal","Properties & Residents","Owner Management","Ownership History","Maintenance & Invoices","Payments","Bill Wise Details","My Flat","My Bills","Pay Now","Payment History","Activity Requests","Notices","Gallery","Notices & Gallery"]
   };
   function perms(role,module){

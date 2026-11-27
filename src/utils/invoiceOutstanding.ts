@@ -40,17 +40,19 @@ export function computeInvoiceOutstandingBills(
 ): ComputedInvoiceOutstanding[] {
   const receiptStatusByTxnId = new Map<string, string>();
   (receipts || []).forEach((rec) => {
-    const txnId = String(rec.Transaction_ID || '').trim();
+    const txnId = String(rec.Transaction_ID || '').trim().toUpperCase();
     if (!txnId) return;
     const status = String(rec.Receipt_Status || (rec as any).Status || '').trim().toLowerCase();
     receiptStatusByTxnId.set(txnId, status);
   });
 
-  const invoiceIdByNumber = new Map<string, string>();
+  const canonicalInvoiceIdByUpper = new Map<string, string>();
+  const invoiceIdByNumberUpper = new Map<string, string>();
   (invoices || []).forEach((inv) => {
     const id = String(inv.InvoiceID || '').trim();
     const num = String(inv.Invoice_Number || '').trim();
-    if (id && num) invoiceIdByNumber.set(num, id);
+    if (id) canonicalInvoiceIdByUpper.set(id.toUpperCase(), id);
+    if (id && num) invoiceIdByNumberUpper.set(num.toUpperCase(), id);
   });
 
 const EXCLUDED_ALLOCATION_STATUSES = new Set([
@@ -65,16 +67,18 @@ const EXCLUDED_ALLOCATION_STATUSES = new Set([
   (billAllocations || []).forEach((row) => {
     const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
     if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
-    const txnId = String(row.Transaction_ID || '').trim();
+    const txnId = String(row.Transaction_ID || '').trim().toUpperCase();
     if (txnId && receiptStatusByTxnId.has(txnId)) {
       const recStatus = receiptStatusByTxnId.get(txnId) || '';
       if (recStatus !== 'confirmed') return;
     }
 
+    const rawInvoiceId = String(row.InvoiceID || '').trim();
+    const rawInvoiceNum = String(row.Invoice_Number || '').trim();
     const invoiceId =
-      String(row.InvoiceID || '').trim() ||
-      invoiceIdByNumber.get(String(row.Invoice_Number || '').trim()) ||
-      '';
+      canonicalInvoiceIdByUpper.get(rawInvoiceId.toUpperCase()) ||
+      invoiceIdByNumberUpper.get(rawInvoiceNum.toUpperCase()) ||
+      rawInvoiceId;
     if (!invoiceId) return;
     const allocated = Math.max(0, toInvoiceAmount(row.Allocated_Amount));
     if (!Number.isFinite(allocated)) return;

@@ -482,7 +482,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           Structural_Area:'Structural_Area',
           Total_Area:'Super_Built_up_Area', Super_Built_up_Area:'Super_Built_up_Area',
           Occupancy_Status:'Occupancy_Status', Property_Status:'Property_Status',
-          Owner_Name:'Owner_Name', Email_ID:'Email_ID', Mobile_No:'Mobile_No'
+          Owner_Name:'Owner_Name', Email_ID:'Email_ID', Mobile_No:'Mobile_No',
+          Invoice_ID:'InvoiceID', Invoice_No:'Invoice_Number', Property_ID:'PropertyID', Owner_ID:'OwnerID', Rate_ID:'RateID',
+          OwnershipID:'Ownership_ID', TransactionID:'Transaction_ID',
+          Allocated_Amt:'Allocated_Amount', Allocation_Amount:'Allocated_Amount',
+          Net_Charge:'Net_Charge_Amount', Net_Amount:'Net_Charge_Amount'
         };
         normalized = aliases[normalized] || normalized;
         let value = row[key];
@@ -501,7 +505,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (typeof value === 'string' && value.trim() !== '' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
           value = Number(value);
         }
-        out[normalized] = value;
+        if (out[normalized] === undefined || out[normalized] === '') {
+          out[normalized] = value;
+        }
       });
       return out;
     });
@@ -552,7 +558,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const modulePlan: Record<string, string[]> = {
-      dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','expenses','bankAccounts','preventiveMaintenance'],
+      dashboard: activeRole === 'Resident' ? ['properties','owners','ownershipHistory','tenants','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','propertyUtilityDetails'] : ['properties','owners','ownershipHistory','tenants','rates','financialYears','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos','expenses','bankAccounts','preventiveMaintenance'],
       properties_all: ['properties','owners','ownershipHistory','tenants'], properties_owners: ['properties','owners','ownershipHistory','tenants'],
       properties_history: ['ownershipHistory','owners','properties','tenants'], properties_tenants: ['tenants','properties','owners','ownershipHistory'],
       invoices_generate: ['properties','rates','ownershipHistory','owners','invoices','ratePropertyMapping'],
@@ -617,9 +623,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           const modName = permModuleMap[key];
           if (!modName) return true;
+          const hasExplicitModuleRow = (moduleLabel: string) =>
+            rolePermissions.some(
+              (r) =>
+                String(r.Role || '').trim().toLowerCase() === effectiveRoleForLoad.toLowerCase() &&
+                String(r.Module_Name || '').trim().toLowerCase() === moduleLabel.toLowerCase()
+            );
           if (key === 'receipts') {
             return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Payments', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View');
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View')
+              || (!hasExplicitModuleRow('Payments') && permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View'));
+          }
+          if (key === 'billWiseDetails') {
+            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Bill Wise Details', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Payments', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Maintenance & Invoices', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
+          }
+          if (key === 'ownershipHistory' && !hasExplicitModuleRow('Ownership History')) {
+            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Properties & Residents', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Maintenance & Invoices', 'Can_View')
+              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
+          }
+          if (key === 'invoices' && !hasExplicitModuleRow('Maintenance & Invoices')) {
+            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
           }
           return permissionGranted(rolePermissions, effectiveRoleForLoad, modName, 'Can_View');
         });
@@ -719,7 +747,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // Check if dashboard modules are already warm (<30s); otherwise fetch getRoleDashboardData once and populate all module caches.
           const dashCoreCandidates = activeRole === 'Resident'
             ? ['properties','invoices','receipts','billWiseDetails','activityRequests','notices','gallery','galleryPhotos']
-            : ['properties','tenants','invoices','receipts','billWiseDetails','expenses','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
+            : ['properties','owners','ownershipHistory','tenants','rates','financialYears','invoices','receipts','billWiseDetails','expenses','activityRequests','notices','gallery','galleryPhotos','preventiveMaintenance'];
           const dashCoreModules = rolePermissions.length > 0
             ? dashCoreCandidates.filter((mod) => permittedRequested.includes(mod))
             : dashCoreCandidates;

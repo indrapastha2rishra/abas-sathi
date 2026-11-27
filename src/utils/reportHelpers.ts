@@ -429,89 +429,211 @@ export function computeOwnershipOutstandingClient(params: {
   owners: OwnerMaster[];
 }) {
   const { invoices, receipts, billAllocations, ownerships, properties, owners } = params;
-  const ownershipById = new Map((ownerships || []).map((o) => [String(o.Ownership_ID || '').trim(), o]));
-  const propById = new Map((properties || []).map((p) => [String(p.PropertyID || '').trim(), p]));
-  const ownerById = new Map((owners || []).map((o) => [String(o.OwnerID || '').trim(), o]));
+  const normName = (v: unknown) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
 
-  const receiptStatusByTxnId = new Map<string, string>();
-  (receipts || []).forEach((r) => {
-    const txnId = String(r.Transaction_ID || '').trim();
-    if (!txnId) return;
-    receiptStatusByTxnId.set(txnId, String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase());
+  const ownershipByIdUpper = new Map<string, OwnershipHistory>();
+  (ownerships || []).forEach((o) => {
+    const id = String(o.Ownership_ID || (o as any).OwnershipID || '').trim();
+    if (id) ownershipByIdUpper.set(id.toUpperCase(), o);
   });
 
-  const keyByInvoiceId = new Map<string, string>();
-  const keyByInvoiceNumber = new Map<string, string>();
+  const propByIdUpper = new Map<string, PropertyMaster>();
+  (properties || []).forEach((p) => {
+    const id = String(p.PropertyID || (p as any).Property_ID || '').trim();
+    if (id) propByIdUpper.set(id.toUpperCase(), p);
+  });
+
+  const ownerByIdUpper = new Map<string, OwnerMaster>();
+  (owners || []).forEach((o) => {
+    const id = String(o.OwnerID || (o as any).Owner_ID || '').trim();
+    if (id) ownerByIdUpper.set(id.toUpperCase(), o);
+  });
+
+  const receiptByTxnIdUpper = new Map<
+    string,
+    { status: string; ownerId: string; ownerName: string; ownershipId: string; propertyId: string }
+  >();
+  (receipts || []).forEach((r) => {
+    const txnId = String(r.Transaction_ID || (r as any).TransactionID || '').trim().toUpperCase();
+    if (!txnId) return;
+    receiptByTxnIdUpper.set(txnId, {
+      status: String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase(),
+      ownerId: String(r.OwnerID || (r as any).Owner_ID || '').trim(),
+      ownerName: String(r.Owner_Name || '').trim(),
+      ownershipId: String(r.Ownership_ID || (r as any).OwnershipID || '').trim(),
+      propertyId: String(r.PropertyID || (r as any).Property_ID || '').trim(),
+    });
+  });
+
+  interface IssuedInvoiceMeta {
+    key: string;
+    invId: string;
+    invNum: string;
+    ownershipId: string;
+    propertyId: string;
+    ownerId: string;
+    ownerName: string;
+  }
+
+  const issuedInvoiceByIdUpper = new Map<string, IssuedInvoiceMeta>();
+  const issuedInvoiceByNumberUpper = new Map<string, IssuedInvoiceMeta>();
+  const keyByUpperKey = new Map<string, string>();
+  const keysByPropertyAndOwnerUpper = new Map<string, Set<string>>();
   const grouped = new Map<string, any>();
 
-  (invoices || [])
-    .filter((inv) => !EXCLUDED_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
-    .forEach((inv) => {
-      const ownershipId = String(inv.Ownership_ID || '').trim();
-      const propertyId = String(inv.PropertyID || '').trim();
-      const ownerId = String(inv.OwnerID || '').trim();
-      const key = ownershipId || `UNLINKED:${propertyId}:${ownerId}`;
-      const invId = String(inv.InvoiceID || '').trim();
-      const invNum = String(inv.Invoice_Number || '').trim();
-      if (invId) keyByInvoiceId.set(invId, key);
-      if (invNum) keyByInvoiceNumber.set(invNum, key);
+  (invoices || []).forEach((inv) => {
+    const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
+    if (EXCLUDED_INVOICE_STATUSES.has(statusLower)) return;
 
-      const history = ownershipById.get(ownershipId);
-      const prop = propById.get(propertyId);
-      const owner = ownerById.get(ownerId);
-      const floorNo = resolveFloorValue(prop, inv, history);
+    const rawOwnershipId = String(inv.Ownership_ID || (inv as any).OwnershipID || '').trim();
+    const history = rawOwnershipId ? ownershipByIdUpper.get(rawOwnershipId.toUpperCase()) : undefined;
+    const ownershipId = String(history?.Ownership_ID || rawOwnershipId).trim();
+    const propertyId = String(inv.PropertyID || (inv as any).Property_ID || history?.PropertyID || '').trim();
+    const ownerId = String(inv.OwnerID || (inv as any).Owner_ID || history?.OwnerID || '').trim();
+    const key = ownershipId || `UNLINKED:${propertyId}:${ownerId}`;
+    keyByUpperKey.set(key.toUpperCase(), key);
 
-      let entry = grouped.get(key);
-      if (!entry) {
-        entry = {
-          Ownership_ID: ownershipId || 'Not linked',
-          PropertyID: propertyId,
-          Flat_No: String(inv.Flat_Number || (inv as any).Flat_No || prop?.Flat_No || ''),
-          Floor_No: floorNo,
-          OwnerID: ownerId,
-          Owner_Name: String(inv.Owner_Name || owner?.Owner_Name || ''),
-          Ownership_Start_Date: history?.Ownership_Start_Date || '',
-          Ownership_End_Date: history?.Ownership_End_Date || '',
-          Ownership_Status: history?.Ownership_Status || 'Historical record not found',
-          Invoice_Count: 0,
-          Total_Billed: 0,
-          Total_Paid: 0,
-          Outstanding: 0,
-          Data_Link_Status: ownershipId && history?.Ownership_ID ? 'Linked' : 'Needs review',
-          _legacyPaid: 0,
-          _hasOwnershipId: Boolean(ownershipId),
-        };
-        grouped.set(key, entry);
-      } else if (entry.Floor_No === '' && floorNo !== '') {
-        entry.Floor_No = floorNo;
-      }
+    if (propertyId && ownerId) {
+      const poKey = `${propertyId.toUpperCase()}::${ownerId.toUpperCase()}`;
+      const set = keysByPropertyAndOwnerUpper.get(poKey) || new Set<string>();
+      set.add(key);
+      keysByPropertyAndOwnerUpper.set(poKey, set);
+    }
 
-      const net = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
-      const legacyPaid = Math.max(0, toReportAmount(inv.Paid_Amount));
-      entry.Invoice_Count += 1;
-      entry.Total_Billed = Math.round((entry.Total_Billed + net) * 100) / 100;
-      entry._legacyPaid = Math.round((entry._legacyPaid + legacyPaid) * 100) / 100;
-    });
+    const prop = propertyId ? propByIdUpper.get(propertyId.toUpperCase()) : undefined;
+    const owner = ownerId ? ownerByIdUpper.get(ownerId.toUpperCase()) : undefined;
+    const ownerName = String(inv.Owner_Name || owner?.Owner_Name || '').trim();
+    const invId = String(inv.InvoiceID || (inv as any).Invoice_ID || '').trim();
+    const invNum = String(inv.Invoice_Number || (inv as any).Invoice_No || '').trim();
 
-  // Fetch and sum Allocated_Amount from Bill Wise Details grouped by Ownership_ID
+    const meta: IssuedInvoiceMeta = {
+      key,
+      invId,
+      invNum,
+      ownershipId,
+      propertyId,
+      ownerId,
+      ownerName,
+    };
+    if (invId) issuedInvoiceByIdUpper.set(invId.toUpperCase(), meta);
+    if (invNum) issuedInvoiceByNumberUpper.set(invNum.toUpperCase(), meta);
+
+    const floorNo = resolveFloorValue(prop, inv, history);
+
+    let entry = grouped.get(key);
+    if (!entry) {
+      entry = {
+        Ownership_ID: ownershipId || 'Not linked',
+        PropertyID: propertyId,
+        Flat_No: String(inv.Flat_Number || (inv as any).Flat_No || prop?.Flat_No || ''),
+        Floor_No: floorNo,
+        OwnerID: ownerId,
+        Owner_Name: ownerName,
+        Ownership_Start_Date: history?.Ownership_Start_Date || '',
+        Ownership_End_Date: history?.Ownership_End_Date || '',
+        Ownership_Status: history?.Ownership_Status || 'Historical record not found',
+        Invoice_Count: 0,
+        Total_Billed: 0,
+        Total_Paid: 0,
+        Outstanding: 0,
+        Data_Link_Status: ownershipId && history?.Ownership_ID ? 'Linked' : 'Needs review',
+        _legacyPaid: 0,
+        _hasOwnershipId: Boolean(ownershipId),
+      };
+      grouped.set(key, entry);
+    } else {
+      if (entry.Floor_No === '' && floorNo !== '') entry.Floor_No = floorNo;
+      if (!entry.OwnerID && ownerId) entry.OwnerID = ownerId;
+      if (!entry.Owner_Name && ownerName) entry.Owner_Name = ownerName;
+      if (!entry.PropertyID && propertyId) entry.PropertyID = propertyId;
+    }
+
+    const net = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
+    const legacyPaid = Math.max(0, toReportAmount(inv.Paid_Amount));
+    entry.Invoice_Count += 1;
+    entry.Total_Billed = Math.round((entry.Total_Billed + net) * 100) / 100;
+    entry._legacyPaid = Math.round((entry._legacyPaid + legacyPaid) * 100) / 100;
+  });
+
+  // Check Paid from Bill Wise Details against mentioned Invoice (InvoiceID / Invoice_Number) and Owner wise
   const allocatedByOwnership = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
     const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
     if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
-    const txnId = String(row.Transaction_ID || '').trim();
-    if (txnId && receiptStatusByTxnId.has(txnId) && receiptStatusByTxnId.get(txnId) !== 'confirmed') {
-      return;
+
+    const txnIdUpper = String(row.Transaction_ID || (row as any).TransactionID || '').trim().toUpperCase();
+    const recInfo = txnIdUpper ? receiptByTxnIdUpper.get(txnIdUpper) : undefined;
+    if (recInfo && recInfo.status !== 'confirmed') return;
+
+    const allocatedAmt = Math.max(
+      0,
+      toReportAmount(row.Allocated_Amount ?? (row as any).Allocation_Amount ?? (row as any).Allocated_Amt)
+    );
+    if (allocatedAmt <= 0) return;
+
+    const rowInvId = String(row.InvoiceID || (row as any).Invoice_ID || '').trim();
+    const rowInvNum = String(row.Invoice_Number || (row as any).Invoice_No || '').trim();
+    const rowOwnershipId = String(row.Ownership_ID || (row as any).OwnershipID || '').trim();
+    const rowPropId = String(row.PropertyID || (row as any).Property_ID || '').trim();
+    const rowOwnerId = String(row.OwnerID || (row as any).Owner_ID || '').trim() || recInfo?.ownerId || '';
+    const resolvedRowOwner = rowOwnerId ? ownerByIdUpper.get(rowOwnerId.toUpperCase()) : undefined;
+    const rowOwnerName = String((row as any).Owner_Name || '').trim() || recInfo?.ownerName || String(resolvedRowOwner?.Owner_Name || '').trim();
+
+    let resolvedKey = '';
+
+    if (rowInvId || rowInvNum) {
+      // Invoice mentioned: must match an active issued invoice and match Owner / Ownership if specified
+      const matchedInv =
+        (rowInvId ? issuedInvoiceByIdUpper.get(rowInvId.toUpperCase()) : undefined) ||
+        (rowInvNum ? issuedInvoiceByNumberUpper.get(rowInvNum.toUpperCase()) : undefined);
+      if (!matchedInv) return;
+
+      const entry = grouped.get(matchedInv.key);
+      const targetOwnerId = matchedInv.ownerId || String(entry?.OwnerID || '').trim();
+      const targetOwnerFromMaster = targetOwnerId ? ownerByIdUpper.get(targetOwnerId.toUpperCase()) : undefined;
+      const targetOwnerName = matchedInv.ownerName || String(entry?.Owner_Name || targetOwnerFromMaster?.Owner_Name || '').trim();
+
+      if (rowOwnerId && targetOwnerId && rowOwnerId.toUpperCase() !== targetOwnerId.toUpperCase()) return;
+      if ((!rowOwnerId || !targetOwnerId) && rowOwnerName && targetOwnerName && normName(rowOwnerName) !== normName(targetOwnerName)) {
+        return;
+      }
+      if (rowOwnershipId && matchedInv.ownershipId && rowOwnershipId.toUpperCase() !== matchedInv.ownershipId.toUpperCase()) {
+        return;
+      }
+      if (rowPropId && matchedInv.propertyId && rowPropId.toUpperCase() !== matchedInv.propertyId.toUpperCase()) {
+        return;
+      }
+      resolvedKey = matchedInv.key;
+    } else {
+      // No InvoiceID/Invoice_Number mentioned: match Ownership_ID (or unique Property+Owner) and verify Owner wise
+      if (rowOwnershipId) {
+        resolvedKey = keyByUpperKey.get(rowOwnershipId.toUpperCase()) || '';
+      } else if (rowPropId && rowOwnerId) {
+        const unlinkedKey = keyByUpperKey.get(`UNLINKED:${rowPropId}:${rowOwnerId}`.toUpperCase());
+        if (unlinkedKey) {
+          resolvedKey = unlinkedKey;
+        } else {
+          const candidates = keysByPropertyAndOwnerUpper.get(`${rowPropId.toUpperCase()}::${rowOwnerId.toUpperCase()}`);
+          if (candidates && candidates.size === 1) {
+            resolvedKey = Array.from(candidates)[0];
+          }
+        }
+      }
+      if (!resolvedKey) return;
+      const entry = grouped.get(resolvedKey);
+      if (!entry) return;
+
+      const targetOwnerId = String(entry.OwnerID || '').trim();
+      const targetOwnerName = String(entry.Owner_Name || '').trim();
+      if (rowOwnerId && targetOwnerId && rowOwnerId.toUpperCase() !== targetOwnerId.toUpperCase()) return;
+      if (!rowOwnerId && rowOwnerName && targetOwnerName && normName(rowOwnerName) !== normName(targetOwnerName)) {
+        return;
+      }
+      if (rowPropId && entry.PropertyID && rowPropId.toUpperCase() !== String(entry.PropertyID).trim().toUpperCase()) {
+        return;
+      }
     }
-    const directOwnershipId = String(row.Ownership_ID || '').trim();
-    const invId = String(row.InvoiceID || '').trim();
-    const invNum = String(row.Invoice_Number || '').trim();
-    const resolvedKey =
-      directOwnershipId ||
-      (invId ? keyByInvoiceId.get(invId) : '') ||
-      (invNum ? keyByInvoiceNumber.get(invNum) : '') ||
-      '';
-    if (!resolvedKey) return;
-    const allocatedAmt = Math.max(0, toReportAmount(row.Allocated_Amount));
+
     allocatedByOwnership.set(
       resolvedKey,
       Math.round(((allocatedByOwnership.get(resolvedKey) || 0) + allocatedAmt) * 100) / 100

@@ -16,7 +16,7 @@ import type {
   RateMaster,
 } from '../types/database';
 import { calculateFundSummary, type FundSummaryData } from './calculations';
-import { computeInvoiceOutstandingBills, type ComputedInvoiceOutstanding } from './invoiceOutstanding';
+import { computeInvoiceOutstandingBills, toInvoiceAmount, type ComputedInvoiceOutstanding } from './invoiceOutstanding';
 import { resolveFYRangeForMonth, toReportAmount, toReportDateKey } from './reportHelpers';
 
 export interface OwnershipOutstandingRowLike {
@@ -48,11 +48,21 @@ export interface DashboardInvoiceSummary {
   totalBilled: number;
   totalCollected: number;
   totalOutstanding: number;
+  fyBilled: number;
+  fyCollected: number;
+  fyOutstanding: number;
   collectionRate: string;
   maintenanceBilled: number;
   maintenanceCollected: number;
+  maintenanceOutstanding: number;
   maintenanceCollectionRate: string;
   maintenanceInvoiceCount: number;
+  maintenanceIssuedInvoices: ComputedInvoiceOutstanding[];
+  maintenancePaidCount: number;
+  maintenancePartialCount: number;
+  maintenanceUnpaidCount: number;
+  maintenanceOverdueCount: number;
+  maintenanceDonutSegments: DashboardDonutSegment[];
   paidCount: number;
   partialCount: number;
   unpaidCount: number;
@@ -63,13 +73,64 @@ export interface DashboardInvoiceSummary {
 export const DASHBOARD_DONUT_CIRCUMFERENCE = 2 * Math.PI * 38;
 
 const NON_MAINTENANCE_PURPOSE_RE = /\b(sinking\s*fund|parking|electricity|water\s*charges?|repair\s*levy|corpus)\b/i;
-const MAINTENANCE_PURPOSE_RE = /(maintenance|রক্ষণাবেক্ষণ)/i;
+const MAINTENANCE_PURPOSE_RE = /(maintenance|রক্ষণাবেক্ষণ|\bcam\b)/i;
+
+function buildRateMap(rates: RateMaster[] = []): Map<string, RateMaster> {
+  const rateById = new Map<string, RateMaster>();
+  (rates || []).forEach((r) => {
+    const id = String(r.RateID || '').trim();
+    if (id) {
+      rateById.set(id, r);
+      rateById.set(id.toUpperCase(), r);
+    }
+  });
+  return rateById;
+}
+
+function buildStatusDonutSegments(rows: ComputedInvoiceOutstanding[]) {
+  const paidCount = rows.filter((i) => i.Invoice_Status === 'Paid').length;
+  const partialCount = rows.filter((i) => i.Invoice_Status === 'Partially Paid').length;
+  const unpaidCount = rows.filter((i) => i.Invoice_Status === 'Unpaid').length;
+  const overdueCount = rows.filter((i) => i.Invoice_Status === 'Overdue').length;
+
+  const denominator = rows.length || 1;
+  const rawSegments: Array<{ status: DashboardDonutSegment['status']; color: string; count: number }> = [
+    { status: 'Paid', color: '#536B4D', count: paidCount },
+    { status: 'Partially Paid', color: '#3B82F6', count: partialCount },
+    { status: 'Unpaid', color: '#F59E0B', count: unpaidCount },
+    { status: 'Overdue', color: '#C97958', count: overdueCount },
+  ];
+
+  let cumulativeOffset = 0;
+  const donutSegments: DashboardDonutSegment[] = rawSegments.map((seg) => {
+    const length = (seg.count / denominator) * DASHBOARD_DONUT_CIRCUMFERENCE;
+    const segment: DashboardDonutSegment = {
+      ...seg,
+      length,
+      offset: cumulativeOffset === 0 ? 0 : -cumulativeOffset,
+    };
+    cumulativeOffset += length;
+    return segment;
+  });
+
+  return {
+    paidCount,
+    partialCount,
+    unpaidCount,
+    overdueCount,
+    donutSegments,
+  };
+}
 
 export function isMaintenanceInvoice(
   invoice: Partial<InvoiceRegister>,
   rateById?: Map<string, RateMaster>
 ): boolean {
-  const rate = invoice.RateID && rateById ? rateById.get(String(invoice.RateID).trim()) : undefined;
+  const rateKey = String(invoice.RateID || '').trim();
+  const rate =
+    rateKey && rateById
+      ? rateById.get(rateKey) || rateById.get(rateKey.toUpperCase())
+      : undefined;
   const purpose = String(invoice.Purpose || rate?.Purpose || '').trim();
   if (purpose) {
     if (MAINTENANCE_PURPOSE_RE.test(purpose)) return true;
@@ -114,19 +175,19 @@ export function computeMaintenanceCollectionRate(params: {
   periodStart?: string;
   periodEnd?: string;
   now?: Date;
+  computedInvoices?: ComputedInvoiceOutstanding[];
 }): {
   maintenanceBilled: number;
   maintenanceCollected: number;
+  maintenanceOutstanding: number;
   maintenanceCollectionRate: string;
   maintenanceInvoiceCount: number;
+  maintenanceIssuedInvoices: ComputedInvoiceOutstanding[];
 } {
-  const { invoices, receipts, billAllocations, rates = [], periodStart, periodEnd, now = new Date() } = params;
-  const rateById = new Map<string, RateMaster>();
-  (rates || []).forEach((r) => {
-    if (r.RateID) rateById.set(String(r.RateID).trim(), r);
-  });
+  const { invoices, receipts, billAllocations, rates = [], periodStart, periodEnd, now = new Date(), computedInvoices } = params;
+  const rateById = buildRateMap(rates);
 
-  const computed = computeInvoiceOutstandingBills(invoices, billAllocations, receipts, now);
+  const computed = computedInvoices || computeInvoiceOutstandingBills(invoices, billAllocations, receipts, now);
   const maintenanceInvoices = computed.filter((inv) => {
     const status = String(inv.Invoice_Status || '').trim().toLowerCase();
     if (EXCLUDED_DASHBOARD_INVOICE_STATUSES.has(status)) return false;
@@ -143,14 +204,18 @@ export function computeMaintenanceCollectionRate(params: {
         0
       ) * 100
     ) / 100;
+  const maintenanceOutstanding =
+    Math.round(maintenanceInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0) * 100) / 100;
   const maintenanceCollectionRate =
     maintenanceBilled > 0 ? ((maintenanceCollected / maintenanceBilled) * 100).toFixed(1) : '0';
 
   return {
     maintenanceBilled,
     maintenanceCollected,
+    maintenanceOutstanding,
     maintenanceCollectionRate,
     maintenanceInvoiceCount: maintenanceInvoices.length,
+    maintenanceIssuedInvoices: maintenanceInvoices,
   };
 }
 
@@ -172,11 +237,32 @@ export function computeDashboardInvoiceSummary(params: {
   const totalBilled = Math.round(issuedInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0) * 100) / 100;
   const totalCollected =
     Math.round(
-      issuedInvoices.reduce((sum, inv) => sum + Math.min(inv.Net_Charge_Amount, Math.max(0, inv.Paid_Amount)), 0) * 100
+      issuedInvoices.reduce((sum, inv) => sum + Math.min(inv.Net_Charge_Amount, Math.max(0, inv.Allocated_Amount_Total)), 0) * 100
     ) / 100;
   const totalOutstanding =
     Math.round(issuedInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0) * 100) / 100;
   const collectionRate = totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0';
+
+  const fyStartKey = periodStart ? toReportDateKey(periodStart) : '';
+  const fyEndKey = periodEnd ? toReportDateKey(periodEnd) : '';
+  const fyIssuedInvoices = issuedInvoices.filter((inv) => {
+    if (!fyStartKey && !fyEndKey) return true;
+    const dateKey = toReportDateKey(inv.Billing_Date) || toReportDateKey(inv.Bill_Period_From);
+    if (!dateKey) return false;
+    if (fyStartKey && dateKey < fyStartKey) return false;
+    if (fyEndKey && dateKey > fyEndKey) return false;
+    return true;
+  });
+  const fyBilled = Math.round(fyIssuedInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0) * 100) / 100;
+  const fyCollected =
+    Math.round(
+      fyIssuedInvoices.reduce(
+        (sum, inv) => sum + Math.min(inv.Net_Charge_Amount, Math.max(0, inv.Allocated_Amount_Total)),
+        0
+      ) * 100
+    ) / 100;
+  const fyOutstanding =
+    Math.round(fyIssuedInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0) * 100) / 100;
 
   const maintenanceMetrics = computeMaintenanceCollectionRate({
     invoices,
@@ -186,32 +272,11 @@ export function computeDashboardInvoiceSummary(params: {
     periodStart,
     periodEnd,
     now,
+    computedInvoices: computed,
   });
 
-  const paidCount = issuedInvoices.filter((i) => i.Invoice_Status === 'Paid').length;
-  const partialCount = issuedInvoices.filter((i) => i.Invoice_Status === 'Partially Paid').length;
-  const unpaidCount = issuedInvoices.filter((i) => i.Invoice_Status === 'Unpaid').length;
-  const overdueCount = issuedInvoices.filter((i) => i.Invoice_Status === 'Overdue').length;
-
-  const denominator = issuedInvoices.length || 1;
-  const rawSegments: Array<{ status: DashboardDonutSegment['status']; color: string; count: number }> = [
-    { status: 'Paid', color: '#536B4D', count: paidCount },
-    { status: 'Partially Paid', color: '#3B82F6', count: partialCount },
-    { status: 'Unpaid', color: '#F59E0B', count: unpaidCount },
-    { status: 'Overdue', color: '#C97958', count: overdueCount },
-  ];
-
-  let cumulativeOffset = 0;
-  const donutSegments: DashboardDonutSegment[] = rawSegments.map((seg) => {
-    const length = (seg.count / denominator) * DASHBOARD_DONUT_CIRCUMFERENCE;
-    const segment: DashboardDonutSegment = {
-      ...seg,
-      length,
-      offset: cumulativeOffset === 0 ? 0 : -cumulativeOffset,
-    };
-    cumulativeOffset += length;
-    return segment;
-  });
+  const overallDonut = buildStatusDonutSegments(issuedInvoices);
+  const maintenanceDonut = buildStatusDonutSegments(maintenanceMetrics.maintenanceIssuedInvoices);
 
   const outstandingRows = issuedInvoices
     .filter((inv) => inv.Calculated_Outstanding > 0)
@@ -223,13 +288,21 @@ export function computeDashboardInvoiceSummary(params: {
     totalBilled,
     totalCollected,
     totalOutstanding,
+    fyBilled,
+    fyCollected,
+    fyOutstanding,
     collectionRate,
     ...maintenanceMetrics,
-    paidCount,
-    partialCount,
-    unpaidCount,
-    overdueCount,
-    donutSegments,
+    maintenancePaidCount: maintenanceDonut.paidCount,
+    maintenancePartialCount: maintenanceDonut.partialCount,
+    maintenanceUnpaidCount: maintenanceDonut.unpaidCount,
+    maintenanceOverdueCount: maintenanceDonut.overdueCount,
+    maintenanceDonutSegments: maintenanceDonut.donutSegments,
+    paidCount: overallDonut.paidCount,
+    partialCount: overallDonut.partialCount,
+    unpaidCount: overallDonut.unpaidCount,
+    overdueCount: overallDonut.overdueCount,
+    donutSegments: overallDonut.donutSegments,
   };
 }
 
@@ -279,6 +352,66 @@ export function resolveDashboardFY(params: {
   return resolveFYRangeForMonth(todayKey.slice(0, 7), financialYears);
 }
 
+const EXCLUDED_BILL_ALLOCATION_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'rejected',
+  'void',
+  'reversed',
+]);
+
+/**
+ * Calculates total Outstanding Collection directly as:
+ *   total 'Invoice Register' (issued Net_Charge_Amount) − total 'Bill Wise Details' (Allocated_Amount)
+ * Not restricted to any single Financial Year.
+ */
+export function computeTotalOutstandingCollection(params: {
+  invoices: InvoiceRegister[];
+  billAllocations: BillWiseDetails[];
+  receipts?: FundInflowRegister[];
+}): {
+  totalInvoiceRegister: number;
+  totalBillWiseDetails: number;
+  outstandingCollection: number;
+} {
+  const { invoices, billAllocations, receipts = [] } = params;
+  const receiptStatusByTxnId = new Map<string, string>();
+  (receipts || []).forEach((rec) => {
+    const txnId = String(rec.Transaction_ID || '').trim().toUpperCase();
+    if (!txnId) return;
+    receiptStatusByTxnId.set(txnId, String(rec.Receipt_Status || (rec as any).Status || '').trim().toLowerCase());
+  });
+
+  const totalInvoiceRegister =
+    Math.round(
+      (invoices || [])
+        .filter((inv) => !EXCLUDED_DASHBOARD_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
+        .reduce((sum, inv) => sum + Math.max(0, toInvoiceAmount(inv.Net_Charge_Amount)), 0) * 100
+    ) / 100;
+
+  const totalBillWiseDetails =
+    Math.round(
+      (billAllocations || [])
+        .filter((row) => {
+          const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
+          if (allocStatus && EXCLUDED_BILL_ALLOCATION_STATUSES.has(allocStatus)) return false;
+          const txnId = String(row.Transaction_ID || '').trim().toUpperCase();
+          if (txnId && receiptStatusByTxnId.has(txnId)) {
+            return receiptStatusByTxnId.get(txnId) === 'confirmed';
+          }
+          return true;
+        })
+        .reduce((sum, row) => sum + Math.max(0, toInvoiceAmount(row.Allocated_Amount)), 0) * 100
+    ) / 100;
+
+  const outstandingCollection = Math.max(0, Math.round((totalInvoiceRegister - totalBillWiseDetails) * 100) / 100);
+  return {
+    totalInvoiceRegister,
+    totalBillWiseDetails,
+    outstandingCollection,
+  };
+}
+
 export function computeDashboardFundSummary(params: {
   fyRange: DashboardFYInfo;
   fundBalanceSummary?: {
@@ -289,10 +422,11 @@ export function computeDashboardFundSummary(params: {
   receipts: FundInflowRegister[];
   expenses: ExpenseRegister[];
   invoices: InvoiceRegister[];
+  billAllocations?: BillWiseDetails[];
   bankAccounts: BankAccountMaster[];
-  totalOutstanding: number;
+  totalOutstanding?: number;
 }): FundSummaryData {
-  const { fyRange, fundBalanceSummary, receipts, expenses, invoices, bankAccounts, totalOutstanding } = params;
+  const { fyRange, fundBalanceSummary, receipts, expenses, invoices, billAllocations, bankAccounts, totalOutstanding } = params;
   const hasServerOpening = typeof fundBalanceSummary?.openingFundBalance === 'number';
   const openingBalanceTotal = hasServerOpening
     ? toReportAmount(fundBalanceSummary?.openingFundBalance)
@@ -338,7 +472,16 @@ export function computeDashboardFundSummary(params: {
 
   summary.availableFund =
     Math.round((summary.openingFundBalance + summary.totalFundReceived - summary.totalFundUtilized) * 100) / 100;
-  summary.outstandingCollection = Math.round(totalOutstanding * 100) / 100;
+
+  if (typeof totalOutstanding === 'number' && Number.isFinite(totalOutstanding)) {
+    summary.outstandingCollection = Math.round(totalOutstanding * 100) / 100;
+  } else if (Array.isArray(billAllocations)) {
+    summary.outstandingCollection = computeTotalOutstandingCollection({
+      invoices,
+      billAllocations,
+      receipts,
+    }).outstandingCollection;
+  }
   return summary;
 }
 

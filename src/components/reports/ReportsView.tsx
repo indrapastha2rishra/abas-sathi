@@ -1225,7 +1225,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
                 Ownership-wise Outstanding Maintenance / মালিকানাভিত্তিক বকেয়া রক্ষণাবেক্ষণ
               </h3>
               <p className="text-xs text-gray-500">
-                Grouped by Floor (Floor No.) &amp; Ownership_ID • Paid summed from Bill Wise Details (Allocated_Amount) grouped by Ownership_ID
+                Grouped by Floor (Floor No.) &amp; Ownership_ID • Paid checked from Bill Wise Details (Invoice &amp; Owner wise)
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 no-print">

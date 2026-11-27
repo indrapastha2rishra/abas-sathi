@@ -305,3 +305,126 @@ test('computeOwnershipOutstandingClient sums Allocated_Amount from Bill Wise Det
   assert.equal(floorGroups[2].totalOutstanding, 2500);
 });
 
+test('computeOwnershipOutstandingClient checks Paid from Bill Wise Details against mentioned Invoice and Owner wise', () => {
+  const res = computeOwnershipOutstandingClient({
+    invoices: [
+      {
+        InvoiceID: 'INV-10',
+        Invoice_Number: 'INV-2026-0010',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-10',
+        OwnerID: 'OWN-1',
+        Owner_Name: 'Amit Roy',
+        Flat_Number: '101',
+        Net_Charge_Amount: 5000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 5000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      {
+        InvoiceID: 'INV-CANCEL',
+        Invoice_Number: 'INV-2026-0011',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-10',
+        OwnerID: 'OWN-1',
+        Owner_Name: 'Amit Roy',
+        Flat_Number: '101',
+        Net_Charge_Amount: 2000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 0,
+        Invoice_Status: 'Cancelled',
+      } as any,
+      {
+        InvoiceID: 'INV-20',
+        Invoice_Number: 'INV-2026-0020',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-20',
+        OwnerID: 'OWN-2',
+        Owner_Name: 'Neha Sen',
+        Flat_Number: '101',
+        Net_Charge_Amount: 4000,
+        Paid_Amount: 0,
+        Outstanding_Amount: 4000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'TXN-10', Receipt_Status: 'Confirmed', OwnerID: 'OWN-1' } as any,
+      { Transaction_ID: 'TXN-20', Receipt_Status: 'Confirmed', OwnerID: 'OWN-2' } as any,
+    ],
+    billAllocations: [
+      // Valid case-insensitive match on InvoiceID, Ownership_ID, and OwnerID
+      { Allocation_ID: 'AL-1', Transaction_ID: 'txn-10', InvoiceID: 'inv-10', Ownership_ID: 'osh-10', OwnerID: 'own-1', Allocated_Amount: 1500 } as any,
+      // Valid match by Invoice_Number + OwnerID even when Ownership_ID is omitted
+      { Allocation_ID: 'AL-2', Transaction_ID: 'TXN-10', InvoiceID: '', Invoice_Number: 'inv-2026-0010', Ownership_ID: '', OwnerID: 'OWN-1', Allocated_Amount: 500 } as any,
+      // Excluded: references a Cancelled invoice even though Ownership_ID matches OSH-10
+      { Allocation_ID: 'AL-3', Transaction_ID: 'TXN-10', InvoiceID: 'INV-CANCEL', Ownership_ID: 'OSH-10', OwnerID: 'OWN-1', Allocated_Amount: 2000 } as any,
+      // Excluded: OwnerID mismatch against the mentioned invoice's owner (OWN-2 vs OWN-1)
+      { Allocation_ID: 'AL-4', Transaction_ID: 'TXN-20', InvoiceID: 'INV-10', Ownership_ID: 'OSH-10', OwnerID: 'OWN-2', Allocated_Amount: 1000 } as any,
+      // Excluded: Ownership_ID mismatch against the mentioned invoice (OSH-20 vs OSH-10)
+      { Allocation_ID: 'AL-5', Transaction_ID: 'TXN-20', InvoiceID: 'INV-20', Ownership_ID: 'OSH-10', OwnerID: 'OWN-2', Allocated_Amount: 800 } as any,
+      // Valid match for OSH-20 / OWN-2
+      { Allocation_ID: 'AL-6', Transaction_ID: 'TXN-20', InvoiceID: 'INV-20', Ownership_ID: 'OSH-20', OwnerID: 'OWN-2', Allocated_Amount: 1200 } as any,
+    ],
+    ownerships: [
+      { Ownership_ID: 'OSH-10', PropertyID: 'P1', OwnerID: 'OWN-1', Ownership_Status: 'Past' } as any,
+      { Ownership_ID: 'OSH-20', PropertyID: 'P1', OwnerID: 'OWN-2', Ownership_Status: 'Current' } as any,
+    ],
+    properties: [{ PropertyID: 'P1', Flat_No: '101', Floor_No: 1 } as any],
+    owners: [
+      { OwnerID: 'OWN-1', Owner_Name: 'Amit Roy' } as any,
+      { OwnerID: 'OWN-2', Owner_Name: 'Neha Sen' } as any,
+    ],
+  });
+
+  const osh10 = res.data.find((r: any) => r.Ownership_ID === 'OSH-10')!;
+  const osh20 = res.data.find((r: any) => r.Ownership_ID === 'OSH-20')!;
+  assert.equal(osh10.Total_Billed, 5000);
+  assert.equal(osh10.Total_Paid, 2000); // 1500 + 500 only
+  assert.equal(osh10.Outstanding, 3000);
+  assert.equal(osh20.Total_Billed, 4000);
+  assert.equal(osh20.Total_Paid, 1200);
+  assert.equal(osh20.Outstanding, 2800);
+});
+
+test('computeOwnershipOutstandingClient matches Owner_Name via Owner Master when OwnerID is present on only one side', () => {
+  const res = computeOwnershipOutstandingClient({
+    invoices: [
+      {
+        InvoiceID: 'INV-30',
+        Invoice_Number: 'INV-2026-0030',
+        PropertyID: 'P3',
+        Ownership_ID: 'OSH-30',
+        OwnerID: '',
+        Owner_Name: 'Suman Dutta',
+        Flat_Number: '301',
+        Net_Charge_Amount: 3500,
+        Paid_Amount: 0,
+        Outstanding_Amount: 3500,
+        Invoice_Status: 'Unpaid',
+      } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'TXN-30', Receipt_Status: 'Confirmed' } as any,
+    ],
+    billAllocations: [
+      // OwnerID OWN-3 resolves to Suman Dutta via Owner Master -> matches!
+      { Allocation_ID: 'AL-30', Transaction_ID: 'TXN-30', InvoiceID: 'INV-30', OwnerID: 'OWN-3', Allocated_Amount: 1500 } as any,
+      // OwnerID OWN-4 resolves to Priya Sen -> mismatch -> excluded!
+      { Allocation_ID: 'AL-31', Transaction_ID: 'TXN-30', InvoiceID: 'INV-30', OwnerID: 'OWN-4', Allocated_Amount: 1000 } as any,
+    ],
+    ownerships: [{ Ownership_ID: 'OSH-30', PropertyID: 'P3', Ownership_Status: 'Current' } as any],
+    properties: [{ PropertyID: 'P3', Flat_No: '301', Floor_No: 3 } as any],
+    owners: [
+      { OwnerID: 'OWN-3', Owner_Name: 'Suman Dutta' } as any,
+      { OwnerID: 'OWN-4', Owner_Name: 'Priya Sen' } as any,
+    ],
+  });
+
+  assert.equal(res.data.length, 1);
+  assert.equal(res.data[0].Total_Paid, 1500);
+  assert.equal(res.data[0].Outstanding, 2000);
+});
+
+
+

@@ -5,6 +5,7 @@ import {
   computeDashboardFundSummary,
   computeDashboardInvoiceSummary,
   computeMaintenanceCollectionRate,
+  computeTotalOutstandingCollection,
   DASHBOARD_DONUT_CIRCUMFERENCE,
   filterActiveNotices,
   resolveDashboardFY,
@@ -310,4 +311,97 @@ test('computeMaintenanceCollectionRate includes only issued Maintenance invoices
   assert.equal(result.maintenanceBilled, 10000);
   assert.equal(result.maintenanceCollected, 5500);
   assert.equal(result.maintenanceCollectionRate, '55.0');
+});
+
+test('computeDashboardInvoiceSummary computes Maintenance Status donut from Invoice_Register, Bill Wise Details, Fund Inflow & Rate Master', () => {
+  const summary = computeDashboardInvoiceSummary({
+    invoices: [
+      { InvoiceID: 'm1', Invoice_Number: 'INV-M1', RateID: 'RATE-M', Purpose: '', Billing_Date: '2026-04-01', Bill_Period_From: '2026-04-01', Bill_Period_To: '2026-04-30', Due_Date: '2026-04-15', Net_Charge_Amount: 2000, Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'M2', Invoice_Number: 'INV-M2', Purpose: 'Monthly Maintenance', Billing_Date: '2026-04-01', Bill_Period_From: '2026-04-01', Bill_Period_To: '2026-04-30', Due_Date: '2026-05-20', Net_Charge_Amount: 2000, Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'M3', Invoice_Number: 'INV-M3', Purpose: 'Monthly Maintenance', Billing_Date: '2026-05-01', Bill_Period_From: '2026-05-01', Bill_Period_To: '2026-05-31', Due_Date: '2026-05-25', Net_Charge_Amount: 2000, Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'M4', Invoice_Number: 'INV-M4', Purpose: 'Monthly Maintenance', Billing_Date: '2026-04-01', Bill_Period_From: '2026-04-01', Bill_Period_To: '2026-04-30', Due_Date: '2026-04-10', Net_Charge_Amount: 2000, Invoice_Status: 'Unpaid' } as any,
+      { InvoiceID: 'SF1', Invoice_Number: 'INV-SF1', Purpose: 'Sinking Fund', Billing_Date: '2026-04-01', Bill_Period_From: '2026-04-01', Bill_Period_To: '2026-04-30', Due_Date: '2026-04-10', Net_Charge_Amount: 8000, Invoice_Status: 'Unpaid' } as any,
+    ],
+    rates: [
+      { RateID: 'rate-m', Purpose: 'Quarterly Maintenance' } as any,
+    ],
+    receipts: [
+      { Transaction_ID: 'txn-1', Receipt_Status: 'Confirmed' } as any,
+      { Transaction_ID: 'TXN-2', Receipt_Status: 'Confirmed' } as any,
+    ],
+    billAllocations: [
+      { Transaction_ID: 'TXN-1', InvoiceID: 'M1', Allocated_Amount: 2000 } as any,
+      { Transaction_ID: 'txn-2', InvoiceID: '', Invoice_Number: 'inv-m2', Allocated_Amount: 500 } as any,
+    ],
+    periodStart: '2026-04-01',
+    periodEnd: '2027-03-31',
+    now: new Date('2026-05-01T00:00:00'),
+  });
+
+  assert.equal(summary.maintenanceInvoiceCount, 4);
+  assert.equal(summary.maintenancePaidCount, 1);
+  assert.equal(summary.maintenancePartialCount, 1);
+  assert.equal(summary.maintenanceUnpaidCount, 1);
+  assert.equal(summary.maintenanceOverdueCount, 1);
+  assert.equal(summary.maintenanceBilled, 8000);
+  assert.equal(summary.maintenanceCollected, 2500);
+  assert.equal(summary.maintenanceOutstanding, 5500);
+  assert.equal(summary.maintenanceCollectionRate, '31.3');
+  const maintArc = summary.maintenanceDonutSegments.reduce((s, seg) => s + seg.length, 0);
+  assert.ok(Math.abs(maintArc - DASHBOARD_DONUT_CIRCUMFERENCE) < 1e-6);
+});
+
+test('Total Outstanding Collection computes Invoice_Register minus Bill Wise Details across all years (not restricted to FY)', () => {
+  const fyRange = resolveDashboardFY({
+    todayKey: '2026-05-15',
+    financialYears: [
+      { FY_ID: 'FY26', FY_Name: 'FY 2026-2027', Start_Date: '2026-04-01', End_Date: '2027-03-31', Is_Current: true } as any,
+    ],
+  });
+  const invoices = [
+    { InvoiceID: 'I-FY1', Invoice_Number: 'INV-1', Billing_Date: '2026-04-05', Net_Charge_Amount: 5000, Invoice_Status: 'Unpaid' } as any,
+    { InvoiceID: 'I-FY2', Invoice_Number: 'INV-2', Billing_Date: '2026-05-01', Net_Charge_Amount: 3000, Invoice_Status: 'Unpaid' } as any,
+    { InvoiceID: 'I-PREV', Invoice_Number: 'INV-0', Billing_Date: '2026-03-15', Net_Charge_Amount: 9000, Invoice_Status: 'Unpaid' } as any,
+  ];
+  const receipts = [
+    { Transaction_ID: 'T-FY1', Receipt_Status: 'Confirmed', Date_Of_Received: '2026-04-10', Received_Amount: 2000 } as any,
+  ];
+  const billAllocations = [
+    { Transaction_ID: 'T-FY1', InvoiceID: 'I-FY1', Allocated_Amount: 2000 } as any,
+    { Transaction_ID: '', InvoiceID: 'I-FY2', Allocated_Amount: 500 } as any,
+  ];
+
+  const invSummary = computeDashboardInvoiceSummary({
+    invoices,
+    receipts,
+    billAllocations,
+    periodStart: fyRange.startDate,
+    periodEnd: fyRange.endDate,
+  });
+  assert.equal(invSummary.totalBilled, 17000);
+  assert.equal(invSummary.totalCollected, 2500);
+  assert.equal(invSummary.totalOutstanding, 14500);
+
+  const directTotal = computeTotalOutstandingCollection({
+    invoices,
+    receipts,
+    billAllocations: [
+      ...billAllocations,
+      // Allocation entry in Bill Wise Details whose InvoiceID isn't matched still reduces sheet total
+      { Transaction_ID: '', InvoiceID: 'UNMATCHED-ID', Allocated_Amount: 500 } as any,
+    ],
+  });
+  assert.equal(directTotal.totalInvoiceRegister, 17000);
+  assert.equal(directTotal.totalBillWiseDetails, 3000);
+  assert.equal(directTotal.outstandingCollection, 14000);
+
+  const fundSummary = computeDashboardFundSummary({
+    fyRange,
+    receipts,
+    expenses: [],
+    invoices,
+    billAllocations,
+    bankAccounts: [],
+  });
+  assert.equal(fundSummary.outstandingCollection, 14500);
 });

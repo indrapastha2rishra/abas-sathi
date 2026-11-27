@@ -39,6 +39,7 @@ import {
   buildActiveGalleryEvents,
   computeDashboardFundSummary,
   computeDashboardInvoiceSummary,
+  computeTotalOutstandingCollection,
   DASHBOARD_DONUT_CIRCUMFERENCE,
   filterActiveNotices,
   resolveDashboardFY,
@@ -115,18 +116,18 @@ export const AdminDashboard: React.FC = () => {
 
   // Dashboard financial metrics match InvoicesView (Net_Charge_Amount - SUM(Allocated_Amount from Bill Wise Details by InvoiceID)).
   const {
-    issuedInvoices,
     outstandingRows,
     totalOutstanding,
-    collectionRate,
     maintenanceBilled,
     maintenanceCollected,
+    maintenanceOutstanding,
     maintenanceCollectionRate,
-    paidCount,
-    partialCount,
-    unpaidCount,
-    overdueCount,
-    donutSegments,
+    maintenanceInvoiceCount,
+    maintenancePaidCount,
+    maintenancePartialCount,
+    maintenanceUnpaidCount,
+    maintenanceOverdueCount,
+    maintenanceDonutSegments,
   } = useMemo(
     () =>
       computeDashboardInvoiceSummary({
@@ -166,6 +167,16 @@ export const AdminDashboard: React.FC = () => {
   const sixMonthTotalCollection = collectionTrend.reduce((sum, item) => sum + item.collected, 0);
   const averageMonthlyCollection = sixMonthTotalCollection / collectionTrend.length;
 
+  const totalOutstandingSummary = useMemo(
+    () =>
+      computeTotalOutstandingCollection({
+        invoices,
+        billAllocations,
+        receipts,
+      }),
+    [invoices, billAllocations, receipts]
+  );
+
   const fundSummary = useMemo(
     () =>
       computeDashboardFundSummary({
@@ -174,10 +185,11 @@ export const AdminDashboard: React.FC = () => {
         receipts,
         expenses,
         invoices,
+        billAllocations,
         bankAccounts,
-        totalOutstanding,
+        totalOutstanding: totalOutstandingSummary.outstandingCollection,
       }),
-    [activeFYRange, fundBalanceSummary, receipts, expenses, invoices, bankAccounts, totalOutstanding]
+    [activeFYRange, fundBalanceSummary, receipts, expenses, invoices, billAllocations, bankAccounts, totalOutstandingSummary.outstandingCollection]
   );
 
   const ownershipOutstanding = useMemo(
@@ -511,13 +523,13 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
             <p className="text-xl font-bold text-amber-900 mt-2">
-              ₹{fundSummary.outstandingCollection.toLocaleString('en-IN')}
+              ₹{fundSummary.outstandingCollection.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
             </p>
             <div className="mt-1 text-[10px] text-amber-700 font-medium">
-              <span>{t.statOutstandingCollectionDesc}</span>
+              <span>Total Invoice Register − Bill Wise Details</span>
             </div>
             <p className="text-[10px] text-amber-600 mt-0.5">
-              Unrealized flat dues ({financialYearLabel})
+              Invoice ₹{totalOutstandingSummary.totalInvoiceRegister.toLocaleString('en-IN', { maximumFractionDigits: 2 })} − Bill Wise ₹{totalOutstandingSummary.totalBillWiseDetails.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
             </p>
           </div>
         </div>
@@ -526,79 +538,102 @@ export const AdminDashboard: React.FC = () => {
       {/* Row 3: Status Donut Chart & Collection Trend Bar Chart */}
       {(hasPermission('Maintenance & Invoices','Can_View') || hasPermission('Payments','Can_View') || hasPermission('Fund Inflow','Can_View')) && <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 5. Maintenance Status Donut Breakdown */}
-        {hasPermission('Maintenance & Invoices','Can_View') && <div className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
-          <div className="flex items-center justify-between border-b border-[#E8E1D4] pb-3 mb-4">
-            <h3 className="text-sm font-bold text-[#29352D]">
-              Maintenance Status / রক্ষণাবেক্ষণ অবস্থা
-            </h3>
-            <span className="text-xs text-gray-500">{issuedInvoices.length} Invoices</span>
+        {hasPermission('Maintenance & Invoices','Can_View') && <div data-testid="dashboard-maintenance-status" className="lg:col-span-5 rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs flex flex-col justify-between">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-[#29352D]">
+                  Maintenance Status / রক্ষণাবেক্ষণ অবস্থা
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Invoice_Register · Bill Wise Details · Fund Inflow ({financialYearLabel})
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">{maintenanceInvoiceCount} Invoices</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('invoices_register')}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-[#536B4D] hover:underline cursor-pointer"
+                >
+                  <span>Invoices</span>
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Graphical Donut Representation */}
+            <div className="flex flex-col sm:flex-row items-center justify-around gap-6 my-4">
+              <div className="relative flex items-center justify-center">
+                <svg className="h-36 w-36 -rotate-90 transform" viewBox="0 0 100 100">
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="38"
+                    fill="transparent"
+                    stroke="#E8E1D4"
+                    strokeWidth="12"
+                  />
+                  {maintenanceDonutSegments.map((seg) =>
+                    seg.count > 0 ? (
+                      <circle
+                        key={seg.status}
+                        cx="50"
+                        cy="50"
+                        r="38"
+                        fill="transparent"
+                        stroke={seg.color}
+                        strokeWidth="12"
+                        strokeDasharray={`${seg.length} ${DASHBOARD_DONUT_CIRCUMFERENCE}`}
+                        strokeDashoffset={String(seg.offset)}
+                      />
+                    ) : null
+                  )}
+                </svg>
+                <div className="absolute text-center">
+                  <span className="text-xl font-bold text-[#29352D]">{maintenanceCollectionRate}%</span>
+                  <span className="block text-[10px] text-gray-500 uppercase">Settled</span>
+                </div>
+              </div>
+
+              {/* Legend & counts */}
+              <div className="space-y-2 text-xs w-full max-w-[180px]">
+                <div className="flex items-center justify-between p-1.5 rounded-lg bg-emerald-50">
+                  <span className="flex items-center gap-1.5 text-emerald-800 font-medium">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#536B4D]"></span>
+                    Paid
+                  </span>
+                  <span className="font-bold text-emerald-900">{maintenancePaidCount}</span>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded-lg bg-blue-50">
+                  <span className="flex items-center gap-1.5 text-blue-800 font-medium">
+                    <span className="h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                    Partially Paid
+                  </span>
+                  <span className="font-bold text-blue-900">{maintenancePartialCount}</span>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded-lg bg-amber-50">
+                  <span className="flex items-center gap-1.5 text-amber-800 font-medium">
+                    <span className="h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+                    Unpaid
+                  </span>
+                  <span className="font-bold text-amber-900">{maintenanceUnpaidCount}</span>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded-lg bg-red-50">
+                  <span className="flex items-center gap-1.5 text-red-800 font-medium">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#C97958]"></span>
+                    Overdue
+                  </span>
+                  <span className="font-bold text-red-900">{maintenanceOverdueCount}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Graphical Donut Representation */}
-          <div className="flex flex-col sm:flex-row items-center justify-around gap-6 my-4">
-            <div className="relative flex items-center justify-center">
-              <svg className="h-36 w-36 -rotate-90 transform" viewBox="0 0 100 100">
-                <circle
-                  cx="50"
-                  cy="50"
-                  r="38"
-                  fill="transparent"
-                  stroke="#E8E1D4"
-                  strokeWidth="12"
-                />
-                {donutSegments.map((seg) =>
-                  seg.count > 0 ? (
-                    <circle
-                      key={seg.status}
-                      cx="50"
-                      cy="50"
-                      r="38"
-                      fill="transparent"
-                      stroke={seg.color}
-                      strokeWidth="12"
-                      strokeDasharray={`${seg.length} ${DASHBOARD_DONUT_CIRCUMFERENCE}`}
-                      strokeDashoffset={String(seg.offset)}
-                    />
-                  ) : null
-                )}
-              </svg>
-              <div className="absolute text-center">
-                <span className="text-xl font-bold text-[#29352D]">{collectionRate}%</span>
-                <span className="block text-[10px] text-gray-500 uppercase">Settled</span>
-              </div>
-            </div>
-
-            {/* Legend & counts */}
-            <div className="space-y-2 text-xs w-full max-w-[180px]">
-              <div className="flex items-center justify-between p-1.5 rounded-lg bg-emerald-50">
-                <span className="flex items-center gap-1.5 text-emerald-800 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#536B4D]"></span>
-                  Paid
-                </span>
-                <span className="font-bold text-emerald-900">{paidCount}</span>
-              </div>
-              <div className="flex items-center justify-between p-1.5 rounded-lg bg-blue-50">
-                <span className="flex items-center gap-1.5 text-blue-800 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-blue-500"></span>
-                  Partially Paid
-                </span>
-                <span className="font-bold text-blue-900">{partialCount}</span>
-              </div>
-              <div className="flex items-center justify-between p-1.5 rounded-lg bg-amber-50">
-                <span className="flex items-center gap-1.5 text-amber-800 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-amber-500"></span>
-                  Unpaid
-                </span>
-                <span className="font-bold text-amber-900">{unpaidCount}</span>
-              </div>
-              <div className="flex items-center justify-between p-1.5 rounded-lg bg-red-50">
-                <span className="flex items-center gap-1.5 text-red-800 font-medium">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#C97958]"></span>
-                  Overdue
-                </span>
-                <span className="font-bold text-red-900">{overdueCount}</span>
-              </div>
-            </div>
+          <div className="mt-3 pt-3 border-t border-[#E8E1D4] flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600">
+            <span>Billed: <strong className="text-[#29352D]">₹{maintenanceBilled.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong></span>
+            <span>Paid: <strong className="text-emerald-700">₹{maintenanceCollected.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong></span>
+            <span>Due: <strong className="text-red-700">₹{maintenanceOutstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</strong></span>
           </div>
         </div>}
 
@@ -675,7 +710,7 @@ export const AdminDashboard: React.FC = () => {
                     maximumFractionDigits: 2,
                   })}
                 </strong>{' '}
-                across {ownershipOutstanding.summary.ownershipCount} ownership record(s) • Paid linked to Confirmed Fund Inflow Register &amp; Bill Wise Details
+                across {ownershipOutstanding.summary.ownershipCount} ownership record(s) • Paid checked from Bill Wise Details (Invoice &amp; Owner wise) &amp; Confirmed Fund Inflow
                 {ownershipOutstanding.summary.unlinkedInvoiceCount > 0
                   ? ` • ${ownershipOutstanding.summary.unlinkedInvoiceCount} unlinked invoice(s)`
                   : ''}
@@ -721,7 +756,7 @@ export const AdminDashboard: React.FC = () => {
                   <th className="px-3 py-2.5 font-bold">Status</th>
                   <th className="px-3 py-2.5 font-bold text-right">Invoices</th>
                   <th className="px-3 py-2.5 font-bold text-right">Billed</th>
-                  <th className="px-3 py-2.5 font-bold text-right">Paid</th>
+                  <th className="px-3 py-2.5 font-bold text-right" title="Checked from Bill Wise Details (Invoice & Owner wise)">Paid</th>
                   <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
                   <th className="px-3 py-2.5 font-bold text-center">Link</th>
                 </tr>
@@ -782,7 +817,7 @@ export const AdminDashboard: React.FC = () => {
       )}
 
       {/* Invoice-wise Outstanding Bills (Net_Charge_Amount - Allocated_Amount by InvoiceID) */}
-      {hasPermission('Maintenance & Invoices', 'Can_View') && (
+      {activeRole !== 'Committee' && hasPermission('Maintenance & Invoices', 'Can_View') && (
         <div data-testid="dashboard-outstanding-bills" className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
             <div>
