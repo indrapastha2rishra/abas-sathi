@@ -65,6 +65,37 @@
   body:has(.ownership-pdf-modal-overlay) #root {
     display: none !important;
   }
+
+  @page ownership-onepage {
+    size: A4 portrait;
+    margin: 7mm;
+  }
+
+  .ownership-onepage-sheet {
+    page: ownership-onepage;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .ownership-print-zoom-95 { zoom: 0.95; }
+  .ownership-print-zoom-90 { zoom: 0.90; }
+  .ownership-print-zoom-85 { zoom: 0.85; }
+  .ownership-print-zoom-80 { zoom: 0.80; }
+  .ownership-print-zoom-75 { zoom: 0.75; }
+  .ownership-print-zoom-70 { zoom: 0.70; }
+  .ownership-print-zoom-65 { zoom: 0.65; }
+  .ownership-print-zoom-60 { zoom: 0.60; }
+  .ownership-print-zoom-55 { zoom: 0.55; }
+  .ownership-print-zoom-50 { zoom: 0.50; }
+  .ownership-print-zoom-45 { zoom: 0.45; }
 }
 
 
