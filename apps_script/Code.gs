@@ -364,7 +364,7 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
     };
   });
 
-  const excludedStatuses = { cancelled: true, draft: true, pending_approval: true, "pending approval": true };
+  const excludedStatuses = { cancelled: true, canceled: true, draft: true, pending_approval: true, "pending approval": true };
   const issuedInvoiceByIdUpper = {};
   const issuedInvoiceByNumberUpper = {};
   const keyByUpperKey = {};
@@ -655,7 +655,13 @@ function fundBalanceSheet_(ss) {
 }
 function clearFundBalanceCache_(societyCode){CacheService.getScriptCache().remove("FUND_BAL_"+sha256_(String(societyCode||"")));}
 function fundDateKey_(v){
-  if(v instanceof Date)return Utilities.formatDate(v,Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");
+  if(v instanceof Date){
+    if(isNaN(v.getTime()))return "";
+    if(typeof Utilities!=="undefined"){
+      try{return Utilities.formatDate(v,(typeof Session!=="undefined"&&Session.getScriptTimeZone())||"Asia/Kolkata","yyyy-MM-dd");}catch(e){}
+    }
+    return v.getFullYear()+"-"+String(v.getMonth()+1).padStart(2,"0")+"-"+String(v.getDate()).padStart(2,"0");
+  }
   const s=String(v||"").trim();
   if(!s)return "";
   if(/^\d{4}-\d{2}-\d{2}$/.test(s))return s;
@@ -664,12 +670,22 @@ function fundDateKey_(v){
   if(dmy)return dmy[3]+"-"+dmy[2].padStart(2,"0")+"-"+dmy[1].padStart(2,"0");
   if(s.indexOf("T")>0||/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)){
     const d=new Date(s);
-    if(!isNaN(d.getTime()))return Utilities.formatDate(d,Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");
+    if(!isNaN(d.getTime())){
+      if(typeof Utilities!=="undefined"){
+        try{return Utilities.formatDate(d,(typeof Session!=="undefined"&&Session.getScriptTimeZone())||"Asia/Kolkata","yyyy-MM-dd");}catch(e){}
+      }
+      return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    }
   }
   return s.slice(0,10);
 }
 function fundTodayKey_(){try{return Utilities.formatDate(new Date(),Session.getScriptTimeZone()||"Asia/Kolkata","yyyy-MM-dd");}catch(e){return new Date().toISOString().slice(0,10);}}
-function fundMoney_(v){const n=Number(v||0);return isFinite(n)?Math.round(n*100)/100:0;}
+function fundMoney_(v){
+  if(typeof v==="number")return isFinite(v)?Math.round(v*100)/100:0;
+  const cleaned=String(v===undefined||v===null?"":v).replace(/[^0-9.-]/g,"");
+  const n=cleaned?Number(cleaned):0;
+  return isFinite(n)?Math.round(n*100)/100:0;
+}
 function fundAccountKey_(value,accounts){
   const raw=String(value||"").trim().toLowerCase();if(!raw)return "UNMAPPED";
   for(let i=0;i<accounts.length;i++){
@@ -683,8 +699,8 @@ function fundAccountKey_(value,accounts){
 function fundRowsForYear_(ss,fy,previousRows,initialCashOpening){
   const start=fundDateKey_(fy.Start_Date),end=fundDateKey_(fy.End_Date);
   const accounts=sheetObjects_(ss.getSheetByName("Bank Account Master"));
-  const receipts=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(r=>String(r.Receipt_Status||"").toLowerCase()==="confirmed"&&fundDateKey_(r.Date_Of_Received)>=start&&fundDateKey_(r.Date_Of_Received)<=end);
-  const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(e=>String(e.Expense_Status||"").toLowerCase()==="paid"&&fundDateKey_(e.Payment_Date)>=start&&fundDateKey_(e.Payment_Date)<=end);
+  const receipts=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(r=>String(r.Receipt_Status||r.Status||"").trim().toLowerCase()==="confirmed"&&fundDateKey_(r.Date_Of_Received)>=start&&fundDateKey_(r.Date_Of_Received)<=end);
+  const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(e=>String(e.Expense_Status||e.Status||"").trim().toLowerCase()==="paid"&&fundDateKey_(e.Payment_Date)>=start&&fundDateKey_(e.Payment_Date)<=end);
   const existingByKey={};(previousRows||[]).forEach(r=>{existingByKey[String(r.Balance_Type)+"|"+String(r.Bank_Account_ID||"")]=r;});
   const receiptTotals={},expenseTotals={},unmapped={receipt:0,expense:0};
   receipts.forEach(r=>{const mode=String(r.Received_Mode||"").toLowerCase();const key=mode==="cash"?"CASH":fundAccountKey_(r.Bank_Account,accounts);const amount=fundMoney_(r.Received_Amount);if(key==="UNMAPPED")unmapped.receipt+=amount;receiptTotals[key]=(receiptTotals[key]||0)+amount;});
@@ -736,8 +752,8 @@ function getFundBalanceSummary_(session,body){
   const sh=fundBalanceSheet_(ss),rows=sheetObjects_(sh),current=rows.filter(x=>String(x.FY_ID)===String(fy.FY_ID));
   const opening=current.length?current.reduce((a,x)=>a+fundMoney_(x.Opening_Balance),0):0;
   const from=fundDateKey_(fy.Start_Date),to=fundDateKey_(fy.End_Date);
-  const received=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(x=>String(x.Receipt_Status||"").toLowerCase()==="confirmed"&&fundDateKey_(x.Date_Of_Received)>=from&&fundDateKey_(x.Date_Of_Received)<=today&&fundDateKey_(x.Date_Of_Received)<=to).reduce((a,x)=>a+fundMoney_(x.Received_Amount),0);
-  const paid=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||"").toLowerCase()==="paid"&&fundDateKey_(x.Payment_Date)>=from&&fundDateKey_(x.Payment_Date)<=today&&fundDateKey_(x.Payment_Date)<=to).reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0);
+  const received=sheetObjects_(ss.getSheetByName("Fund Inflow Register")).filter(x=>String(x.Receipt_Status||x.Status||"").trim().toLowerCase()==="confirmed"&&fundDateKey_(x.Date_Of_Received)>=from&&fundDateKey_(x.Date_Of_Received)<=today&&fundDateKey_(x.Date_Of_Received)<=to).reduce((a,x)=>a+fundMoney_(x.Received_Amount),0);
+  const paid=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||x.Status||"").trim().toLowerCase()==="paid"&&fundDateKey_(x.Payment_Date)>=from&&fundDateKey_(x.Payment_Date)<=today&&fundDateKey_(x.Payment_Date)<=to).reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0);
   const prev=years.filter(x=>fundDateKey_(x.End_Date)<from).sort((a,b)=>fundDateKey_(b.End_Date).localeCompare(fundDateKey_(a.End_Date)))[0];
   let effectiveOpening=opening,sourceStatus=current.length?"Fund Balance Register": "Opening balance not finalized";
   if(!current.length&&prev){const prevRows=rows.filter(x=>String(x.FY_ID)===String(prev.FY_ID));if(prevRows.length&&prevRows.every(x=>String(x.Finalization_Status)==="Finalized")){effectiveOpening=prevRows.reduce((a,x)=>a+fundMoney_(x.Closing_Balance),0);sourceStatus="Previous FY finalized closing balance";}}
@@ -792,28 +808,35 @@ function finalizeYearEndClosing_(session,body){
 function invoiceDueDetails_(invoiceRows, receiptRows, billRows) {
   const receiptStatusByTxn = {};
   (receiptRows || []).forEach(r => {
-    const txnId = String(r.Transaction_ID || "").trim();
+    const txnId = String(r.Transaction_ID || r.TransactionID || "").trim().toUpperCase();
     if (txnId) receiptStatusByTxn[txnId] = String(r.Receipt_Status || r.Status || "").trim().toLowerCase();
   });
-  const invoiceIdByNumber = {};
+  const canonicalInvoiceIdByUpper = {};
+  const invoiceIdByNumberUpper = {};
   (invoiceRows || []).forEach(inv => {
-    const id = String(inv.InvoiceID || "").trim();
-    const num = String(inv.Invoice_Number || "").trim();
-    if (id && num) invoiceIdByNumber[num] = id;
+    const id = String(inv.InvoiceID || inv.Invoice_ID || "").trim();
+    const num = String(inv.Invoice_Number || inv.Invoice_No || "").trim();
+    if (id) canonicalInvoiceIdByUpper[id.toUpperCase()] = id;
+    if (id && num) invoiceIdByNumberUpper[num.toUpperCase()] = id;
   });
   const allocatedByInvoice = {};
   (billRows || []).forEach(b => {
     const allocStatus = String(b.Allocation_Status || b.Status || "").trim().toLowerCase();
     if (allocStatus && ["cancelled","canceled","rejected","void","reversed"].indexOf(allocStatus) >= 0) return;
-    const txnId = String(b.Transaction_ID || "").trim();
+    const txnId = String(b.Transaction_ID || b.TransactionID || "").trim().toUpperCase();
     if (txnId && Object.prototype.hasOwnProperty.call(receiptStatusByTxn, txnId) && receiptStatusByTxn[txnId] !== "confirmed") return;
-    const id = String(b.InvoiceID || "").trim() || invoiceIdByNumber[String(b.Invoice_Number || "").trim()] || "";
-    if (id) allocatedByInvoice[id] = fundMoney_((allocatedByInvoice[id] || 0) + Math.max(0, fundMoney_(b.Allocated_Amount)));
+    const rawId = String(b.InvoiceID || b.Invoice_ID || "").trim();
+    const rawNum = String(b.Invoice_Number || b.Invoice_No || "").trim();
+    const id = (rawId ? (canonicalInvoiceIdByUpper[rawId.toUpperCase()] || rawId) : "") || (rawNum ? (invoiceIdByNumberUpper[rawNum.toUpperCase()] || "") : "");
+    const amtVal = b.Allocated_Amount !== undefined && b.Allocated_Amount !== ""
+      ? b.Allocated_Amount
+      : (b.Allocation_Amount !== undefined && b.Allocation_Amount !== "" ? b.Allocation_Amount : b.Allocated_Amt);
+    if (id) allocatedByInvoice[id] = fundMoney_((allocatedByInvoice[id] || 0) + Math.max(0, fundMoney_(amtVal)));
   });
   return (invoiceRows || []).map(inv => {
     const statusRaw = String(inv.Invoice_Status || "").trim().toLowerCase();
-    const excluded = ["cancelled", "draft", "pending_approval", "pending approval"].includes(statusRaw);
-    const id = String(inv.InvoiceID || "").trim();
+    const excluded = ["cancelled", "canceled", "draft", "pending_approval", "pending approval"].includes(statusRaw);
+    const id = String(inv.InvoiceID || inv.Invoice_ID || "").trim();
     const net = Math.max(0, fundMoney_(inv.Net_Charge_Amount));
     const allocated = Math.max(0, allocatedByInvoice[id] || 0);
     const paid = excluded ? 0 : Math.min(net, allocated);
@@ -1021,20 +1044,40 @@ function getReports_(session, body) {
     const invoiceRows=invoiceSheet?sheetObjects_(invoiceSheet):[];
     const receiptRows=sheetObjects_(ss.getSheetByName("Fund Inflow Register"));
     const billRows=sheetObjects_(ss.getSheetByName("Bill Wise Details"));
-    const filteredInv=invoiceDueDetails_(invoiceRows,receiptRows,billRows).filter(({inv,excluded})=>{
+    const rateRows=sheetObjects_(ss.getSheetByName("Rate Master"));
+    const rateByIdUpper={};
+    rateRows.forEach(r=>{const rid=String(r.Rate_ID||"").trim().toUpperCase();if(rid)rateByIdUpper[rid]=r;});
+    const nonMaintRe=/(sinking\s*fund|parking|electricity|water\s*charge|repair\s*levy|corpus)/i;
+    const maintRe=/(maintenance|রক্ষণাবেক্ষণ|\bcam\b)/i;
+    const allDue=invoiceDueDetails_(invoiceRows,receiptRows,billRows);
+    const filteredInv=allDue.filter(({inv,excluded})=>{
       if(excluded)return false;
-      const d=fundDateKey_(inv.Billing_Date);
+      const d=fundDateKey_(inv.Billing_Date)||fundDateKey_(inv.Bill_Period_From);
       return d&&d>=from&&d<=to;
     });
     const receipts=receiptRows.filter(x=>String(x.Receipt_Status||x.Status||"").trim().toLowerCase()==="confirmed").filter(x=>{const d=fundDateKey_(x.Date_Of_Received);return d&&d>=from&&d<=to;});
-    const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||"").trim().toLowerCase()==="paid").filter(x=>{const d=fundDateKey_(x.Payment_Date);return d&&d>=from&&d<=to;});
+    const expenses=sheetObjects_(ss.getSheetByName("Expense Register")).filter(x=>String(x.Expense_Status||x.Status||"").trim().toLowerCase()==="paid").filter(x=>{const d=fundDateKey_(x.Payment_Date);return d&&d>=from&&d<=to;});
     const ob=openingBalanceAtDate_(ss,from);
-    const totalReceipts=fundMoney_(receipts.reduce((a,x)=>a+fundMoney_(x.Received_Amount),0));
-    const totalPaidExpenses=fundMoney_(expenses.reduce((a,x)=>a+fundMoney_(x.Payment_Amount),0));
-    const maintenanceInv = filteredInv.filter(({ inv }) => /maintenance/i.test(String(inv.Purpose || "")));
+    const totalReceipts=fundMoney_(receipts.reduce((a,x)=>a+Math.max(0,fundMoney_(x.Received_Amount)),0));
+    const totalPaidExpenses=fundMoney_(expenses.reduce((a,x)=>a+Math.max(0,fundMoney_(x.Payment_Amount)),0));
+    const isMaintenanceInv=(inv)=>{
+      const rid=String(inv.Rate_ID||"").trim().toUpperCase();
+      const rate=rid?(rateByIdUpper[rid]||null):null;
+      const hay=[inv.Purpose,inv.Remarks,rate&&rate.Rate_Name,rate&&rate.Rate_Type,rate&&rate.Calculation_Basis,rate&&rate.Description].filter(Boolean).join(" ").trim();
+      if(!hay)return true;
+      if(nonMaintRe.test(hay)&&!maintRe.test(hay))return false;
+      return maintRe.test(hay);
+    };
+    const matchesPeriod=(inv)=>{
+      const bf=fundDateKey_(inv.Bill_Period_From),bt=fundDateKey_(inv.Bill_Period_To),bd=fundDateKey_(inv.Billing_Date);
+      if(bf&&bt)return bf<=to&&bt>=from;
+      const ref=bd||bf||bt;
+      return Boolean(ref&&ref>=from&&ref<=to);
+    };
+    const maintenanceInv = allDue.filter(({ inv, excluded }) => !excluded && isMaintenanceInv(inv) && matchesPeriod(inv));
     const maintenanceBilled = fundMoney_(maintenanceInv.reduce((a, x) => a + x.net, 0));
     const maintenanceCollected = fundMoney_(maintenanceInv.reduce((a, x) => a + x.paid, 0));
-    const maintenanceCollectionRate = maintenanceBilled > 0 ? Number(((maintenanceCollected / maintenanceBilled) * 100).toFixed(1)) : 0;
+    const maintenanceCollectionRate = maintenanceBilled > 0 ? ((maintenanceCollected / maintenanceBilled) * 100).toFixed(1) : "0";
     return json_({status:"success",reportType:type,period:{from,to},data:{fyName:ob.fy?ob.fy.FY_Name:"",openingFundBalance:ob.openingBalance,openingSource:ob.openingSource,closingFundBalance:fundMoney_(ob.openingBalance+totalReceipts-totalPaidExpenses),invoiceCount:filteredInv.length,receiptCount:receipts.length,expenseCount:expenses.length,billed:fundMoney_(filteredInv.reduce((a,x)=>a+x.net,0)),receipts:totalReceipts,paidExpenses:totalPaidExpenses,outstanding:fundMoney_(filteredInv.reduce((a,x)=>a+x.due,0)),maintenanceBilled,maintenanceCollected,maintenanceCollectionRate},generatedAt:new Date().toISOString(),auditStatus:"system-generated"});
   }
   if(type==="balanceSheet") {
@@ -1246,34 +1289,40 @@ const RESIDENT_PERMISSION_ALIASES_ = {
   galleryPhotos: ["Gallery", "Notices & Gallery", "Resident Portal"]
 };
 function hasModuleReadPermission_(session, key, effectiveRole) {
+  const role = effectiveRole || session.role;
+  if (key === "rolePermissions") {
+    return role === "Admin" && rolePermission_(session, "Role Permission Management", "Can_View", "Admin");
+  }
+  if (key === "bankAccounts" && !["Admin", "Accountant"].includes(String(role))) {
+    return false;
+  }
+  if (key === "auditLogs" && !["Admin", "Accountant"].includes(String(role))) {
+    return false;
+  }
   const moduleName = PERMISSION_MODULE_MAP_[key];
   if (!moduleName) return false;
   if (rolePermission_(session, moduleName, "Can_View", effectiveRole)) return true;
   if (key === "receipts" && rolePermission_(session, "Fund Inflow", "Can_View", effectiveRole)) return true;
   if (effectiveRole !== "Resident") {
-    const role = effectiveRole || session.role;
     const rows = rolePermissionRows_(session);
     const hasExplicitFor = (mod) => rows.some(r => String(r.Role||"").trim().toLowerCase() === String(role).trim().toLowerCase() && String(r.Module_Name||"").trim().toLowerCase() === mod.toLowerCase());
+    const hasReportOrMaintView =
+      rolePermission_(session, "Reports", "Can_View", effectiveRole) ||
+      rolePermission_(session, "Maintenance & Invoices", "Can_View", effectiveRole);
+    const reportCalculationKeys = ["invoices", "receipts", "billWiseDetails", "rates", "financialYears", "properties", "owners", "ownershipHistory"];
+    if (hasReportOrMaintView && reportCalculationKeys.indexOf(key) >= 0) {
+      return true;
+    }
     if (key === "billWiseDetails") {
       if (rolePermission_(session, "Payments", "Can_View", effectiveRole)
-        || rolePermission_(session, "Fund Inflow", "Can_View", effectiveRole)
-        || rolePermission_(session, "Maintenance & Invoices", "Can_View", effectiveRole)
-        || rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+        || rolePermission_(session, "Fund Inflow", "Can_View", effectiveRole)) {
         return true;
       }
     }
     if (key === "ownershipHistory" && !hasExplicitFor("Ownership History")) {
-      if (rolePermission_(session, "Properties & Residents", "Can_View", effectiveRole)
-        || rolePermission_(session, "Maintenance & Invoices", "Can_View", effectiveRole)
-        || rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
+      if (rolePermission_(session, "Properties & Residents", "Can_View", effectiveRole)) {
         return true;
       }
-    }
-    if (key === "invoices" && !hasExplicitFor("Maintenance & Invoices") && rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
-      return true;
-    }
-    if (key === "receipts" && !hasExplicitFor("Payments") && rolePermission_(session, "Reports", "Can_View", effectiveRole)) {
-      return true;
     }
   }
   if (effectiveRole === "Resident") {
@@ -1355,7 +1404,7 @@ function getDashboardSummary_(session, body) {
   const billWiseRows = hasModuleReadPermission_(session,"billWiseDetails",viewSession.role)?(viewSession.role==="Resident"?residentModuleRecords_(viewSession,"billWiseDetails",ss,ss.getSheetByName("Bill Wise Details")):read("Bill Wise Details")):[];
   const paid = receipts.filter(r => String(r.Receipt_Status || r.Status || "").trim().toLowerCase() === "confirmed");
   const outstanding = invoiceDueDetails_(invoices, receipts, billWiseRows).reduce((sum,item) => sum + (item.excluded ? 0 : item.due), 0);
-  const payload={status:"success",society:liveSocietyPublic_(viewSession),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").trim().toLowerCase()!=="vacant").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:paid.reduce((s,r)=>s+Number(r.Received_Amount||0),0),outstandingMaintenance:fundMoney_(outstanding),pendingRequests:requests.filter(r=>String(r.Request_Status||"").trim().toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}};
+  const payload={status:"success",society:liveSocietyPublic_(viewSession),summary:{totalProperties:properties.length,occupiedProperties:properties.filter(r=>String(r.Occupancy_Status||"").trim().toLowerCase()!=="vacant").length,totalInvoices:invoices.length,confirmedReceipts:paid.length,confirmedCollection:fundMoney_(paid.reduce((s,r)=>s+Math.max(0,fundMoney_(r.Received_Amount)),0)),outstandingMaintenance:fundMoney_(outstanding),pendingRequests:requests.filter(r=>String(r.Request_Status||"").trim().toLowerCase()==="pending").length,recentActivity:requests.slice(-5).reverse()}};
   const serialized=JSON.stringify(payload);if(serialized.length<=95000)cache.put(cacheKey,serialized,20);
   return json_(payload);
 }
@@ -1474,10 +1523,8 @@ function authorizeModuleRead_(session,key,viewAsResident){
   }
   const moduleName=PERMISSION_MODULE_MAP_[key];if(!moduleName)throw new Error("Permission denied.");
   const effectiveRole=viewAsResident?"Resident":session.role;
-  if(key==="receipts"&&(rolePermission_(session,"Payments","Can_View",effectiveRole)||rolePermission_(session,"Fund Inflow","Can_View",effectiveRole)))return;
-  if(effectiveRole==="Resident"){
-    if(hasModuleReadPermission_(session,key,"Resident"))return;
-  }
+  if(key==="bankAccounts"&&!["Admin","Accountant"].includes(String(effectiveRole)))throw new Error("Bank account details are restricted.");
+  if(hasModuleReadPermission_(session,key,effectiveRole))return;
   requirePermission_(session,moduleName,"Can_View",effectiveRole);
 }
 

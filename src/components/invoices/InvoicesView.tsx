@@ -22,33 +22,34 @@ import {
 import { calculateChargeAmount, calculateNetChargeAmount } from '../../utils/calculations';
 import type { InvoiceRegister } from '../../types/database';
 import { calculateResidentInvoiceMetrics } from '../../utils/residentBilling';
-import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
+import {
+  computeInvoiceOutstandingBills,
+  isExcludedInvoiceStatus,
+  roundMoney,
+  toInvoiceAmount,
+} from '../../utils/invoiceOutstanding';
 import { formatDateDisplay } from '../../utils/dateFormat';
-import { filterResidentScopedRecords, sortResidentInvoicesNewestFirst } from '../../utils/residentPortalHelpers';
+import {
+  filterResidentScopedRecords,
+  filterScopedAllocationsForInvoices,
+  sortResidentInvoicesNewestFirst,
+} from '../../utils/residentPortalHelpers';
 
 interface Props {
   initialTab?: 'register' | 'generate' | 'rates' | 'outstanding';
 }
 
-const EXCLUDED_OUTSTANDING_STATUSES = new Set([
-  'cancelled',
-  'draft',
-  'pending_approval',
-  'pending approval',
-]);
-
 const getInvoiceOutstanding = (
   invoice: Partial<InvoiceRegister> & { Calculated_Outstanding?: number }
 ): number => {
   if (typeof invoice.Calculated_Outstanding === 'number' && Number.isFinite(invoice.Calculated_Outstanding)) {
-    return Math.max(0, invoice.Calculated_Outstanding);
+    return Math.max(0, roundMoney(invoice.Calculated_Outstanding));
   }
   const rawDue = invoice.Outstanding_Amount as unknown;
   if (rawDue === '' || rawDue === null || rawDue === undefined) {
-    return Math.max(0, Number(invoice.Net_Charge_Amount || 0) - Number(invoice.Paid_Amount || 0));
+    return Math.max(0, roundMoney(toInvoiceAmount(invoice.Net_Charge_Amount) - toInvoiceAmount(invoice.Paid_Amount)));
   }
-  const amount = Number(rawDue);
-  return Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  return Math.max(0, roundMoney(toInvoiceAmount(rawDue)));
 };
 
 export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
@@ -164,9 +165,15 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
   const residentScopedAllocs = React.useMemo(
     () =>
       activeRole === 'Resident'
-        ? filterResidentScopedRecords(billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        ? filterScopedAllocationsForInvoices(
+            billAllocations,
+            residentProperty?.PropertyID,
+            currentUser.Ownership_ID,
+            residentScopedInvoices,
+            residentScopedReceipts
+          )
         : billAllocations,
-    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID]
+    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID, residentScopedInvoices, residentScopedReceipts]
   );
   const residentMetrics = React.useMemo(
     () => sortResidentInvoicesNewestFirst(calculateResidentInvoiceMetrics(residentScopedInvoices, residentScopedReceipts, residentScopedAllocs)),
@@ -189,8 +196,7 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       String(inv.Purpose || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const outstandingAmount = getInvoiceOutstanding(inv as any);
-    const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
-    const isOutstanding = !EXCLUDED_OUTSTANDING_STATUSES.has(statusLower) && outstandingAmount > 0;
+    const isOutstanding = !isExcludedInvoiceStatus(inv.Invoice_Status) && outstandingAmount > 0;
     const matchesStatus = activeSubTab === 'outstanding'
       ? isOutstanding && (statusFilter === 'All' || inv.Invoice_Status === statusFilter)
       : (statusFilter === 'All' || inv.Invoice_Status === statusFilter);
@@ -275,10 +281,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
       </div>
 
       {activeRole === 'Resident' && (() => {
-        const totalBilled = residentMetrics.reduce((s, inv) => s + Number(inv.Net_Charge_Amount || 0), 0);
-        const totalPaid = residentMetrics.reduce((s, inv) => s + Number(inv.Paid_Amount || 0), 0);
-        const totalDue = residentMetrics.reduce((s, inv) => s + Number(inv.Outstanding_Amount || 0), 0);
-        const unpaidCount = residentMetrics.filter((inv) => Number(inv.Outstanding_Amount || 0) > 0).length;
+        const totalBilled = roundMoney(residentMetrics.reduce((s, inv) => s + toInvoiceAmount(inv.Net_Charge_Amount), 0));
+        const totalPaid = roundMoney(residentMetrics.reduce((s, inv) => s + toInvoiceAmount(inv.Paid_Amount), 0));
+        const totalDue = roundMoney(residentMetrics.reduce((s, inv) => s + toInvoiceAmount(inv.Outstanding_Amount), 0));
+        const unpaidCount = residentMetrics.filter((inv) => toInvoiceAmount(inv.Outstanding_Amount) > 0).length;
         const canPay = (hasPermission('Pay Now', 'Can_View') && hasPermission('Pay Now', 'Can_Create')) || (hasPermission('Payments', 'Can_View') && hasPermission('Payments', 'Can_Create'));
         return (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -316,11 +322,10 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
 
       {activeSubTab === 'outstanding' && (() => {
         const activeOutstanding = invoicesForView.filter((inv) => {
-          const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
           const due = getInvoiceOutstanding(inv as any);
-          return !EXCLUDED_OUTSTANDING_STATUSES.has(statusLower) && due > 0;
+          return !isExcludedInvoiceStatus(inv.Invoice_Status) && due > 0;
         });
-        const totalDue = activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv as any), 0);
+        const totalDue = roundMoney(activeOutstanding.reduce((sum, inv) => sum + getInvoiceOutstanding(inv as any), 0));
         const overdueCount = activeOutstanding.filter((inv) => inv.Invoice_Status === 'Overdue').length;
         return (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -400,12 +405,12 @@ export const InvoicesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                       <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Billing_Date, '—')}</td>
                       <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Bill_Period_From, '—')} to {formatDateDisplay(inv.Bill_Period_To, '—')}</td>
                       <td className="px-4 py-3 text-gray-500">{formatDateDisplay(inv.Due_Date, '—')}</td>
-                      <td className="px-4 py-3 text-right">₹{Number(inv.Charge_Amount || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right">₹{Number(inv.Late_Fee || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right">₹{Number(inv.Discount_Amount || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right">₹{Number(inv.Adjustment_Amount || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right font-bold text-[#29352D]">₹{Number(inv.Net_Charge_Amount || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-right text-emerald-700 font-medium">₹{Number(inv.Paid_Amount || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{toInvoiceAmount(inv.Charge_Amount).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{toInvoiceAmount(inv.Late_Fee).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{toInvoiceAmount(inv.Discount_Amount).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right">₹{toInvoiceAmount(inv.Adjustment_Amount).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-[#29352D]">₹{toInvoiceAmount(inv.Net_Charge_Amount).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-right text-emerald-700 font-medium">₹{toInvoiceAmount(inv.Paid_Amount).toFixed(2)}</td>
                       <td className="px-4 py-3 text-right font-bold text-red-700">₹{getInvoiceOutstanding(inv as any).toFixed(2)}</td>
                       <td className="px-4 py-3 text-center">
                         <span

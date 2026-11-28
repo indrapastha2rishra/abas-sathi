@@ -1,6 +1,5 @@
 import type {
   BillWiseDetails,
-  ExpenseRegister,
   FinancialYearMaster,
   FundInflowRegister,
   InvoiceRegister,
@@ -8,6 +7,12 @@ import type {
   OwnershipHistory,
   PropertyMaster,
 } from '../types/database';
+import {
+  computeInvoiceOutstandingBills,
+  isExcludedAllocationStatus,
+  isExcludedInvoiceStatus,
+  roundMoney,
+} from './invoiceOutstanding';
 
 export type ReportKey =
   | 'monthly'
@@ -97,54 +102,20 @@ export function toReportDateKey(value: unknown): string {
   return Number.isNaN(parsed.getTime()) ? raw.slice(0, 10) : localDateKey(parsed);
 }
 
-const EXCLUDED_INVOICE_STATUSES = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);
-const EXCLUDED_ALLOCATION_STATUSES = new Set(['cancelled', 'canceled', 'rejected', 'void', 'reversed']);
-
 export function computeConfirmedInvoiceMetrics(
   invoices: InvoiceRegister[],
   receipts: FundInflowRegister[],
-  billAllocations: BillWiseDetails[]
+  billAllocations: BillWiseDetails[],
+  now: Date = new Date()
 ) {
-  const receiptStatusByTxnId = new Map<string, string>();
-  (receipts || []).forEach((r) => {
-    const txnId = String(r.Transaction_ID || '').trim();
-    if (!txnId) return;
-    receiptStatusByTxnId.set(txnId, String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase());
-  });
-  const invoiceIdByNumber = new Map<string, string>();
-  (invoices || []).forEach((inv) => {
-    const id = String(inv.InvoiceID || '').trim();
-    const num = String(inv.Invoice_Number || '').trim();
-    if (id && num) invoiceIdByNumber.set(num, id);
-  });
-  const allocationsByInvoice = new Map<string, number>();
-  (billAllocations || []).forEach((row) => {
-    const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
-    if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
-    const txnId = String(row.Transaction_ID || '').trim();
-    if (txnId && receiptStatusByTxnId.has(txnId) && receiptStatusByTxnId.get(txnId) !== 'confirmed') return;
-    const invoiceId =
-      String(row.InvoiceID || '').trim() ||
-      invoiceIdByNumber.get(String(row.Invoice_Number || '').trim()) ||
-      '';
-    if (invoiceId) {
-      allocationsByInvoice.set(
-        invoiceId,
-        Math.round(((allocationsByInvoice.get(invoiceId) || 0) + Math.max(0, toReportAmount(row.Allocated_Amount))) * 100) / 100
-      );
-    }
-  });
-
-  return (invoices || [])
-    .filter((inv) => !EXCLUDED_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
-    .map((inv) => {
-      const invoiceId = String(inv.InvoiceID || '').trim();
-      const net = Math.max(0, Math.round(toReportAmount(inv.Net_Charge_Amount) * 100) / 100);
-      const allocated = Math.max(0, Math.round((allocationsByInvoice.get(invoiceId) || 0) * 100) / 100);
-      const paid = Math.min(net, allocated);
-      const due = Math.max(0, Math.round((net - allocated) * 100) / 100);
-      return { inv, net, paid, due };
-    });
+  return computeInvoiceOutstandingBills(invoices, billAllocations, receipts, now)
+    .filter((inv) => !isExcludedInvoiceStatus(inv.Invoice_Status))
+    .map((inv) => ({
+      inv,
+      net: inv.Net_Charge_Amount,
+      paid: inv.Paid_Amount,
+      due: inv.Calculated_Outstanding,
+    }));
 }
 
 export interface PropertyOutstandingRow {
@@ -492,8 +463,7 @@ export function computeOwnershipOutstandingClient(params: {
   const grouped = new Map<string, any>();
 
   (invoices || []).forEach((inv) => {
-    const statusLower = String(inv.Invoice_Status || '').trim().toLowerCase();
-    if (EXCLUDED_INVOICE_STATUSES.has(statusLower)) return;
+    if (isExcludedInvoiceStatus(inv.Invoice_Status)) return;
 
     const rawOwnershipId = String(inv.Ownership_ID || (inv as any).OwnershipID || '').trim();
     const history = rawOwnershipId ? ownershipByIdUpper.get(rawOwnershipId.toUpperCase()) : undefined;
@@ -577,8 +547,7 @@ export function computeOwnershipOutstandingClient(params: {
   const allocatedByInvoiceKey = new Map<string, number>();
   const unassignedAllocatedByOwnership = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
-    const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
-    if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
+    if (isExcludedAllocationStatus(row as any)) return;
 
     const txnIdUpper = String(row.Transaction_ID || (row as any).TransactionID || '').trim().toUpperCase();
     const recInfo = txnIdUpper ? receiptByTxnIdUpper.get(txnIdUpper) : undefined;
@@ -749,7 +718,7 @@ export function computeOwnershipOutstandingClient(params: {
       return String(a.Ownership_ID || '').localeCompare(String(b.Ownership_ID || ''));
     });
 
-  const totalOutstanding = Math.round(data.reduce((s, r) => s + r.Outstanding, 0) * 100) / 100;
+  const totalOutstanding = roundMoney(data.reduce((s, r) => s + r.Outstanding, 0));
   return {
     data,
     summary: {

@@ -19,6 +19,12 @@ import type {
 } from '../types/database';
 import { calculateResidentInvoiceMetrics } from './residentBilling';
 import { buildActiveGalleryEvents, filterActiveNotices, type ActiveGalleryEvent } from './dashboardHelpers';
+import {
+  isConfirmedReceipt,
+  isExcludedAllocationStatus,
+  isExcludedInvoiceStatus,
+  roundMoney,
+} from './invoiceOutstanding';
 import { toReportAmount, toReportDateKey } from './reportHelpers';
 
 export const normId = (value: unknown): string => String(value ?? '').trim().toUpperCase();
@@ -51,6 +57,72 @@ export function filterResidentScopedRecords<
     if (reqBy && normId(row?.Requested_By) === reqBy) return true;
     return false;
   });
+}
+
+/**
+ * Resolves Bill Wise Details belonging to a resident's scoped PropertyID/Ownership_ID,
+ * also including allocations referencing the resident's scoped InvoiceID/Invoice_Number
+ * or Transaction_ID (so legacy/split allocations without Ownership_ID match Admin's ledger),
+ * while excluding cancelled/rejected/void/reversed allocations.
+ */
+export function filterScopedAllocationsForInvoices(
+  billAllocations: BillWiseDetails[],
+  propertyId?: string | null,
+  ownershipId?: string | null,
+  scopedInvoices: InvoiceRegister[] = [],
+  scopedReceipts: FundInflowRegister[] = []
+): BillWiseDetails[] {
+  const pid = normId(propertyId);
+  const oid = normId(ownershipId);
+  const invIds = new Set(scopedInvoices.map((i) => normId(i.InvoiceID)).filter(Boolean));
+  const invNums = new Set(scopedInvoices.map((i) => normId(i.Invoice_Number)).filter(Boolean));
+  const txnIds = new Set(scopedReceipts.map((r) => normId(r.Transaction_ID)).filter(Boolean));
+
+  return (billAllocations || []).filter((row) => {
+    if (isExcludedAllocationStatus(row as any)) return false;
+    const rowPid = normId(row?.PropertyID);
+    const rowOid = normId(row?.Ownership_ID);
+    if (pid && rowPid === pid && (!oid || rowOid === oid)) {
+      return true;
+    }
+    const rowInvId = normId(row?.InvoiceID);
+    const rowInvNum = normId(row?.Invoice_Number);
+    const rowTxnId = normId(row?.Transaction_ID);
+    if ((rowInvId && invIds.has(rowInvId)) || (rowInvNum && invNums.has(rowInvNum))) {
+      return true;
+    }
+    if (!rowOid && rowTxnId && txnIds.has(rowTxnId)) {
+      return true;
+    }
+    return false;
+  });
+}
+
+export function summarizeReceipts(receipts: FundInflowRegister[]) {
+  const list = receipts || [];
+  const confirmedReceipts = list.filter((r) => isConfirmedReceipt(r as any));
+  const pendingReceipts = list.filter(
+    (r) => normText(r.Receipt_Status || (r as any).Status) === 'pending verification'
+  );
+  const confirmedReceivedTotal = roundMoney(
+    confirmedReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0)
+  );
+  const pendingVerificationAmount = roundMoney(
+    pendingReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0)
+  );
+  const advanceCreditTotal = roundMoney(
+    confirmedReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Unallocated_Amount)), 0)
+  );
+
+  return {
+    confirmedReceipts,
+    pendingReceipts,
+    confirmedReceiptsCount: confirmedReceipts.length,
+    confirmedReceivedTotal,
+    pendingVerificationCount: pendingReceipts.length,
+    pendingVerificationAmount,
+    advanceCreditTotal,
+  };
 }
 
 const RESTRICTED_VISIBILITIES = new Set([
@@ -224,7 +296,13 @@ export function summarizeResidentPortalData(params: {
 
   const myInvoicesRaw = filterResidentScopedRecords(params.invoices, pid, effectiveOwnershipId);
   const myReceiptsRaw = filterResidentScopedRecords(params.receipts, pid, effectiveOwnershipId);
-  const myAllocations = filterResidentScopedRecords(params.billAllocations, pid, effectiveOwnershipId);
+  const myAllocations = filterScopedAllocationsForInvoices(
+    params.billAllocations,
+    pid,
+    effectiveOwnershipId,
+    myInvoicesRaw,
+    myReceiptsRaw
+  );
   const myRequestsRaw = filterResidentScopedRecords(params.activityRequests, pid, effectiveOwnershipId, {
     allowBlankOwnership: true,
     requestedByUserId: params.userId || undefined,
@@ -236,26 +314,22 @@ export function summarizeResidentPortalData(params: {
   const sortedReceipts = sortResidentReceiptsNewestFirst(myReceiptsRaw);
   const sortedRequests = sortActivityRequestsNewestFirst(myRequestsRaw);
 
-  const totalBilled = Math.round(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Net_Charge_Amount)), 0) * 100) / 100;
-  const totalPaidAgainstBills = Math.round(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Paid_Amount)), 0) * 100) / 100;
-  const totalOutstanding = Math.round(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Outstanding_Amount)), 0) * 100) / 100;
+  const totalBilled = roundMoney(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Net_Charge_Amount)), 0));
+  const totalPaidAgainstBills = roundMoney(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Paid_Amount)), 0));
+  const totalOutstanding = roundMoney(billMetrics.reduce((s, i) => s + Math.max(0, toReportAmount(i.Outstanding_Amount)), 0));
 
   const unpaidMetrics = billMetrics.filter((i) => toReportAmount(i.Outstanding_Amount) > 0);
   const earliestUnpaid = [...unpaidMetrics].sort((a, b) =>
     (toReportDateKey(a.Due_Date) || '9999-12-31').localeCompare(toReportDateKey(b.Due_Date) || '9999-12-31')
   )[0];
 
-  const confirmedReceipts = sortedReceipts.filter((r) => normText(r.Receipt_Status) === 'confirmed');
-  const pendingReceipts = sortedReceipts.filter((r) => normText(r.Receipt_Status) === 'pending verification');
-  const confirmedReceivedTotal = Math.round(
-    confirmedReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0) * 100
-  ) / 100;
-  const pendingVerificationAmount = Math.round(
-    pendingReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0) * 100
-  ) / 100;
-  const advanceCreditTotal = Math.round(
-    confirmedReceipts.reduce((s, r) => s + Math.max(0, toReportAmount(r.Unallocated_Amount)), 0) * 100
-  ) / 100;
+  const {
+    confirmedReceipts,
+    pendingReceipts,
+    confirmedReceivedTotal,
+    pendingVerificationAmount,
+    advanceCreditTotal,
+  } = summarizeReceipts(sortedReceipts);
 
   const activeTenants = filterResidentScopedRecords(params.tenants || [], pid, effectiveOwnershipId, {
     allowBlankOwnership: true,
@@ -328,13 +402,12 @@ export function buildResidentStatementLedger(
   receipts: Array<Partial<FundInflowRegister>>,
   options: { fromDate?: string; toDate?: string } = {}
 ) {
-  const excludedInv = new Set(['cancelled', 'draft', 'pending_approval', 'pending approval']);
   const events: Array<Omit<ResidentStatementRow, 'runningBalance'> & { sortOrder: number }> = [];
 
   (invoices || []).forEach((inv) => {
-    if (excludedInv.has(normText(inv.Invoice_Status))) return;
+    if (isExcludedInvoiceStatus(inv.Invoice_Status)) return;
     const date = toReportDateKey(inv.Billing_Date) || toReportDateKey(inv.Bill_Period_From) || toReportDateKey(inv.Created_At);
-    const amount = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
+    const amount = Math.max(0, roundMoney(toReportAmount(inv.Net_Charge_Amount)));
     events.push({
       id: `INV:${inv.InvoiceID || inv.Invoice_Number}`,
       date,
@@ -349,11 +422,12 @@ export function buildResidentStatementLedger(
   });
 
   (receipts || []).forEach((rec) => {
-    const statusLower = normText(rec.Receipt_Status);
-    const isConfirmed = statusLower === 'confirmed';
+    const rawStatus = rec.Receipt_Status || (rec as any).Status || '';
+    const statusLower = normText(rawStatus);
+    const isConfirmed = isConfirmedReceipt(rec as any);
     const isPending = statusLower === 'pending verification';
     const date = toReportDateKey(rec.Date_Of_Received) || toReportDateKey(rec.Created_At);
-    const amount = Math.max(0, toReportAmount(rec.Received_Amount));
+    const amount = Math.max(0, roundMoney(toReportAmount(rec.Received_Amount)));
     events.push({
       id: `REC:${rec.Transaction_ID || rec.Receipt_Number}`,
       date,
@@ -366,7 +440,7 @@ export function buildResidentStatementLedger(
       description: `${rec.Received_Mode || 'Payment'}${rec.Received_Reference ? ` (${rec.Received_Reference})` : ''}`,
       debit: 0,
       credit: isConfirmed ? amount : 0,
-      status: String(rec.Receipt_Status || ''),
+      status: String(rawStatus || ''),
       sortOrder: 1,
     });
   });

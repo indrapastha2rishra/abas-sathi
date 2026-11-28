@@ -23,23 +23,26 @@ import {
 } from 'lucide-react';
 import { PaymentMode, FundInflowRegister } from '../../types/database';
 import { formatDateDisplay } from '../../utils/dateFormat';
-import { computeInvoiceOutstandingBills } from '../../utils/invoiceOutstanding';
+import {
+  computeInvoiceOutstandingBills,
+  isConfirmedReceipt,
+  isExcludedAllocationStatus,
+  isExcludedInvoiceStatus,
+  toInvoiceAmount,
+} from '../../utils/invoiceOutstanding';
 import {
   filterResidentScopedRecords,
+  filterScopedAllocationsForInvoices,
   sortResidentInvoicesNewestFirst,
   sortResidentReceiptsNewestFirst,
+  summarizeReceipts,
 } from '../../utils/residentPortalHelpers';
 
 interface Props {
   initialSubTab?: 'pay_now' | 'receipts' | 'allocation' | 'advances' | 'record';
 }
 
-const toAmt = (v: unknown): number => {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-  const cleaned = String(v ?? '').replace(/[^0-9.-]/g, '');
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
+const toAmt = toInvoiceAmount;
 
 const fmtAmt = (v: unknown): string => toAmt(v).toFixed(2);
 
@@ -101,12 +104,25 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
         : receipts,
     [activeRole, receipts, residentProperty?.PropertyID, currentUser.Ownership_ID]
   );
+  const residentScopedInvoicesRaw = useMemo(
+    () =>
+      activeRole === 'Resident'
+        ? filterResidentScopedRecords(invoices, residentProperty?.PropertyID, currentUser.Ownership_ID)
+        : invoices,
+    [activeRole, invoices, residentProperty?.PropertyID, currentUser.Ownership_ID]
+  );
   const residentScopedAllocations = useMemo(
     () =>
       activeRole === 'Resident'
-        ? filterResidentScopedRecords(billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID)
-        : billAllocations,
-    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID]
+        ? filterScopedAllocationsForInvoices(
+            billAllocations,
+            residentProperty?.PropertyID,
+            currentUser.Ownership_ID,
+            residentScopedInvoicesRaw,
+            residentScopedReceipts
+          )
+        : billAllocations.filter((row) => !isExcludedAllocationStatus(row as any)),
+    [activeRole, billAllocations, residentProperty?.PropertyID, currentUser.Ownership_ID, residentScopedInvoicesRaw, residentScopedReceipts]
   );
 
   const computedInvoices = useMemo(
@@ -120,21 +136,19 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
       sortResidentInvoicesNewestFirst(
         filterResidentScopedRecords(computedInvoices, residentProperty?.PropertyID, currentUser.Ownership_ID).filter(
           (i) =>
-            !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(i.Invoice_Status || '').trim().toLowerCase()) &&
+            !isExcludedInvoiceStatus(i.Invoice_Status) &&
             toAmt(i.Calculated_Outstanding) > 0
         )
       ),
     [computedInvoices, residentProperty?.PropertyID, currentUser.Ownership_ID]
   );
 
-  const pendingResidentReceipts = useMemo(
-    () => residentScopedReceipts.filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'pending verification'),
+  const residentReceiptSummary = useMemo(
+    () => summarizeReceipts(residentScopedReceipts),
     [residentScopedReceipts]
   );
-  const pendingResidentAmount = useMemo(
-    () => pendingResidentReceipts.reduce((s, r) => s + toAmt(r.Received_Amount), 0),
-    [pendingResidentReceipts]
-  );
+  const pendingResidentReceipts = residentReceiptSummary.pendingReceipts;
+  const pendingResidentAmount = residentReceiptSummary.pendingVerificationAmount;
 
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>(
     () => myInvoices.map((i) => i.InvoiceID)
@@ -186,8 +200,8 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
     () =>
       computedInvoices.filter(
         (inv) =>
-          String(inv.PropertyID || '') === String(recordPropertyId || '') &&
-          !['cancelled', 'draft', 'pending_approval', 'pending approval'].includes(String(inv.Invoice_Status || '').trim().toLowerCase()) &&
+          String(inv.PropertyID || '').trim().toUpperCase() === String(recordPropertyId || '').trim().toUpperCase() &&
+          !isExcludedInvoiceStatus(inv.Invoice_Status) &&
           toAmt(inv.Calculated_Outstanding) > 0
       ),
     [computedInvoices, recordPropertyId]
@@ -249,7 +263,7 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
   const advanceReceipts = useMemo(
     () =>
       receipts.filter(
-        (r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed' && toAmt(r.Unallocated_Amount) > 0
+        (r) => isConfirmedReceipt(r as any) && toAmt(r.Unallocated_Amount) > 0
       ),
     [receipts]
   );
@@ -825,12 +839,8 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
               return matchesQuery && matchesStatus;
             })
           : residentScopedReceipts;
-        const confirmedSum = residentScopedReceipts
-          .filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
-          .reduce((s, r) => s + toAmt(r.Received_Amount), 0);
-        const advanceSum = residentScopedReceipts
-          .filter((r) => String(r.Receipt_Status || '').trim().toLowerCase() === 'confirmed')
-          .reduce((s, r) => s + toAmt(r.Unallocated_Amount), 0);
+        const confirmedSum = residentReceiptSummary.confirmedReceivedTotal;
+        const advanceSum = residentReceiptSummary.advanceCreditTotal;
         return (
           <div className="space-y-4">
             {activeRole === 'Resident' && (
@@ -925,12 +935,12 @@ export const PaymentsView: React.FC<Props> = ({ initialSubTab = 'receipts' }) =>
                   </thead>
                   <tbody className="divide-y divide-[#E8E1D4]">
                     {filteredReceipts.map((rec) => {
-                      const statusLower = String(rec.Receipt_Status || '').trim().toLowerCase();
-                      const isConfirmed = statusLower === 'confirmed';
+                      const statusLower = String(rec.Receipt_Status || (rec as any).Status || '').trim().toLowerCase();
+                      const isConfirmed = isConfirmedReceipt(rec as any);
                       const isPending = statusLower === 'pending verification';
                       const isRejected = statusLower === 'rejected' || statusLower === 'cancelled' || statusLower === 'bounced';
                       const allocs = residentScopedAllocations.filter(
-                        (a) => String(a.Transaction_ID || '').trim() === String(rec.Transaction_ID || '').trim()
+                        (a) => String(a.Transaction_ID || '').trim().toUpperCase() === String(rec.Transaction_ID || '').trim().toUpperCase()
                       );
                       return (
                         <React.Fragment key={rec.Transaction_ID}>

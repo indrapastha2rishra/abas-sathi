@@ -131,6 +131,7 @@ function createBackendHarness({ userRows, rolePermissionRows, ownershipRows }) {
       ]),
     ],
     'Tenant Master': [['Tenant_ID', 'PropertyID', 'Status']],
+    'Rate Master': [['RateID', 'Purpose', 'Area_Basis', 'Rate_Per_SqFt_Unit', 'Status']],
     'Invoice_Register': [
       ['InvoiceID', 'Invoice_Number', 'PropertyID', 'Ownership_ID', 'Net_Charge_Amount', 'Paid_Amount', 'Outstanding_Amount', 'Invoice_Status'],
       ['INV-1', 'INV-001', 'PROP-101', 'OWN-101', 2500, 0, 2500, 'Unpaid'],
@@ -323,3 +324,78 @@ test('adminCreateUser can immediately activate non-Admin accounts and auto-link 
   assert.equal(resLogin.user.role, 'Resident');
   assert.equal(resLogin.user.ownershipId, 'OWN-102');
 });
+
+test('Committee and Accountant receive identical dashboard calculation datasets as Admin without Permission denied crashes, while bankAccounts stays hidden from Committee', () => {
+  const harness = createBackendHarness({
+    userRows: [],
+    rolePermissionRows: [
+      ['Permission_ID', 'Role', 'Module_Name', 'Can_View', 'Can_Create', 'Can_Edit', 'Can_Delete', 'Can_Approve', 'Remarks'],
+      ['RP00001', 'Admin', 'Dashboard', true, true, true, true, true, 'Admin'],
+      ['RP00002', 'Admin', 'Reports', true, true, true, true, true, 'Admin'],
+      ['RP00003', 'Admin', 'Maintenance & Invoices', true, true, true, true, true, 'Admin'],
+      ['RP00004', 'Admin', 'Payments', true, true, true, true, true, 'Admin'],
+      ['RP00005', 'Admin', 'Bill Wise Details', true, true, true, true, true, 'Admin'],
+      ['RP00006', 'Admin', 'Properties & Residents', true, true, true, true, true, 'Admin'],
+      ['RP00007', 'Admin', 'Owner Management', true, true, true, true, true, 'Admin'],
+      ['RP00008', 'Admin', 'Ownership History', true, true, true, true, true, 'Admin'],
+      ['RP00009', 'Admin', 'Financial Year Management', true, true, true, true, true, 'Admin'],
+      ['RP00010', 'Admin', 'Bank Accounts', true, true, true, true, true, 'Admin'],
+      // Restrictive / partial Committee config: Reports + Maintenance & Invoices allowed, but Payments / Bill Wise Details / FY / Owners / Ownership History disabled or missing
+      ['RP00101', 'Committee', 'Dashboard', true, false, false, false, false, 'Committee'],
+      ['RP00102', 'Committee', 'Reports', true, false, false, false, false, 'Committee'],
+      ['RP00103', 'Committee', 'Maintenance & Invoices', true, false, false, false, false, 'Committee'],
+      ['RP00104', 'Committee', 'Payments', false, false, false, false, false, 'Committee'],
+      ['RP00105', 'Committee', 'Bill Wise Details', false, false, false, false, false, 'Committee'],
+      ['RP00106', 'Committee', 'Bank Accounts', true, false, false, false, false, 'Even if misconfigured true, Committee must never read bankAccounts'],
+      // Restrictive Accountant config: Reports allowed, Bill Wise Details false
+      ['RP00201', 'Accountant', 'Dashboard', true, false, false, false, false, 'Accountant'],
+      ['RP00202', 'Accountant', 'Reports', true, false, false, false, false, 'Accountant'],
+      ['RP00203', 'Accountant', 'Maintenance & Invoices', false, false, false, false, false, 'Accountant'],
+      ['RP00204', 'Accountant', 'Bill Wise Details', false, false, false, false, false, 'Accountant'],
+      ['RP00205', 'Accountant', 'Bank Accounts', true, false, false, false, false, 'Accountant'],
+    ],
+  });
+
+  // Add realistic rows to Bill Wise Details, Fund Inflow Register, Financial Year Master, Bank Account Master
+  harness.societySs.getSheetByName('Fund Inflow Register').appendRow(['TXN-1', 'PROP-101', 'OWN-101', 'Confirmed', 1500]);
+  harness.societySs.getSheetByName('Bill Wise Details').appendRow(['ALL-1', 'TXN-1', 'INV-1', 'PROP-101', 'OWN-101', 1500]);
+  harness.societySs.getSheetByName('Financial Year Master').appendRow(['FY-2627', 'FY 2026-27', '2026-04-01', '2027-03-31', 'true']);
+  harness.societySs.getSheetByName('Bank Account Master').appendRow(['BANK-1', 'Society SBI', 10000]);
+
+  const hashPassword = harness.sandbox.hashPassword_;
+  const usersSheet = harness.centralSs.getSheetByName('Society User Access');
+  const salt = 'salt-roles-04';
+  usersSheet.appendRow(['SO001', 'adm1', 'USR-ADM', 'Admin User', 'adm@example.com', '9000000001', 'Admin', '', '', '', 'Active', salt, hashPassword(salt, 'AdmPass#2026A'), '', '[]']);
+  usersSheet.appendRow(['SO001', 'com1', 'USR-COM', 'Committee User', 'com@example.com', '9000000002', 'Committee', '', '', '', 'Active', salt, hashPassword(salt, 'ComPass#2026A'), '', '[]']);
+  usersSheet.appendRow(['SO001', 'acc1', 'USR-ACC', 'Accountant User', 'acc@example.com', '9000000003', 'Accountant', '', '', '', 'Active', salt, hashPassword(salt, 'AccPass#2026A'), '', '[]']);
+
+  const admLogin = harness.callPost({ action: 'login', societyCode: 'SO001', loginId: 'adm1', password: 'AdmPass#2026A' });
+  const comLogin = harness.callPost({ action: 'login', societyCode: 'SO001', loginId: 'com1', password: 'ComPass#2026A' });
+  const accLogin = harness.callPost({ action: 'login', societyCode: 'SO001', loginId: 'acc1', password: 'AccPass#2026A' });
+
+  const admDash = harness.callPost({ action: 'getRoleDashboardData', token: admLogin.token });
+  const comDash = harness.callPost({ action: 'getRoleDashboardData', token: comLogin.token });
+  const accDash = harness.callPost({ action: 'getRoleDashboardData', token: accLogin.token });
+
+  assert.equal(admDash.status, 'success');
+  assert.equal(comDash.status, 'success');
+  assert.equal(accDash.status, 'success');
+
+  const calcKeys = ['invoices', 'receipts', 'billWiseDetails', 'rates', 'financialYears', 'properties', 'owners', 'ownershipHistory'];
+  for (const key of calcKeys) {
+    assert.deepEqual(comDash.data[key], admDash.data[key], `Committee ${key} must match Admin`);
+    assert.deepEqual(accDash.data[key], admDash.data[key], `Accountant ${key} must match Admin`);
+    const comMod = harness.callPost({ action: 'getModuleData', token: comLogin.token, module: key, page: 1, limit: 200 });
+    assert.equal(comMod.status, 'success', `Committee getModuleData(${key}) should succeed`);
+    assert.deepEqual(comMod.data, admDash.data[key]);
+  }
+
+  // Bank accounts remain strictly protected: Admin & Accountant get them, Committee never does.
+  assert.equal(admDash.data.bankAccounts.length, 1);
+  assert.equal(accDash.data.bankAccounts.length, 1);
+  assert.equal(comDash.data.bankAccounts, undefined);
+  const comBankMod = harness.callPost({ action: 'getModuleData', token: comLogin.token, module: 'bankAccounts', page: 1, limit: 50 });
+  assert.equal(comBankMod.status, 'error');
+  assert.match(comBankMod.message, /restricted/i);
+});
+

@@ -6,6 +6,8 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { summarizePaidExpenses } from '../../utils/calculations';
+import { toInvoiceAmount } from '../../utils/invoiceOutstanding';
 import {
   TrendingDown,
   PlusCircle,
@@ -135,9 +137,7 @@ export const ExpensesView: React.FC<Props> = ({ initialTab = 'register' }) => {
     return matchesSearch && matchesCat;
   });
 
-  const totalPaidExpenses = expenses
-    .filter((e) => e.Expense_Status === 'Paid')
-    .reduce((sum, e) => sum + e.Payment_Amount, 0);
+  const { total: totalPaidExpenses } = summarizePaidExpenses(expenses);
 
   return (
     <div className="space-y-6">
@@ -252,7 +252,7 @@ export const ExpensesView: React.FC<Props> = ({ initialTab = 'register' }) => {
                       <td className="px-4 py-3 font-medium text-[#29352D]">{exp.Payee_Name}</td>
                       <td className="px-4 py-3 text-gray-600 truncate max-w-xs">{exp.Particulars}</td>
                       <td className="px-4 py-3 text-right font-bold text-[#29352D]">
-                        ₹{exp.Payment_Amount.toLocaleString('en-IN')}.00
+                        ₹{toInvoiceAmount(exp.Payment_Amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td className="px-4 py-3 font-mono text-[11px] text-gray-500">
                         {exp.Payment_Mode} ({exp.Payment_Reference})

@@ -15,9 +15,17 @@ import type {
   NoticeMaster,
   RateMaster,
 } from '../types/database';
-import { calculateFundSummary, type FundSummaryData } from './calculations';
-import { computeInvoiceOutstandingBills, toInvoiceAmount, type ComputedInvoiceOutstanding } from './invoiceOutstanding';
-import { resolveFYRangeForMonth, toReportAmount, toReportDateKey } from './reportHelpers';
+import { calculateFundSummary, summarizePaidExpenses, type FundSummaryData } from './calculations';
+import {
+  computeInvoiceOutstandingBills,
+  isConfirmedReceipt,
+  isExcludedAllocationStatus,
+  isExcludedInvoiceStatus,
+  roundMoney,
+  toInvoiceAmount,
+  type ComputedInvoiceOutstanding,
+} from './invoiceOutstanding';
+import { computeConfirmedInvoiceMetrics, resolveFYRangeForMonth, toReportAmount, toReportDateKey } from './reportHelpers';
 
 export interface OwnershipOutstandingRowLike {
   Ownership_ID?: string;
@@ -26,13 +34,6 @@ export interface OwnershipOutstandingRowLike {
   Ownership_Start_Date?: string;
   [key: string]: unknown;
 }
-
-const EXCLUDED_DASHBOARD_INVOICE_STATUSES = new Set([
-  'cancelled',
-  'draft',
-  'pending_approval',
-  'pending approval',
-]);
 
 export interface DashboardDonutSegment {
   status: 'Paid' | 'Partially Paid' | 'Unpaid' | 'Overdue';
@@ -189,23 +190,18 @@ export function computeMaintenanceCollectionRate(params: {
 
   const computed = computedInvoices || computeInvoiceOutstandingBills(invoices, billAllocations, receipts, now);
   const maintenanceInvoices = computed.filter((inv) => {
-    const status = String(inv.Invoice_Status || '').trim().toLowerCase();
-    if (EXCLUDED_DASHBOARD_INVOICE_STATUSES.has(status)) return false;
+    if (isExcludedInvoiceStatus(inv.Invoice_Status)) return false;
     if (!isMaintenanceInvoice(inv, rateById)) return false;
     return invoiceMatchesBillingPeriod(inv, periodStart, periodEnd);
   });
 
-  const maintenanceBilled =
-    Math.round(maintenanceInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0) * 100) / 100;
-  const maintenanceCollected =
-    Math.round(
-      maintenanceInvoices.reduce(
-        (sum, inv) => sum + Math.min(inv.Net_Charge_Amount, Math.max(0, inv.Allocated_Amount_Total)),
-        0
-      ) * 100
-    ) / 100;
-  const maintenanceOutstanding =
-    Math.round(maintenanceInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0) * 100) / 100;
+  const maintenanceBilled = roundMoney(maintenanceInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0));
+  const maintenanceCollected = roundMoney(
+    maintenanceInvoices.reduce((sum, inv) => sum + inv.Paid_Amount, 0)
+  );
+  const maintenanceOutstanding = roundMoney(
+    maintenanceInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0)
+  );
   const maintenanceCollectionRate =
     maintenanceBilled > 0 ? ((maintenanceCollected / maintenanceBilled) * 100).toFixed(1) : '0';
 
@@ -230,17 +226,11 @@ export function computeDashboardInvoiceSummary(params: {
 }): DashboardInvoiceSummary {
   const { invoices, receipts, billAllocations, rates = [], periodStart, periodEnd, now = new Date() } = params;
   const computed = computeInvoiceOutstandingBills(invoices, billAllocations, receipts, now);
-  const issuedInvoices = computed.filter(
-    (inv) => !EXCLUDED_DASHBOARD_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase())
-  );
+  const issuedInvoices = computed.filter((inv) => !isExcludedInvoiceStatus(inv.Invoice_Status));
 
-  const totalBilled = Math.round(issuedInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0) * 100) / 100;
-  const totalCollected =
-    Math.round(
-      issuedInvoices.reduce((sum, inv) => sum + Math.min(inv.Net_Charge_Amount, Math.max(0, inv.Allocated_Amount_Total)), 0) * 100
-    ) / 100;
-  const totalOutstanding =
-    Math.round(issuedInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0) * 100) / 100;
+  const totalBilled = roundMoney(issuedInvoices.reduce((sum, inv) => sum + inv.Net_Charge_Amount, 0));
+  const totalCollected = roundMoney(issuedInvoices.reduce((sum, inv) => sum + inv.Paid_Amount, 0));
+  const totalOutstanding = roundMoney(issuedInvoices.reduce((sum, inv) => sum + inv.Calculated_Outstanding, 0));
   const collectionRate = totalBilled > 0 ? ((totalCollected / totalBilled) * 100).toFixed(1) : '0';
 
   const fyStartKey = periodStart ? toReportDateKey(periodStart) : '';
@@ -352,14 +342,6 @@ export function resolveDashboardFY(params: {
   return resolveFYRangeForMonth(todayKey.slice(0, 7), financialYears);
 }
 
-const EXCLUDED_BILL_ALLOCATION_STATUSES = new Set([
-  'cancelled',
-  'canceled',
-  'rejected',
-  'void',
-  'reversed',
-]);
-
 /**
  * Calculates total Outstanding Collection directly as:
  *   total 'Invoice Register' (issued Net_Charge_Amount) − total 'Bill Wise Details' (Allocated_Amount)
@@ -382,29 +364,26 @@ export function computeTotalOutstandingCollection(params: {
     receiptStatusByTxnId.set(txnId, String(rec.Receipt_Status || (rec as any).Status || '').trim().toLowerCase());
   });
 
-  const totalInvoiceRegister =
-    Math.round(
-      (invoices || [])
-        .filter((inv) => !EXCLUDED_DASHBOARD_INVOICE_STATUSES.has(String(inv.Invoice_Status || '').trim().toLowerCase()))
-        .reduce((sum, inv) => sum + Math.max(0, toInvoiceAmount(inv.Net_Charge_Amount)), 0) * 100
-    ) / 100;
+  const totalInvoiceRegister = roundMoney(
+    (invoices || [])
+      .filter((inv) => !isExcludedInvoiceStatus(inv.Invoice_Status))
+      .reduce((sum, inv) => sum + Math.max(0, toInvoiceAmount(inv.Net_Charge_Amount)), 0)
+  );
 
-  const totalBillWiseDetails =
-    Math.round(
-      (billAllocations || [])
-        .filter((row) => {
-          const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
-          if (allocStatus && EXCLUDED_BILL_ALLOCATION_STATUSES.has(allocStatus)) return false;
-          const txnId = String(row.Transaction_ID || '').trim().toUpperCase();
-          if (txnId && receiptStatusByTxnId.has(txnId)) {
-            return receiptStatusByTxnId.get(txnId) === 'confirmed';
-          }
-          return true;
-        })
-        .reduce((sum, row) => sum + Math.max(0, toInvoiceAmount(row.Allocated_Amount)), 0) * 100
-    ) / 100;
+  const totalBillWiseDetails = roundMoney(
+    (billAllocations || [])
+      .filter((row) => {
+        if (isExcludedAllocationStatus(row as any)) return false;
+        const txnId = String(row.Transaction_ID || '').trim().toUpperCase();
+        if (txnId && receiptStatusByTxnId.has(txnId)) {
+          return receiptStatusByTxnId.get(txnId) === 'confirmed';
+        }
+        return true;
+      })
+      .reduce((sum, row) => sum + Math.max(0, toInvoiceAmount(row.Allocated_Amount)), 0)
+  );
 
-  const outstandingCollection = Math.max(0, Math.round((totalInvoiceRegister - totalBillWiseDetails) * 100) / 100);
+  const outstandingCollection = Math.max(0, roundMoney(totalInvoiceRegister - totalBillWiseDetails));
   return {
     totalInvoiceRegister,
     totalBillWiseDetails,
@@ -429,52 +408,33 @@ export function computeDashboardFundSummary(params: {
   const { fyRange, fundBalanceSummary, receipts, expenses, invoices, billAllocations, bankAccounts, totalOutstanding } = params;
   const hasServerOpening = typeof fundBalanceSummary?.openingFundBalance === 'number';
   const openingBalanceTotal = hasServerOpening
-    ? toReportAmount(fundBalanceSummary?.openingFundBalance)
-    : Math.round((bankAccounts || []).reduce((sum, b) => sum + toReportAmount(b.Opening_Balance), 0) * 100) / 100;
+    ? roundMoney(toReportAmount(fundBalanceSummary?.openingFundBalance))
+    : roundMoney((bankAccounts || []).reduce((sum, b) => sum + toReportAmount(b.Opening_Balance), 0));
 
   const summary = calculateFundSummary({
     openingBalance: openingBalanceTotal,
-    receipts: (receipts || []).map((r) => ({
-      ...r,
-      Receipt_Status:
-        String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() === 'confirmed'
-          ? 'Confirmed'
-          : r.Receipt_Status,
-      Date_Of_Received: toReportDateKey(r.Date_Of_Received) || r.Date_Of_Received,
-      Received_Amount: toReportAmount(r.Received_Amount),
-    })),
-    expenses: (expenses || []).map((e) => ({
-      ...e,
-      Expense_Status: String(e.Expense_Status || '').trim().toLowerCase() === 'paid' ? 'Paid' : e.Expense_Status,
-      Payment_Date: toReportDateKey(e.Payment_Date) || e.Payment_Date,
-      Payment_Amount: toReportAmount(e.Payment_Amount),
-    })),
-    invoices: (invoices || []).map((i) => ({
-      ...i,
-      Billing_Date: toReportDateKey(i.Billing_Date) || i.Billing_Date,
-      Outstanding_Amount: toReportAmount(i.Outstanding_Amount),
-    })),
+    receipts,
+    expenses,
+    invoices,
     startDate: fyRange.startDate,
     endDate: fyRange.endDate,
   });
 
-  summary.totalFundReceived = Math.round(summary.totalFundReceived * 100) / 100;
-  summary.totalFundUtilized = Math.round(summary.totalFundUtilized * 100) / 100;
-
   if (fundBalanceSummary) {
     if ((receipts || []).length === 0 && typeof fundBalanceSummary.totalFundReceived === 'number') {
-      summary.totalFundReceived = Math.round(toReportAmount(fundBalanceSummary.totalFundReceived) * 100) / 100;
+      summary.totalFundReceived = roundMoney(toReportAmount(fundBalanceSummary.totalFundReceived));
     }
     if ((expenses || []).length === 0 && typeof fundBalanceSummary.totalFundUtilized === 'number') {
-      summary.totalFundUtilized = Math.round(toReportAmount(fundBalanceSummary.totalFundUtilized) * 100) / 100;
+      summary.totalFundUtilized = roundMoney(toReportAmount(fundBalanceSummary.totalFundUtilized));
     }
   }
 
-  summary.availableFund =
-    Math.round((summary.openingFundBalance + summary.totalFundReceived - summary.totalFundUtilized) * 100) / 100;
+  summary.availableFund = roundMoney(
+    summary.openingFundBalance + summary.totalFundReceived - summary.totalFundUtilized
+  );
 
   if (typeof totalOutstanding === 'number' && Number.isFinite(totalOutstanding)) {
-    summary.outstandingCollection = Math.round(totalOutstanding * 100) / 100;
+    summary.outstandingCollection = roundMoney(totalOutstanding);
   } else if (Array.isArray(billAllocations)) {
     summary.outstandingCollection = computeTotalOutstandingCollection({
       invoices,
@@ -483,6 +443,149 @@ export function computeDashboardFundSummary(params: {
     }).outstandingCollection;
   }
   return summary;
+}
+
+export function computeMonthlyReceiptPaymentSummary(params: {
+  selectedMonth: string;
+  fyStartDate?: string;
+  openingFYBalance: number;
+  receipts: FundInflowRegister[];
+  expenses: ExpenseRegister[];
+}) {
+  const { selectedMonth, fyStartDate, openingFYBalance, receipts, expenses } = params;
+  const monthStartKey = `${selectedMonth}-01`;
+  const confirmedReceipts = (receipts || []).filter((r) => isConfirmedReceipt(r as any));
+  const monthReceipts = confirmedReceipts.filter((r) =>
+    toReportDateKey(r.Date_Of_Received).startsWith(selectedMonth)
+  );
+
+  const monthPaid = summarizePaidExpenses(
+    expenses || [],
+    monthStartKey,
+    `${selectedMonth}-31`
+  );
+  // Also match exact YYYY-MM prefix for safety
+  const monthExpenses = (expenses || []).filter(
+    (e) =>
+      String(e.Expense_Status || (e as any).Status || '').trim().toLowerCase() === 'paid' &&
+      toReportDateKey(e.Payment_Date).startsWith(selectedMonth)
+  );
+  void monthPaid;
+
+  const totalMonthInflow = roundMoney(
+    monthReceipts.reduce((sum, r) => sum + Math.max(0, toReportAmount(r.Received_Amount)), 0)
+  );
+  const totalMonthOutflow = roundMoney(
+    monthExpenses.reduce((sum, e) => sum + Math.max(0, toReportAmount(e.Payment_Amount)), 0)
+  );
+
+  const fyStart = fyStartDate ? toReportDateKey(fyStartDate) : '';
+  let priorIn = 0;
+  let priorOut = 0;
+  if (fyStart && monthStartKey > fyStart) {
+    priorIn = roundMoney(
+      confirmedReceipts
+        .filter((r) => {
+          const d = toReportDateKey(r.Date_Of_Received);
+          return d >= fyStart && d < monthStartKey;
+        })
+        .reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0)
+    );
+    priorOut = roundMoney(
+      (expenses || [])
+        .filter((e) => String(e.Expense_Status || (e as any).Status || '').trim().toLowerCase() === 'paid')
+        .filter((e) => {
+          const d = toReportDateKey(e.Payment_Date);
+          return d >= fyStart && d < monthStartKey;
+        })
+        .reduce((s, e) => s + Math.max(0, toReportAmount(e.Payment_Amount)), 0)
+    );
+  }
+
+  const openingAtMonthStart = roundMoney(toReportAmount(openingFYBalance) + priorIn - priorOut);
+  const closingAtMonthEnd = roundMoney(openingAtMonthStart + totalMonthInflow - totalMonthOutflow);
+
+  return {
+    monthReceipts,
+    monthExpenses,
+    totalMonthInflow,
+    totalMonthOutflow,
+    openingAtMonthStart,
+    closingAtMonthEnd,
+  };
+}
+
+export function computeFinancialYearSummary(params: {
+  fyName: string;
+  startDate: string;
+  endDate: string;
+  openingFundBalance: number;
+  openingSource?: string;
+  invoices: InvoiceRegister[];
+  receipts: FundInflowRegister[];
+  billAllocations: BillWiseDetails[];
+  expenses: ExpenseRegister[];
+  rates?: RateMaster[];
+  now?: Date;
+}) {
+  const {
+    fyName,
+    startDate,
+    endDate,
+    openingFundBalance,
+    openingSource = 'Fund Balance Register',
+    invoices,
+    receipts,
+    billAllocations,
+    expenses,
+    rates = [],
+    now = new Date(),
+  } = params;
+
+  const from = toReportDateKey(startDate);
+  const to = toReportDateKey(endDate);
+
+  const fyInv = computeConfirmedInvoiceMetrics(invoices, receipts, billAllocations, now).filter(({ inv }) => {
+    const d = toReportDateKey(inv.Billing_Date) || toReportDateKey(inv.Bill_Period_From);
+    return d && (!from || d >= from) && (!to || d <= to);
+  });
+  const fyRec = (receipts || []).filter((r) => {
+    if (!isConfirmedReceipt(r as any)) return false;
+    const d = toReportDateKey(r.Date_Of_Received);
+    return d && (!from || d >= from) && (!to || d <= to);
+  });
+  const { count: expenseCount, total: paidTotal } = summarizePaidExpenses(expenses || [], from, to);
+
+  const normalizedOpening = roundMoney(toReportAmount(openingFundBalance));
+  const billed = roundMoney(fyInv.reduce((s, x) => s + x.net, 0));
+  const receiptsTotal = roundMoney(fyRec.reduce((s, r) => s + Math.max(0, toReportAmount(r.Received_Amount)), 0));
+  const outstanding = roundMoney(fyInv.reduce((s, x) => s + x.due, 0));
+  const maintRateInfo = computeMaintenanceCollectionRate({
+    invoices,
+    receipts,
+    billAllocations,
+    rates,
+    periodStart: from,
+    periodEnd: to,
+    now,
+  });
+
+  return {
+    fyName,
+    openingFundBalance: normalizedOpening,
+    openingSource,
+    closingFundBalance: roundMoney(normalizedOpening + receiptsTotal - paidTotal),
+    invoiceCount: fyInv.length,
+    receiptCount: fyRec.length,
+    expenseCount,
+    billed,
+    receipts: receiptsTotal,
+    paidExpenses: paidTotal,
+    outstanding,
+    maintenanceBilled: maintRateInfo.maintenanceBilled,
+    maintenanceCollected: maintRateInfo.maintenanceCollected,
+    maintenanceCollectionRate: maintRateInfo.maintenanceCollectionRate,
+  };
 }
 
 export function sortOwnershipOutstandingByFlatAsc<T extends OwnershipOutstandingRowLike>(rows: T[]): T[] {

@@ -33,6 +33,7 @@ import {
 import { Language, translations } from '../utils/i18n';
 import { authRequest, BackendRequestError } from '../utils/authClient';
 import { normalizeAuthRole } from '../utils/authValidation';
+import { computeInvoiceOutstandingBills, roundMoney, toInvoiceAmount } from '../utils/invoiceOutstanding';
 import { permissionGranted, moduleForTab, actionForTab, type PermissionAction, type RolePermissionRecord } from '../utils/permissions';
 import {
   buildScopeKey,
@@ -609,48 +610,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           gallery: ['Gallery', 'Notices & Gallery', 'Resident Portal'],
           galleryPhotos: ['Gallery', 'Notices & Gallery', 'Resident Portal'],
         };
+        const reportCalculationKeys = new Set([
+          'invoices',
+          'receipts',
+          'billWiseDetails',
+          'rates',
+          'financialYears',
+          'properties',
+          'owners',
+          'ownershipHistory',
+        ]);
         const effectiveRoleForLoad = isResidentMode ? 'Resident' : actualRole;
-        const requested = Array.from(new Set([...(modulePlan[activeTab] || []), 'rolePermissions'])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(activeRole)) && (key !== 'expenses' || activeRole !== 'Resident'));
-        const permittedRequested = requested.filter(key => {
-          if (key === 'auditLogs' && !['Admin','Accountant'].includes(activeRole)) return false;
+        const canLoadModule = (key: string, permRows: RolePermissionRecord[] = rolePermissions): boolean => {
+          if (key === 'bankAccounts' && !['Admin', 'Accountant'].includes(effectiveRoleForLoad)) return false;
+          if (key === 'auditLogs' && !['Admin', 'Accountant'].includes(effectiveRoleForLoad)) return false;
           if (key === 'rolePermissions') return true;
-          if (rolePermissions.length === 0) return true;
+          if (permRows.length === 0) return true;
           if (effectiveRoleForLoad === 'Resident') {
             const candidates = residentPermAliases[key];
             if (candidates) {
-              return candidates.some(m => permissionGranted(rolePermissions, 'Resident', m, 'Can_View'));
+              return candidates.some(m => permissionGranted(permRows, 'Resident', m, 'Can_View'));
             }
           }
           const modName = permModuleMap[key];
           if (!modName) return true;
+          if (permissionGranted(permRows, effectiveRoleForLoad, modName, 'Can_View')) return true;
+          if (key === 'receipts' && permissionGranted(permRows, effectiveRoleForLoad, 'Fund Inflow', 'Can_View')) return true;
+          const hasReportOrMaintView =
+            permissionGranted(permRows, effectiveRoleForLoad, 'Reports', 'Can_View') ||
+            permissionGranted(permRows, effectiveRoleForLoad, 'Maintenance & Invoices', 'Can_View');
+          if (hasReportOrMaintView && reportCalculationKeys.has(key)) {
+            return true;
+          }
+          if (key === 'billWiseDetails') {
+            return permissionGranted(permRows, effectiveRoleForLoad, 'Payments', 'Can_View')
+              || permissionGranted(permRows, effectiveRoleForLoad, 'Fund Inflow', 'Can_View');
+          }
           const hasExplicitModuleRow = (moduleLabel: string) =>
-            rolePermissions.some(
+            permRows.some(
               (r) =>
                 String(r.Role || '').trim().toLowerCase() === effectiveRoleForLoad.toLowerCase() &&
                 String(r.Module_Name || '').trim().toLowerCase() === moduleLabel.toLowerCase()
             );
-          if (key === 'receipts') {
-            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Payments', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View')
-              || (!hasExplicitModuleRow('Payments') && permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View'));
-          }
-          if (key === 'billWiseDetails') {
-            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Bill Wise Details', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Payments', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Fund Inflow', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Maintenance & Invoices', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
-          }
           if (key === 'ownershipHistory' && !hasExplicitModuleRow('Ownership History')) {
-            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Properties & Residents', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Maintenance & Invoices', 'Can_View')
-              || permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
+            return permissionGranted(permRows, effectiveRoleForLoad, 'Properties & Residents', 'Can_View');
           }
-          if (key === 'invoices' && !hasExplicitModuleRow('Maintenance & Invoices')) {
-            return permissionGranted(rolePermissions, effectiveRoleForLoad, 'Reports', 'Can_View');
-          }
-          return permissionGranted(rolePermissions, effectiveRoleForLoad, modName, 'Can_View');
-        });
+          return false;
+        };
+        const requested = Array.from(new Set([...(modulePlan[activeTab] || []), 'rolePermissions'])).filter(key => (key !== 'bankAccounts' || ['Admin','Accountant'].includes(activeRole)) && (key !== 'expenses' || activeRole !== 'Resident'));
+        const permittedRequested = requested.filter(key => canLoadModule(key));
 
         const fetchModulePage = async (module: string, page: number) => {
           const response = await fetch(baseUrl, {
@@ -722,24 +730,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         });
 
-        const loadPermissionsFast = () => {
+        const loadPermissionsFast = (): Promise<RolePermissionRecord[]> => {
           const permCacheKey = `${scopeKey}:rolePermissions`;
           const permCached = moduleDataCache.current.get(permCacheKey);
           if (permCached && Date.now() - permCached.at < readCacheTtlMs) {
             applyModuleRows('rolePermissions', permCached.data);
-            return Promise.resolve();
+            return Promise.resolve(permCached.data as RolePermissionRecord[]);
           }
           return loadOne('rolePermissions')
-            .then(rows => applyModuleRows('rolePermissions', rows))
+            .then(rows => {
+              applyModuleRows('rolePermissions', rows);
+              return rows as RolePermissionRecord[];
+            })
             .catch(err => {
               console.error('ABAS SATHI module load error', { module: 'Role Permissions', role: activeRole, error: String(err || 'Unknown error') });
               if (err instanceof BackendRequestError && err.code === 'AUTH_ERROR') {
                 clearAllUserDataCaches();
                 localStorage.removeItem('abasSathiSession');
                 window.location.reload();
-                return;
+                return rolePermissions;
               }
               if (!cancelled) setPermissionsReady(true);
+              return rolePermissions;
             });
         };
 
@@ -757,6 +769,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           const permsPromise = loadPermissionsFast();
+          let dashLoadedOk = allDashWarm;
 
           const dashDataPromise = allDashWarm
             ? Promise.resolve()
@@ -772,8 +785,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     applyModuleRows(key, normalized);
                   });
                   writeScopedSnapshotModules(scopeKey, snapshotUpdates, now);
+                  dashLoadedOk = true;
                 })
                 .catch((err) => {
+                  dashLoadedOk = false;
                   console.error('ABAS SATHI module load error', { module: 'Role Dashboard Data', role: activeRole, error: String(err || 'Unknown error') });
                   if (err instanceof BackendRequestError && err.code === 'AUTH_ERROR') {
                     clearAllUserDataCaches();
@@ -823,15 +838,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   })
               );
 
-          await Promise.allSettled([permsPromise, dashDataPromise]);
+          const [permsSettled] = await Promise.allSettled([permsPromise, dashDataPromise]);
 
-          // Silently pre-warm commonly visited secondary master modules (plus galleryPhotos if omitted by older backend cache).
+          // Silently pre-warm commonly visited secondary master modules and any permitted calculation modules missing from backend cache.
           if (!cancelled) {
+            const effectivePerms =
+              permsSettled.status === 'fulfilled' && Array.isArray(permsSettled.value)
+                ? permsSettled.value
+                : rolePermissions;
             const prefetchCandidates = activeRole === 'Resident'
               ? ['propertyUtilityDetails', 'galleryPhotos']
               : ['owners', 'ownershipHistory', 'rates', 'expenseCategories', 'financialYears', 'galleryPhotos'];
-            const missingPrefetch = prefetchCandidates.filter((mod) => {
-              if (!permittedRequested.includes(mod) && mod === 'galleryPhotos') return false;
+            const calcModulesToVerify =
+              dashLoadedOk && activeRole !== 'Resident'
+                ? Array.from(reportCalculationKeys).filter((mod) => canLoadModule(mod, effectivePerms))
+                : [];
+            const prefetchPool = Array.from(new Set([...prefetchCandidates, ...calcModulesToVerify]));
+            const missingPrefetch = prefetchPool.filter((mod) => {
+              if (mod === 'expenseCategories') {
+                if (effectivePerms.length > 0 && !permissionGranted(effectivePerms, effectiveRoleForLoad, 'Expenses', 'Can_View')) {
+                  return false;
+                }
+              } else if (!canLoadModule(mod, effectivePerms)) {
+                return false;
+              }
               const c = moduleDataCache.current.get(`${scopeKey}:${mod}`);
               return !c || Date.now() - c.at >= readCacheTtlMs;
             });
@@ -1130,24 +1160,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!receipt) throw new Error('Payment record not found. Refresh the payment register.');
     let allocations = customAllocations || [];
     if (!customAllocations) {
-      let remaining = Number(receipt.Received_Amount || 0);
-      allocations = invoices.filter(i => i.PropertyID === receipt.PropertyID && i.Ownership_ID === receipt.Ownership_ID && Number(i.Outstanding_Amount || 0) > 0)
+      let remaining = Math.max(0, toInvoiceAmount(receipt.Received_Amount));
+      const recProp = String(receipt.PropertyID || '').trim().toUpperCase();
+      const recOwn = String(receipt.Ownership_ID || '').trim().toUpperCase();
+      allocations = computeInvoiceOutstandingBills(invoices, billAllocations, receipts)
+        .filter(i => {
+          const propMatch = String(i.PropertyID || '').trim().toUpperCase() === recProp;
+          const ownMatch = !recOwn || !i.Ownership_ID || String(i.Ownership_ID || '').trim().toUpperCase() === recOwn;
+          return propMatch && ownMatch && i.Calculated_Outstanding > 0;
+        })
         .sort((a,b) => String(a.Due_Date).localeCompare(String(b.Due_Date)))
-        .map(i => { const amount = Math.min(remaining, Number(i.Outstanding_Amount || 0)); remaining -= amount; return { invoiceId: i.InvoiceID, amount }; })
+        .map(i => { const amount = Math.min(remaining, i.Calculated_Outstanding); remaining = roundMoney(remaining - amount); return { invoiceId: i.InvoiceID, amount }; })
         .filter(x => x.amount > 0);
     }
     const result: any = await apiCall('confirmPayment', { transactionId: receipt.Transaction_ID, allocations });
-    const allocated = Number(result.data?.allocated || 0), unallocated = Number(result.data?.unallocated || 0);
+    const allocated = toInvoiceAmount(result.data?.allocated || 0), unallocated = toInvoiceAmount(result.data?.unallocated || 0);
     const allocMap = new Map(allocations.map(x => [x.invoiceId, x.amount]));
     const confirmedReceipt: FundInflowRegister = { ...receipt, Receipt_Status: 'Confirmed', Unallocated_Amount: unallocated, Receipt_Number: result.data?.receiptNo || '', Bank_Account: result.data?.bankAccount || receipt.Bank_Account };
     setReceipts(prev => prev.map(r => r.Transaction_ID === receipt.Transaction_ID ? confirmedReceipt : r));
     setInvoices(prev => prev.map(inv => {
-      const amount = Number(allocMap.get(inv.InvoiceID) || 0); if (!amount) return inv;
-      const outstanding = Math.max(0, Number(inv.Outstanding_Amount || 0) - amount);
-      return { ...inv, Paid_Amount: Number(inv.Paid_Amount || 0) + amount, Outstanding_Amount: outstanding, Invoice_Status: outstanding <= 0 ? 'Paid' : 'Partially Paid' };
+      const amount = toInvoiceAmount(allocMap.get(inv.InvoiceID) || 0); if (!amount) return inv;
+      const net = Math.max(0, toInvoiceAmount(inv.Net_Charge_Amount));
+      const nextPaid = Math.min(net, roundMoney(Math.max(0, toInvoiceAmount(inv.Paid_Amount)) + amount));
+      const outstanding = Math.max(0, roundMoney(net - nextPaid));
+      return { ...inv, Paid_Amount: nextPaid, Outstanding_Amount: outstanding, Invoice_Status: outstanding <= 0 ? 'Paid' : 'Partially Paid' };
     }));
     setBillAllocations(prev => [...(result.data?.allocationRows || []), ...prev]);
-    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === receipt.Bank_Account ? { ...b, Current_Balance: Number(b.Current_Balance || 0) + Number(receipt.Received_Amount || 0) } : b));
+    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === receipt.Bank_Account ? { ...b, Current_Balance: roundMoney(toInvoiceAmount(b.Current_Balance) + toInvoiceAmount(receipt.Received_Amount)) } : b));
     void allocated;
     return confirmedReceipt;
   };
@@ -1179,11 +1218,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const markExpensePaid = async (expenseId: string): Promise<void> => {
     const expense = expenses.find(e => e.Expense_ID === expenseId);
     if (!expense) throw new Error('Expense record not found.');
-    if (expense.Expense_Status !== 'Approved') throw new Error('Expense must be approved before payment.');
+    if (String(expense.Expense_Status || '').trim().toLowerCase() !== 'approved') throw new Error('Expense must be approved before payment.');
     await apiCall('markExpensePaid', { expenseId });
     const now = new Date().toISOString();
     setExpenses(prev => prev.map(e => e.Expense_ID === expenseId ? { ...e, Expense_Status: 'Paid', Payment_Date: now.slice(0,10) } : e));
-    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === expense.Bank_Account ? { ...b, Current_Balance: Number(b.Current_Balance || 0) - Number(expense.Payment_Amount || 0) } : b));
+    setBankAccounts(prev => prev.map(b => b.BankAccount_ID === expense.Bank_Account ? { ...b, Current_Balance: roundMoney(toInvoiceAmount(b.Current_Balance) - toInvoiceAmount(expense.Payment_Amount)) } : b));
   };
 
   // Activity Requests — server-persisted.

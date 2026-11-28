@@ -26,7 +26,11 @@ import {
   toReportAmount,
   toReportDateKey,
 } from '../../utils/reportHelpers';
-import { computeMaintenanceCollectionRate } from '../../utils/dashboardHelpers';
+import {
+  computeFinancialYearSummary,
+  computeMonthlyReceiptPaymentSummary,
+} from '../../utils/dashboardHelpers';
+import { roundMoney } from '../../utils/invoiceOutstanding';
 import {
   BarChart3,
   Download,
@@ -204,92 +208,73 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   const monthEndKey = `${selectedMonth}-${String(selLastDay).padStart(2, '0')}`;
   const monthPeriodLabel = `${formatDateDisplay(monthStartKey)} to ${formatDateDisplay(monthEndKey)}`;
 
-  const clientMonthReceipts = useMemo(
-    () =>
-      receipts.filter(
-        (r) =>
-          String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() === 'confirmed' &&
-          toReportDateKey(r.Date_Of_Received).startsWith(selectedMonth)
-      ),
-    [receipts, selectedMonth]
-  );
-
-  const clientMonthExpenses = useMemo(
-    () =>
-      expenses.filter(
-        (e) =>
-          String(e.Expense_Status || '').trim().toLowerCase() === 'paid' &&
-          toReportDateKey(e.Payment_Date).startsWith(selectedMonth)
-      ),
-    [expenses, selectedMonth]
-  );
-
-  // Use server receipt/expense rows as backup if client state hasn't hydrated yet
-  const effectiveMonthReceipts = useMemo(() => {
-    if (clientMonthReceipts.length > 0 || receipts.length > 0) return clientMonthReceipts;
-    return Array.isArray(serverReport?.data?.receipts) ? serverReport.data.receipts : [];
-  }, [clientMonthReceipts, receipts.length, serverReport]);
-
-  const effectiveMonthExpenses = useMemo(() => {
-    if (clientMonthExpenses.length > 0 || expenses.length > 0) return clientMonthExpenses;
-    return Array.isArray(serverReport?.data?.expenses) ? serverReport.data.expenses : [];
-  }, [clientMonthExpenses, expenses.length, serverReport]);
-
-  const totalMonthInflow = useMemo(
-    () =>
-      effectiveMonthReceipts.length > 0
-        ? effectiveMonthReceipts.reduce((sum: number, r: any) => sum + toReportAmount(r.Received_Amount), 0)
-        : toReportAmount(serverReport?.data?.totalReceipts),
-    [effectiveMonthReceipts, serverReport]
-  );
-
-  const totalMonthOutflow = useMemo(
-    () =>
-      effectiveMonthExpenses.length > 0
-        ? effectiveMonthExpenses.reduce((sum: number, e: any) => sum + toReportAmount(e.Payment_Amount), 0)
-        : toReportAmount(serverReport?.data?.totalPayments),
-    [effectiveMonthExpenses, serverReport]
-  );
-
   const fyOpeningFallback = useMemo(() => {
     if (typeof fundBalanceSummary?.openingFundBalance === 'number') {
       return toReportAmount(fundBalanceSummary.openingFundBalance);
     }
-    return bankAccounts.reduce((sum, b) => sum + toReportAmount(b.Opening_Balance), 0);
+    return roundMoney(bankAccounts.reduce((sum, b) => sum + toReportAmount(b.Opening_Balance), 0));
   }, [fundBalanceSummary, bankAccounts]);
+
+  const monthlyClientSummary = useMemo(
+    () =>
+      computeMonthlyReceiptPaymentSummary({
+        selectedMonth,
+        fyStartDate: activeFYRange.startDate,
+        openingFYBalance: fyOpeningFallback,
+        receipts,
+        expenses,
+      }),
+    [selectedMonth, activeFYRange.startDate, fyOpeningFallback, receipts, expenses]
+  );
+
+  // Use server receipt/expense rows as backup if client state hasn't hydrated yet
+  const effectiveMonthReceipts = useMemo(() => {
+    if (monthlyClientSummary.monthReceipts.length > 0 || receipts.length > 0) {
+      return monthlyClientSummary.monthReceipts;
+    }
+    return Array.isArray(serverReport?.data?.receipts) ? serverReport.data.receipts : [];
+  }, [monthlyClientSummary.monthReceipts, receipts.length, serverReport]);
+
+  const effectiveMonthExpenses = useMemo(() => {
+    if (monthlyClientSummary.monthExpenses.length > 0 || expenses.length > 0) {
+      return monthlyClientSummary.monthExpenses;
+    }
+    return Array.isArray(serverReport?.data?.expenses) ? serverReport.data.expenses : [];
+  }, [monthlyClientSummary.monthExpenses, expenses.length, serverReport]);
+
+  const totalMonthInflow = useMemo(
+    () =>
+      receipts.length > 0
+        ? monthlyClientSummary.totalMonthInflow
+        : effectiveMonthReceipts.length > 0
+          ? roundMoney(effectiveMonthReceipts.reduce((sum: number, r: any) => sum + Math.max(0, toReportAmount(r.Received_Amount)), 0))
+          : roundMoney(toReportAmount(serverReport?.data?.totalReceipts)),
+    [receipts.length, monthlyClientSummary.totalMonthInflow, effectiveMonthReceipts, serverReport]
+  );
+
+  const totalMonthOutflow = useMemo(
+    () =>
+      expenses.length > 0
+        ? monthlyClientSummary.totalMonthOutflow
+        : effectiveMonthExpenses.length > 0
+          ? roundMoney(effectiveMonthExpenses.reduce((sum: number, e: any) => sum + Math.max(0, toReportAmount(e.Payment_Amount)), 0))
+          : roundMoney(toReportAmount(serverReport?.data?.totalPayments)),
+    [expenses.length, monthlyClientSummary.totalMonthOutflow, effectiveMonthExpenses, serverReport]
+  );
 
   const computedOpeningAtMonthStart = useMemo(() => {
     if (activeReport === 'monthly' && typeof serverReport?.data?.openingBalance === 'number') {
-      return toReportAmount(serverReport.data.openingBalance);
+      return roundMoney(toReportAmount(serverReport.data.openingBalance));
     }
-    const fyStart = activeFYRange.startDate;
-    let priorIn = 0;
-    let priorOut = 0;
-    if (fyStart && monthStartKey > fyStart) {
-      priorIn = receipts
-        .filter((r) => String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() === 'confirmed')
-        .filter((r) => {
-          const d = toReportDateKey(r.Date_Of_Received);
-          return d >= fyStart && d < monthStartKey;
-        })
-        .reduce((s, r) => s + toReportAmount(r.Received_Amount), 0);
-      priorOut = expenses
-        .filter((e) => String(e.Expense_Status || '').trim().toLowerCase() === 'paid')
-        .filter((e) => {
-          const d = toReportDateKey(e.Payment_Date);
-          return d >= fyStart && d < monthStartKey;
-        })
-        .reduce((s, e) => s + toReportAmount(e.Payment_Amount), 0);
-    }
-    return Math.round((fyOpeningFallback + priorIn - priorOut) * 100) / 100;
-  }, [activeReport, serverReport, activeFYRange.startDate, monthStartKey, receipts, expenses, fyOpeningFallback]);
+    return monthlyClientSummary.openingAtMonthStart;
+  }, [activeReport, serverReport, monthlyClientSummary.openingAtMonthStart]);
 
   const openingBankSource =
     (activeReport === 'monthly' && serverReport?.data?.openingSource) ||
     fundBalanceSummary?.sourceStatus ||
     'Fund Balance Register';
 
-  const closingBank = Math.round((computedOpeningAtMonthStart + totalMonthInflow - totalMonthOutflow) * 100) / 100;
+  const closingBank = roundMoney(computedOpeningAtMonthStart + totalMonthInflow - totalMonthOutflow);
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>([selectedMonth]);
@@ -395,7 +380,10 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
 
   const useClientOwnershipReport =
     (invoices.length > 0 || billAllocations.length > 0) &&
-    (hasPermission('Bill Wise Details', 'Can_View') || serverReport?.reportType !== 'ownershipOutstanding');
+    (hasPermission('Bill Wise Details', 'Can_View') ||
+      hasPermission('Reports', 'Can_View') ||
+      hasPermission('Maintenance & Invoices', 'Can_View') ||
+      serverReport?.reportType !== 'ownershipOutstanding');
 
   const ownershipDuesRows = useMemo(() => {
     const propById = new Map(properties.map((p) => [String(p.PropertyID || '').trim(), p]));
@@ -489,60 +477,54 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
     return clientExpenseCategories;
   }, [activeReport, serverReport, clientExpenseCategories]);
 
-  // Financial Year summary (Server + Client fallback)
-  const fyClientSummary = useMemo(() => {
-    const from = activeFYRange.startDate;
-    const to = activeFYRange.endDate;
-    const fyInv = computeConfirmedInvoiceMetrics(invoices, receipts, billAllocations).filter(({ inv }) => {
-      const d = toReportDateKey(inv.Billing_Date);
-      return d && d >= from && d <= to;
-    });
-    const fyRec = receipts.filter((r) => {
-      if (String(r.Receipt_Status || (r as any).Status || '').trim().toLowerCase() !== 'confirmed') return false;
-      const d = toReportDateKey(r.Date_Of_Received);
-      return d && d >= from && d <= to;
-    });
-    const fyExp = expenses.filter((e) => {
-      if (String(e.Expense_Status || '').trim().toLowerCase() !== 'paid') return false;
-      const d = toReportDateKey(e.Payment_Date);
-      return d && d >= from && d <= to;
-    });
-    const billed = fyInv.reduce((s, x) => s + x.net, 0);
-    const receiptsTotal = fyRec.reduce((s, r) => s + toReportAmount(r.Received_Amount), 0);
-    const paidTotal = fyExp.reduce((s, e) => s + toReportAmount(e.Payment_Amount), 0);
-    const outstanding = fyInv.reduce((s, x) => s + x.due, 0);
-    const maintRateInfo = computeMaintenanceCollectionRate({
+  // Financial Year summary (shared Admin calculation + server FY opening balance when viewing historical FYs)
+  const fyOpeningEffective = useMemo(() => {
+    if (activeReport === 'fy' && typeof serverReport?.data?.openingFundBalance === 'number') {
+      return toReportAmount(serverReport.data.openingFundBalance);
+    }
+    return fyOpeningFallback;
+  }, [activeReport, serverReport, fyOpeningFallback]);
+
+  const fyOpeningSourceEffective =
+    (activeReport === 'fy' && serverReport?.data?.openingSource) ||
+    fundBalanceSummary?.sourceStatus ||
+    'Fund Balance Register';
+
+  const fyClientSummary = useMemo(
+    () =>
+      computeFinancialYearSummary({
+        fyName: activeFYRange.fyName,
+        startDate: activeFYRange.startDate,
+        endDate: activeFYRange.endDate,
+        openingFundBalance: fyOpeningEffective,
+        openingSource: fyOpeningSourceEffective,
+        invoices,
+        receipts,
+        billAllocations,
+        expenses,
+        rates,
+      }),
+    [
+      activeFYRange.fyName,
+      activeFYRange.startDate,
+      activeFYRange.endDate,
+      fyOpeningEffective,
+      fyOpeningSourceEffective,
       invoices,
       receipts,
       billAllocations,
+      expenses,
       rates,
-      periodStart: from,
-      periodEnd: to,
-    });
-    return {
-      fyName: activeFYRange.fyName,
-      openingFundBalance: fyOpeningFallback,
-      openingSource: fundBalanceSummary?.sourceStatus || 'Fund Balance Register',
-      closingFundBalance: Math.round((fyOpeningFallback + receiptsTotal - paidTotal) * 100) / 100,
-      invoiceCount: fyInv.length,
-      receiptCount: fyRec.length,
-      expenseCount: fyExp.length,
-      billed,
-      receipts: receiptsTotal,
-      paidExpenses: paidTotal,
-      outstanding,
-      maintenanceBilled: maintRateInfo.maintenanceBilled,
-      maintenanceCollected: maintRateInfo.maintenanceCollected,
-      maintenanceCollectionRate: maintRateInfo.maintenanceCollectionRate,
-    };
-  }, [activeFYRange, invoices, receipts, billAllocations, expenses, rates, fyOpeningFallback, fundBalanceSummary]);
+    ]
+  );
 
   const fySummary = useMemo(() => {
-    if (activeReport === 'fy' && serverReport?.data) {
+    const hasClientLedgerData = invoices.length > 0 || receipts.length > 0 || expenses.length > 0;
+    if (!hasClientLedgerData && activeReport === 'fy' && serverReport?.data) {
       return { ...fyClientSummary, ...serverReport.data };
     }
     return fyClientSummary;
-  }, [activeReport, serverReport, fyClientSummary]);
+  }, [invoices.length, receipts.length, expenses.length, activeReport, serverReport, fyClientSummary]);
 
   // Account Heads for Balance Sheet Reference (Sheet U)
   const effectiveAccountHeads = useMemo(() => {

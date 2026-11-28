@@ -6,12 +6,42 @@
 import type { BillWiseDetails, FundInflowRegister, InvoiceRegister } from '../types/database';
 import { toReportDateKey } from './reportHelpers';
 
-const EXCLUDED_INVOICE_STATUSES = new Set([
+export const EXCLUDED_INVOICE_STATUSES = new Set([
   'cancelled',
+  'canceled',
   'draft',
   'pending_approval',
   'pending approval',
 ]);
+
+export const EXCLUDED_ALLOCATION_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'rejected',
+  'void',
+  'reversed',
+]);
+
+export function roundMoney(value: number): number {
+  return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
+}
+
+export function isExcludedInvoiceStatus(status: unknown): boolean {
+  return EXCLUDED_INVOICE_STATUSES.has(String(status ?? '').trim().toLowerCase());
+}
+
+export function isExcludedAllocationStatus(row: { Allocation_Status?: unknown; Status?: unknown } | null | undefined): boolean {
+  const status = String(row?.Allocation_Status || row?.Status || '').trim().toLowerCase();
+  return Boolean(status && EXCLUDED_ALLOCATION_STATUSES.has(status));
+}
+
+export function isConfirmedReceipt(receipt: { Receipt_Status?: unknown; Status?: unknown } | null | undefined): boolean {
+  return String(receipt?.Receipt_Status || receipt?.Status || '').trim().toLowerCase() === 'confirmed';
+}
+
+export function isPaidExpense(expense: { Expense_Status?: unknown; Status?: unknown } | null | undefined): boolean {
+  return String(expense?.Expense_Status || expense?.Status || '').trim().toLowerCase() === 'paid';
+}
 
 export interface ComputedInvoiceOutstanding extends InvoiceRegister {
   Allocated_Amount_Total: number;
@@ -55,18 +85,9 @@ export function computeInvoiceOutstandingBills(
     if (id && num) invoiceIdByNumberUpper.set(num.toUpperCase(), id);
   });
 
-const EXCLUDED_ALLOCATION_STATUSES = new Set([
-  'cancelled',
-  'canceled',
-  'rejected',
-  'void',
-  'reversed',
-]);
-
   const allocatedByInvoiceId = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
-    const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
-    if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
+    if (isExcludedAllocationStatus(row as any)) return;
     const txnId = String(row.Transaction_ID || '').trim().toUpperCase();
     if (txnId && receiptStatusByTxnId.has(txnId)) {
       const recStatus = receiptStatusByTxnId.get(txnId) || '';
@@ -85,7 +106,7 @@ const EXCLUDED_ALLOCATION_STATUSES = new Set([
 
     allocatedByInvoiceId.set(
       invoiceId,
-      Math.round(((allocatedByInvoiceId.get(invoiceId) || 0) + allocated) * 100) / 100
+      roundMoney((allocatedByInvoiceId.get(invoiceId) || 0) + allocated)
     );
   });
 
@@ -93,12 +114,11 @@ const EXCLUDED_ALLOCATION_STATUSES = new Set([
 
   return (invoices || []).map((inv) => {
     const rawStatus = String(inv.Invoice_Status || '').trim();
-    const statusLower = rawStatus.toLowerCase();
     const invoiceId = String(inv.InvoiceID || '').trim();
-    const netCharge = Math.max(0, Math.round(toInvoiceAmount(inv.Net_Charge_Amount) * 100) / 100);
-    const totalAllocated = Math.max(0, Math.round((allocatedByInvoiceId.get(invoiceId) || 0) * 100) / 100);
+    const netCharge = Math.max(0, roundMoney(toInvoiceAmount(inv.Net_Charge_Amount)));
+    const totalAllocated = Math.max(0, roundMoney(allocatedByInvoiceId.get(invoiceId) || 0));
 
-    if (EXCLUDED_INVOICE_STATUSES.has(statusLower)) {
+    if (isExcludedInvoiceStatus(rawStatus)) {
       return {
         ...inv,
         Net_Charge_Amount: netCharge,
@@ -109,7 +129,7 @@ const EXCLUDED_ALLOCATION_STATUSES = new Set([
       };
     }
 
-    const outstanding = Math.max(0, Math.round((netCharge - totalAllocated) * 100) / 100);
+    const outstanding = Math.max(0, roundMoney(netCharge - totalAllocated));
     const paid = Math.min(netCharge, totalAllocated);
     const dueDate = toReportDateKey(inv.Due_Date);
     const derivedStatus: InvoiceRegister['Invoice_Status'] =
@@ -124,7 +144,7 @@ const EXCLUDED_ALLOCATION_STATUSES = new Set([
     return {
       ...inv,
       Net_Charge_Amount: netCharge,
-      Paid_Amount: totalAllocated,
+      Paid_Amount: paid,
       Outstanding_Amount: outstanding,
       Allocated_Amount_Total: totalAllocated,
       Calculated_Outstanding: outstanding,

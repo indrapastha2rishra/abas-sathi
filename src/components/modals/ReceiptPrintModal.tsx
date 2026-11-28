@@ -6,6 +6,11 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import {
+  isConfirmedReceipt,
+  isExcludedAllocationStatus,
+  toInvoiceAmount,
+} from '../../utils/invoiceOutstanding';
 import { Printer, X, CheckCircle2 } from 'lucide-react';
 
 export const ReceiptPrintModal: React.FC = () => {
@@ -14,9 +19,14 @@ export const ReceiptPrintModal: React.FC = () => {
   const societyName = societySettings.societyName || '[Society Name]';
   const societyAddress = societySettings.societyAddress || '[Society Address]';
 
-  if (!previewReceipt || String(previewReceipt.Receipt_Status || '').trim().toLowerCase() !== 'confirmed' || !previewReceipt.Receipt_Number) return null;
+  if (!previewReceipt || !isConfirmedReceipt(previewReceipt as any) || !previewReceipt.Receipt_Number) return null;
 
-  const allocations = billAllocations.filter((a) => String(a.Transaction_ID || '').trim() === String(previewReceipt.Transaction_ID || '').trim() && (activeRole !== 'Resident' || String(a.PropertyID || '').trim().toUpperCase() === String(residentProperty?.PropertyID || '').trim().toUpperCase()));
+  const allocations = billAllocations.filter(
+    (a) =>
+      !isExcludedAllocationStatus(a as any) &&
+      String(a.Transaction_ID || '').trim().toUpperCase() === String(previewReceipt.Transaction_ID || '').trim().toUpperCase() &&
+      (activeRole !== 'Resident' || String(a.PropertyID || '').trim().toUpperCase() === String(residentProperty?.PropertyID || '').trim().toUpperCase())
+  );
 
   const handlePrint = () => {
     window.print();
@@ -108,10 +118,10 @@ export const ReceiptPrintModal: React.FC = () => {
                     {allocations.map((a) => (
                       <tr key={a.Allocation_ID}>
                         <td className="px-3 py-2 font-medium">{a.Invoice_Number}</td>
-                        <td className="px-3 py-2 text-right">₹{Number(a.Invoice_Amount || 0).toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right">₹{Number(a.Outstanding_Before || 0).toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right font-bold text-emerald-700">₹{Number(a.Allocated_Amount || 0).toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right">₹{Number(a.Outstanding_After || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{toInvoiceAmount(a.Invoice_Amount).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{toInvoiceAmount(a.Outstanding_Before).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right font-bold text-emerald-700">₹{toInvoiceAmount(a.Allocated_Amount).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right">₹{toInvoiceAmount(a.Outstanding_After).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -123,10 +133,10 @@ export const ReceiptPrintModal: React.FC = () => {
               </p>
             )}
 
-            {Number(previewReceipt.Unallocated_Amount || 0) > 0 && (
+            {toInvoiceAmount(previewReceipt.Unallocated_Amount) > 0 && (
               <div className="mt-3 flex justify-between items-center text-xs p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
                 <span className="font-medium">Unallocated Advance Balance (to be adjusted against future bills):</span>
-                <span className="font-bold text-sm">₹{Number(previewReceipt.Unallocated_Amount || 0).toFixed(2)}</span>
+                <span className="font-bold text-sm">₹{toInvoiceAmount(previewReceipt.Unallocated_Amount).toFixed(2)}</span>
               </div>
             )}
           </div>

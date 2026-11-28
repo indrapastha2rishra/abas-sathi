@@ -6,6 +6,7 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatDateDisplay } from '../../utils/dateFormat';
+import { toInvoiceAmount } from '../../utils/invoiceOutstanding';
 import { Printer, X, FileText } from 'lucide-react';
 
 export const ExpenseVoucherModal: React.FC = () => {
@@ -106,7 +107,7 @@ export const ExpenseVoucherModal: React.FC = () => {
 
           <div className="flex justify-between items-center p-4 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4]">
             <span className="text-sm font-semibold">Total Amount Disbursed:</span>
-            <span className="text-xl font-bold text-[#29352D]">₹{previewVoucher.Payment_Amount.toLocaleString('en-IN')}.00</span>
+            <span className="text-xl font-bold text-[#29352D]">₹{toInvoiceAmount(previewVoucher.Payment_Amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           </div>
 
           <div className="mt-12 grid grid-cols-3 gap-6 pt-6 border-t border-dashed border-[#E8E1D4] text-xs text-gray-500 text-center">

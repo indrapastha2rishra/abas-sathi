@@ -10,6 +10,14 @@ import {
   FundInflowRegister,
   InvoiceRegister,
 } from '../types/database';
+import {
+  isConfirmedReceipt,
+  isExcludedInvoiceStatus,
+  isPaidExpense,
+  roundMoney,
+  toInvoiceAmount,
+} from './invoiceOutstanding';
+import { toReportDateKey } from './reportHelpers';
 
 /**
  * Calculates the base Charge_Amount based on calculation method.
@@ -221,6 +229,26 @@ export interface FundSummaryData {
   outstandingCollection: number;
 }
 
+export function summarizePaidExpenses(
+  expenses: Array<{ Expense_Status?: unknown; Status?: unknown; Payment_Amount?: unknown; Payment_Date?: unknown }>,
+  startDate?: string,
+  endDate?: string
+): { paidExpenses: typeof expenses; count: number; total: number } {
+  const start = startDate ? toReportDateKey(startDate) : '';
+  const end = endDate ? toReportDateKey(endDate) : '';
+  const paidExpenses = (expenses || []).filter((e) => {
+    if (!isPaidExpense(e)) return false;
+    if (!start && !end) return true;
+    const paymentDate = toReportDateKey(e.Payment_Date);
+    if (!paymentDate) return false;
+    if (start && paymentDate < start) return false;
+    if (end && paymentDate > end) return false;
+    return true;
+  });
+  const total = roundMoney(paidExpenses.reduce((sum, e) => sum + Math.max(0, toInvoiceAmount(e.Payment_Amount)), 0));
+  return { paidExpenses, count: paidExpenses.length, total };
+}
+
 /**
  * Calculates Financial Year-wise Fund Summary:
  * 5. Opening Fund Balance (At beginning of FY)
@@ -232,47 +260,52 @@ export interface FundSummaryData {
 export function calculateFundSummary(params: {
   openingBalance: number;
   receipts: FundInflowRegister[];
-  expenses: { Expense_Status: string; Payment_Amount: number; Payment_Date: string }[];
-  invoices: { Outstanding_Amount: number; Billing_Date: string }[];
+  expenses: { Expense_Status: string; Status?: string; Payment_Amount: number | string; Payment_Date: string }[];
+  invoices: { Outstanding_Amount: number | string; Billing_Date: string; Invoice_Status?: string }[];
   startDate?: string;
   endDate?: string;
 }): FundSummaryData {
   const { openingBalance, receipts, expenses, invoices, startDate, endDate } = params;
+  const start = startDate ? toReportDateKey(startDate) : '';
+  const end = endDate ? toReportDateKey(endDate) : '';
+  const normalizedOpening = roundMoney(toInvoiceAmount(openingBalance));
 
   // Filter confirmed receipts within FY if dates provided
-  const fyReceipts = receipts.filter((r) => {
-    if (r.Receipt_Status !== 'Confirmed') return false;
-    const receivedDate = String(r.Date_Of_Received || '').slice(0, 10);
-    if (startDate && receivedDate < startDate) return false;
-    if (endDate && receivedDate > endDate) return false;
+  const fyReceipts = (receipts || []).filter((r) => {
+    if (!isConfirmedReceipt(r as any)) return false;
+    if (!start && !end) return true;
+    const receivedDate = toReportDateKey(r.Date_Of_Received);
+    if (!receivedDate) return false;
+    if (start && receivedDate < start) return false;
+    if (end && receivedDate > end) return false;
     return true;
   });
-  const totalFundReceived = fyReceipts.reduce((sum, r) => sum + (r.Received_Amount || 0), 0);
+  const totalFundReceived = roundMoney(
+    fyReceipts.reduce((sum, r) => sum + Math.max(0, toInvoiceAmount(r.Received_Amount)), 0)
+  );
 
   // Filter paid expenses within FY
-  const fyExpenses = expenses.filter((e) => {
-    if (e.Expense_Status !== 'Paid') return false;
-    const paymentDate = String(e.Payment_Date || '').slice(0, 10);
-    if (startDate && paymentDate < startDate) return false;
-    if (endDate && paymentDate > endDate) return false;
-    return true;
-  });
-  const totalFundUtilized = fyExpenses.reduce((sum, e) => sum + (e.Payment_Amount || 0), 0);
+  const { total: totalFundUtilized } = summarizePaidExpenses(expenses, start, end);
 
   // Available Fund = Opening + Received - Paid
-  const availableFund = Math.round((openingBalance + totalFundReceived - totalFundUtilized) * 100) / 100;
+  const availableFund = roundMoney(normalizedOpening + totalFundReceived - totalFundUtilized);
 
   // Outstanding Collection within FY
-  const fyInvoices = invoices.filter((i) => {
-    const billingDate = String(i.Billing_Date || '').slice(0, 10);
-    if (startDate && billingDate < startDate) return false;
-    if (endDate && billingDate > endDate) return false;
+  const fyInvoices = (invoices || []).filter((i) => {
+    if (i.Invoice_Status && isExcludedInvoiceStatus(i.Invoice_Status)) return false;
+    if (!start && !end) return true;
+    const billingDate = toReportDateKey(i.Billing_Date);
+    if (!billingDate) return false;
+    if (start && billingDate < start) return false;
+    if (end && billingDate > end) return false;
     return true;
   });
-  const outstandingCollection = fyInvoices.reduce((sum, i) => sum + (i.Outstanding_Amount || 0), 0);
+  const outstandingCollection = roundMoney(
+    fyInvoices.reduce((sum, i) => sum + Math.max(0, toInvoiceAmount(i.Outstanding_Amount)), 0)
+  );
 
   return {
-    openingFundBalance: openingBalance,
+    openingFundBalance: normalizedOpening,
     totalFundReceived,
     totalFundUtilized,
     availableFund,
