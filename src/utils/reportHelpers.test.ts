@@ -426,5 +426,80 @@ test('computeOwnershipOutstandingClient matches Owner_Name via Owner Master when
   assert.equal(res.data[0].Outstanding, 2000);
 });
 
+test('computeOwnershipOutstandingClient calculates Pending_Invoice_Count and Due_Months from earliest unpaid bill', () => {
+  const res = computeOwnershipOutstandingClient({
+    asOfDate: '2026-11-28',
+    invoices: [
+      // Fully paid invoice from May 2026 -> should NOT count in Pending_Invoice_Count or Due_Months
+      {
+        InvoiceID: 'INV-MAY',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-1',
+        OwnerID: 'O1',
+        Billing_Date: '2026-05-01',
+        Net_Charge_Amount: 3000,
+        Invoice_Status: 'Paid',
+      } as any,
+      // Partially paid invoice from August 2026 -> 3 months pending as of 2026-11-28
+      {
+        InvoiceID: 'INV-AUG',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-1',
+        OwnerID: 'O1',
+        Billing_Date: '2026-08-01',
+        Net_Charge_Amount: 3000,
+        Invoice_Status: 'Partially Paid',
+      } as any,
+      // Unpaid invoice from November 2026
+      {
+        InvoiceID: 'INV-NOV',
+        PropertyID: 'P1',
+        Ownership_ID: 'OSH-1',
+        OwnerID: 'O1',
+        Billing_Date: '2026-11-05',
+        Net_Charge_Amount: 3000,
+        Invoice_Status: 'Unpaid',
+      } as any,
+      // Another ownership with only a current-month unpaid invoice (< 1 month -> 0 completed months)
+      {
+        InvoiceID: 'INV-CUR',
+        PropertyID: 'P2',
+        Ownership_ID: 'OSH-2',
+        OwnerID: 'O2',
+        Billing_Date: '2026-11-10',
+        Net_Charge_Amount: 2500,
+        Invoice_Status: 'Unpaid',
+      } as any,
+    ],
+    receipts: [{ Transaction_ID: 'TXN-1', Receipt_Status: 'Confirmed' } as any],
+    billAllocations: [
+      { Allocation_ID: 'A-1', Transaction_ID: 'TXN-1', InvoiceID: 'INV-MAY', Ownership_ID: 'OSH-1', OwnerID: 'O1', Allocated_Amount: 3000 } as any,
+      { Allocation_ID: 'A-2', Transaction_ID: 'TXN-1', InvoiceID: 'INV-AUG', Ownership_ID: 'OSH-1', OwnerID: 'O1', Allocated_Amount: 1000 } as any,
+    ],
+    ownerships: [
+      { Ownership_ID: 'OSH-1', PropertyID: 'P1', OwnerID: 'O1', Ownership_Status: 'Current' } as any,
+      { Ownership_ID: 'OSH-2', PropertyID: 'P2', OwnerID: 'O2', Ownership_Status: 'Current' } as any,
+    ],
+    properties: [
+      { PropertyID: 'P1', Flat_No: '101', Floor_No: 1 } as any,
+      { PropertyID: 'P2', Flat_No: '102', Floor_No: 1 } as any,
+    ],
+    owners: [],
+  });
+
+  const osh1 = res.data.find((r: any) => r.Ownership_ID === 'OSH-1')!;
+  const osh2 = res.data.find((r: any) => r.Ownership_ID === 'OSH-2')!;
+  assert.equal(osh1.Invoice_Count, 3);
+  assert.equal(osh1.Pending_Invoice_Count, 2); // INV-AUG + INV-NOV
+  assert.equal(osh1.Oldest_Pending_Date, '2026-08-01');
+  assert.equal(osh1.Due_Months, 3);
+  assert.equal(osh1.Outstanding, 5000);
+
+  assert.equal(osh2.Pending_Invoice_Count, 1);
+  assert.equal(osh2.Oldest_Pending_Date, '2026-11-10');
+  assert.equal(osh2.Due_Months, 0);
+});
+
+
 
 

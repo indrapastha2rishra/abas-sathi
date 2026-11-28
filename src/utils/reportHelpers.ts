@@ -427,9 +427,19 @@ export function computeOwnershipOutstandingClient(params: {
   ownerships: OwnershipHistory[];
   properties: PropertyMaster[];
   owners: OwnerMaster[];
+  asOfDate?: string | Date;
 }) {
-  const { invoices, receipts, billAllocations, ownerships, properties, owners } = params;
+  const { invoices, receipts, billAllocations, ownerships, properties, owners, asOfDate } = params;
+  const asOfDateKey = toReportDateKey(asOfDate || new Date()) || localDateKey(new Date());
   const normName = (v: unknown) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const monthsBetweenDates = (startKey: string, endKey: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startKey) || !/^\d{4}-\d{2}-\d{2}$/.test(endKey)) return 0;
+    const [sy, sm, sd] = startKey.split('-').map(Number);
+    const [ey, em, ed] = endKey.split('-').map(Number);
+    let m = (ey - sy) * 12 + (em - sm);
+    if (ed < sd) m -= 1;
+    return Math.max(0, m);
+  };
 
   const ownershipByIdUpper = new Map<string, OwnershipHistory>();
   (ownerships || []).forEach((o) => {
@@ -539,6 +549,7 @@ export function computeOwnershipOutstandingClient(params: {
         Data_Link_Status: ownershipId && history?.Ownership_ID ? 'Linked' : 'Needs review',
         _legacyPaid: 0,
         _hasOwnershipId: Boolean(ownershipId),
+        _invoices: [] as Array<{ invId: string; invNum: string; net: number; refDate: string }>,
       };
       grouped.set(key, entry);
     } else {
@@ -550,13 +561,21 @@ export function computeOwnershipOutstandingClient(params: {
 
     const net = Math.max(0, toReportAmount(inv.Net_Charge_Amount));
     const legacyPaid = Math.max(0, toReportAmount(inv.Paid_Amount));
+    const refDate =
+      toReportDateKey(inv.Billing_Date) ||
+      toReportDateKey(inv.Bill_Period_From) ||
+      toReportDateKey(inv.Due_Date) ||
+      toReportDateKey(inv.Created_At);
     entry.Invoice_Count += 1;
     entry.Total_Billed = Math.round((entry.Total_Billed + net) * 100) / 100;
     entry._legacyPaid = Math.round((entry._legacyPaid + legacyPaid) * 100) / 100;
+    entry._invoices.push({ invId, invNum, net, refDate });
   });
 
   // Check Paid from Bill Wise Details against mentioned Invoice (InvoiceID / Invoice_Number) and Owner wise
   const allocatedByOwnership = new Map<string, number>();
+  const allocatedByInvoiceKey = new Map<string, number>();
+  const unassignedAllocatedByOwnership = new Map<string, number>();
   (billAllocations || []).forEach((row) => {
     const allocStatus = String((row as any).Allocation_Status || (row as any).Status || '').trim().toLowerCase();
     if (allocStatus && EXCLUDED_ALLOCATION_STATUSES.has(allocStatus)) return;
@@ -604,6 +623,17 @@ export function computeOwnershipOutstandingClient(params: {
         return;
       }
       resolvedKey = matchedInv.key;
+      const invAllocKey = matchedInv.invId
+        ? `ID:${matchedInv.invId.toUpperCase()}`
+        : matchedInv.invNum
+          ? `NUM:${matchedInv.invNum.toUpperCase()}`
+          : '';
+      if (invAllocKey) {
+        allocatedByInvoiceKey.set(
+          invAllocKey,
+          Math.round(((allocatedByInvoiceKey.get(invAllocKey) || 0) + allocatedAmt) * 100) / 100
+        );
+      }
     } else {
       // No InvoiceID/Invoice_Number mentioned: match Ownership_ID (or unique Property+Owner) and verify Owner wise
       if (rowOwnershipId) {
@@ -632,6 +662,10 @@ export function computeOwnershipOutstandingClient(params: {
       if (rowPropId && entry.PropertyID && rowPropId.toUpperCase() !== String(entry.PropertyID).trim().toUpperCase()) {
         return;
       }
+      unassignedAllocatedByOwnership.set(
+        resolvedKey,
+        Math.round(((unassignedAllocatedByOwnership.get(resolvedKey) || 0) + allocatedAmt) * 100) / 100
+      );
     }
 
     allocatedByOwnership.set(
@@ -650,9 +684,53 @@ export function computeOwnershipOutstandingClient(params: {
       if (!entry._hasOwnershipId && outstanding > 0) {
         unlinkedInvoiceCount += entry.Invoice_Count;
       }
-      const { _legacyPaid, _hasOwnershipId, ...publicRow } = entry;
+
+      const sortedInvoices = [...entry._invoices].sort((a, b) => {
+        if (a.refDate && b.refDate) return a.refDate.localeCompare(b.refDate);
+        if (a.refDate) return -1;
+        if (b.refDate) return 1;
+        return 0;
+      });
+      let remainingUnassigned = unassignedAllocatedByOwnership.get(key) || 0;
+      const remainingByInvKey = new Map<string, number>();
+      let pendingInvoiceCount = 0;
+      let oldestPendingDate = '';
+
+      sortedInvoices.forEach((invItem) => {
+        const invAllocKey = invItem.invId
+          ? `ID:${invItem.invId.toUpperCase()}`
+          : invItem.invNum
+            ? `NUM:${invItem.invNum.toUpperCase()}`
+            : '';
+        if (invAllocKey && !remainingByInvKey.has(invAllocKey)) {
+          remainingByInvKey.set(invAllocKey, allocatedByInvoiceKey.get(invAllocKey) || 0);
+        }
+        const availAlloc = invAllocKey ? (remainingByInvKey.get(invAllocKey) || 0) : 0;
+        const appliedDirect = Math.min(invItem.net, availAlloc);
+        if (invAllocKey) {
+          remainingByInvKey.set(invAllocKey, Math.round((availAlloc - appliedDirect) * 100) / 100);
+        }
+        let invDue = Math.max(0, Math.round((invItem.net - appliedDirect) * 100) / 100);
+        if (invDue > 0 && remainingUnassigned > 0) {
+          const appliedUnassigned = Math.min(invDue, remainingUnassigned);
+          invDue = Math.round((invDue - appliedUnassigned) * 100) / 100;
+          remainingUnassigned = Math.round((remainingUnassigned - appliedUnassigned) * 100) / 100;
+        }
+        if (invDue > 0) {
+          pendingInvoiceCount += 1;
+          if (invItem.refDate && (!oldestPendingDate || invItem.refDate < oldestPendingDate)) {
+            oldestPendingDate = invItem.refDate;
+          }
+        }
+      });
+
+      const dueMonths = oldestPendingDate ? monthsBetweenDates(oldestPendingDate, asOfDateKey) : 0;
+      const { _legacyPaid, _hasOwnershipId, _invoices, ...publicRow } = entry;
       return {
         ...publicRow,
+        Pending_Invoice_Count: pendingInvoiceCount,
+        Due_Months: dueMonths,
+        Oldest_Pending_Date: oldestPendingDate,
         Total_Paid: totalPaid,
         Outstanding: outstanding,
       };

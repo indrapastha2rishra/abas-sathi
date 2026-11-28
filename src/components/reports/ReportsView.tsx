@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BalanceSheetWorkflow } from './BalanceSheetWorkflow';
 import { YearEndClosingWorkflow } from './YearEndClosingWorkflow';
+import { OwnershipOutstandingPrintModal } from '../modals/OwnershipOutstandingPrintModal';
 import { useApp } from '../../context/AppContext';
 import { formatDateDisplay, formatDateTimeDisplay, formatMonthYearDisplay } from '../../utils/dateFormat';
 import { readFundBalanceCache, writeFundBalanceCache } from '../../utils/localDataCache';
@@ -79,6 +80,7 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
   const [serverReportLoading, setServerReportLoading] = useState(false);
   const [balanceSheetReport, setBalanceSheetReport] = useState<any>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [showOwnershipPrintModal, setShowOwnershipPrintModal] = useState(false);
 
   const sessionInfo = useMemo(() => {
     try {
@@ -1269,6 +1271,13 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
               </div>
 
               <button
+                type="button"
+                onClick={() => setShowOwnershipPrintModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[#E8E1D4] bg-white text-[#29352D] text-xs font-bold hover:bg-[#F7F4EC] cursor-pointer"
+              >
+                <Printer className="h-3.5 w-3.5 text-[#536B4D]" /> Print/Download PDF
+              </button>
+              <button
                 onClick={() => {
                   const rows = [
                     ['Floor_No', 'Ownership_ID', 'PropertyID', 'Flat_No', 'Owner_Name', 'Start_Date', 'End_Date', 'Status', 'Invoices', 'Billed', 'Allocated_Paid', 'Outstanding', 'Link_Status'],
@@ -1607,6 +1616,29 @@ export const ReportsView: React.FC<{ initialReport?: string }> = ({ initialRepor
           </div>
         </div>
       )}
+      <OwnershipOutstandingPrintModal
+        isOpen={showOwnershipPrintModal}
+        onClose={() => setShowOwnershipPrintModal(false)}
+        floorGroups={filteredOwnershipFloorGroups}
+        totalOutstanding={
+          selectedOwnershipFloor === 'all'
+            ? toReportAmount(ownershipDuesSummary?.totalOutstanding)
+            : filteredOwnershipFloorGroups.reduce((sum, g) => sum + toReportAmount(g.totalOutstanding), 0)
+        }
+        ownershipCount={
+          selectedOwnershipFloor === 'all'
+            ? Number(ownershipDuesSummary?.ownershipCount || filteredOwnershipRows.length)
+            : filteredOwnershipRows.length
+        }
+        unlinkedInvoiceCount={Number(ownershipDuesSummary?.unlinkedInvoiceCount || 0)}
+        printedDate={(() => {
+          const d = new Date();
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        })()}
+        societyName={societySettings.societyName || t.apartmentName}
+        societyAddress={societySettings.societyAddress}
+        societyRegistrationNo={societySettings.societyRegistrationNo}
+      />
     </div>
   );
 };

@@ -190,7 +190,7 @@ const MainLayout: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="flex-1 p-4 md:p-6 lg:p-8 max-w-7xl mx-auto w-full pb-20 md:pb-8 overflow-x-hidden">
-          {isResidentMode && <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-800">Resident Preview Mode — actual role remains {actualRole}; resident-scoped view is active.</div>}
+          {isResidentMode && <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-800 no-print">Resident Preview Mode — actual role remains {actualRole}; resident-scoped view is active.</div>}
           <ViewErrorBoundary resetKey={`${activeTab}:${activeRole}`}>{renderContent()}</ViewErrorBoundary>
         </main>
       </div>

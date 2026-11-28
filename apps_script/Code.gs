@@ -326,6 +326,15 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
   function normName_(v) {
     return String(v || "").trim().replace(/\s+/g, " ").toLowerCase();
   }
+  const asOfDateKey = fundDateKey_(new Date());
+  function monthsBetween_(startKey, endKey) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startKey) || !/^\d{4}-\d{2}-\d{2}$/.test(endKey)) return 0;
+    const sp = startKey.split("-").map(Number);
+    const ep = endKey.split("-").map(Number);
+    let m = (ep[0] - sp[0]) * 12 + (ep[1] - sp[1]);
+    if (ep[2] < sp[2]) m -= 1;
+    return Math.max(0, m);
+  }
   const ownershipByIdUpper = {};
   (ownershipRows || []).forEach(x => {
     const id = String(x.Ownership_ID || x.OwnershipID || "").trim();
@@ -421,7 +430,8 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
         Outstanding: 0,
         Data_Link_Status: ownershipId && history.Ownership_ID ? "Linked" : "Needs review",
         _legacyPaid: 0,
-        _hasOwnershipId: Boolean(ownershipId)
+        _hasOwnershipId: Boolean(ownershipId),
+        _invoices: []
       };
     } else {
       if (grouped[key].Floor_No === "" && floorRaw !== "" && floorRaw !== null && floorRaw !== undefined) {
@@ -434,13 +444,21 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
 
     const net = Math.max(0, fundMoney_(inv.Net_Charge_Amount));
     const legacyPaid = Math.max(0, fundMoney_(inv.Paid_Amount));
+    const refDate =
+      fundDateKey_(inv.Billing_Date) ||
+      fundDateKey_(inv.Bill_Period_From) ||
+      fundDateKey_(inv.Due_Date) ||
+      fundDateKey_(inv.Created_At);
     grouped[key].Invoice_Count++;
     grouped[key].Total_Billed = fundMoney_(grouped[key].Total_Billed + net);
     grouped[key]._legacyPaid = fundMoney_(grouped[key]._legacyPaid + legacyPaid);
+    grouped[key]._invoices.push({ invId, invNum, net, refDate });
   });
 
   // Check Paid from Bill Wise Details against mentioned Invoice (InvoiceID / Invoice_Number) and Owner wise
   const allocatedByOwnership = {};
+  const allocatedByInvoiceKey = {};
+  const unassignedAllocatedByOwnership = {};
   (billRows || []).forEach(b => {
     const allocStatus = String(b.Allocation_Status || b.Status || "").trim().toLowerCase();
     if (allocStatus && ["cancelled","canceled","rejected","void","reversed"].indexOf(allocStatus) >= 0) return;
@@ -483,6 +501,12 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
       if (rowOwnershipId && matchedInv.ownershipId && rowOwnershipId.toUpperCase() !== matchedInv.ownershipId.toUpperCase()) return;
       if (rowPropId && matchedInv.propertyId && rowPropId.toUpperCase() !== matchedInv.propertyId.toUpperCase()) return;
       resolvedKey = matchedInv.key;
+      const invAllocKey = matchedInv.invId
+        ? ("ID:" + matchedInv.invId.toUpperCase())
+        : (matchedInv.invNum ? ("NUM:" + matchedInv.invNum.toUpperCase()) : "");
+      if (invAllocKey) {
+        allocatedByInvoiceKey[invAllocKey] = fundMoney_((allocatedByInvoiceKey[invAllocKey] || 0) + allocatedAmt);
+      }
     } else {
       if (rowOwnershipId) {
         resolvedKey = keyByUpperKey[rowOwnershipId.toUpperCase()] || "";
@@ -504,6 +528,7 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
       if (rowOwnerId && targetOwnerId && rowOwnerId.toUpperCase() !== targetOwnerId.toUpperCase()) return;
       if (!rowOwnerId && rowOwnerName && targetOwnerName && normName_(rowOwnerName) !== normName_(targetOwnerName)) return;
       if (rowPropId && entry.PropertyID && rowPropId.toUpperCase() !== String(entry.PropertyID).trim().toUpperCase()) return;
+      unassignedAllocatedByOwnership[resolvedKey] = fundMoney_((unassignedAllocatedByOwnership[resolvedKey] || 0) + allocatedAmt);
     }
 
     allocatedByOwnership[resolvedKey] = fundMoney_((allocatedByOwnership[resolvedKey] || 0) + allocatedAmt);
@@ -518,6 +543,43 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
     const totalPaid = fundMoney_(Math.max(0, paid));
     const outstanding = Math.max(0, fundMoney_(g.Total_Billed - totalPaid));
     if (!g._hasOwnershipId && outstanding > 0) unlinkedInvoiceCount += g.Invoice_Count;
+
+    const sortedInvs = (g._invoices || []).slice().sort((a, b) => {
+      if (a.refDate && b.refDate) return a.refDate.localeCompare(b.refDate);
+      if (a.refDate) return -1;
+      if (b.refDate) return 1;
+      return 0;
+    });
+    let remainingUnassigned = useBillWiseAllocations ? (unassignedAllocatedByOwnership[key] || 0) : g._legacyPaid;
+    const remainingByInvKey = {};
+    let pendingInvoiceCount = 0;
+    let oldestPendingDate = "";
+
+    sortedInvs.forEach(invItem => {
+      const invAllocKey = invItem.invId
+        ? ("ID:" + invItem.invId.toUpperCase())
+        : (invItem.invNum ? ("NUM:" + invItem.invNum.toUpperCase()) : "");
+      if (invAllocKey && !Object.prototype.hasOwnProperty.call(remainingByInvKey, invAllocKey)) {
+        remainingByInvKey[invAllocKey] = useBillWiseAllocations ? (allocatedByInvoiceKey[invAllocKey] || 0) : 0;
+      }
+      const availAlloc = invAllocKey ? (remainingByInvKey[invAllocKey] || 0) : 0;
+      const appliedDirect = Math.min(invItem.net, availAlloc);
+      if (invAllocKey) remainingByInvKey[invAllocKey] = fundMoney_(availAlloc - appliedDirect);
+      let invDue = Math.max(0, fundMoney_(invItem.net - appliedDirect));
+      if (invDue > 0 && remainingUnassigned > 0) {
+        const appliedUnassigned = Math.min(invDue, remainingUnassigned);
+        invDue = fundMoney_(invDue - appliedUnassigned);
+        remainingUnassigned = fundMoney_(remainingUnassigned - appliedUnassigned);
+      }
+      if (invDue > 0) {
+        pendingInvoiceCount++;
+        if (invItem.refDate && (!oldestPendingDate || invItem.refDate < oldestPendingDate)) {
+          oldestPendingDate = invItem.refDate;
+        }
+      }
+    });
+    const dueMonths = oldestPendingDate ? monthsBetween_(oldestPendingDate, asOfDateKey) : 0;
+
     return {
       Ownership_ID: g.Ownership_ID,
       PropertyID: g.PropertyID,
@@ -529,6 +591,9 @@ function buildOwnershipOutstandingRows_(invoiceRows, ownershipRows, propertyRows
       Ownership_End_Date: g.Ownership_End_Date,
       Ownership_Status: g.Ownership_Status,
       Invoice_Count: g.Invoice_Count,
+      Pending_Invoice_Count: pendingInvoiceCount,
+      Due_Months: dueMonths,
+      Oldest_Pending_Date: oldestPendingDate,
       Total_Billed: g.Total_Billed,
       Total_Paid: totalPaid,
       Outstanding: outstanding,

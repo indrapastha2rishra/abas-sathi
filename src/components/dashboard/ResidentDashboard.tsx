@@ -19,6 +19,8 @@ import {
   Download,
   AlertCircle,
 } from 'lucide-react';
+import { NoticeMaster } from '../../types/database';
+import { NoticeDetailModal } from '../modals/NoticeDetailModal';
 
 const money = (value: number) => `₹${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
@@ -119,6 +121,7 @@ export const ResidentDashboard: React.FC = () => {
 
   const [galleryPhotoSources, setGalleryPhotoSources] = useState<Record<string, string>>({});
   const [noticeError, setNoticeError] = useState('');
+  const [selectedNotice, setSelectedNotice] = useState<NoticeMaster | null>(null);
   const attemptedRefsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -628,7 +631,23 @@ export const ResidentDashboard: React.FC = () => {
               {summary.activeNotices.slice(0, 3).map((notice) => {
                 const attachmentRef = String((notice as any).Attachment_File_ID || notice.Attachment || '').trim();
                 return (
-                  <div key={notice.Notice_ID} className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] text-xs">
+                  <div
+                    key={notice.Notice_ID}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setNoticeError('');
+                      setSelectedNotice(notice);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setNoticeError('');
+                        setSelectedNotice(notice);
+                      }
+                    }}
+                    className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] hover:border-[#536B4D] hover:bg-[#F7F4EC]/80 transition-colors cursor-pointer text-xs group"
+                  >
                     <div className="flex justify-between items-center text-[10px] text-gray-500">
                       <span className="font-bold text-[#536B4D] uppercase">{notice.Notice_Category}</span>
                       <span>
@@ -636,18 +655,28 @@ export const ResidentDashboard: React.FC = () => {
                         {notice.Expiry_Date ? ` · Valid till ${formatDateDisplay(notice.Expiry_Date, '—')}` : ''}
                       </span>
                     </div>
-                    <h4 className="font-bold text-[#29352D] mt-1">{notice.Notice_Title}</h4>
+                    <h4 className="font-bold text-[#29352D] mt-1 group-hover:text-[#536B4D] transition-colors">
+                      {notice.Notice_Title}
+                    </h4>
                     <p className="text-[#29352D]/80 mt-1 line-clamp-2">{notice.Notice_Description}</p>
-                    {attachmentRef && (
-                      <button
-                        type="button"
-                        onClick={() => void downloadNoticeAttachment(attachmentRef, notice.Notice_Title || 'notice-attachment')}
-                        className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                      >
-                        <Download className="h-3 w-3" />
-                        <span>Download Circular</span>
-                      </button>
-                    )}
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-[#536B4D] group-hover:underline">
+                        Read full notice →
+                      </span>
+                      {attachmentRef && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void downloadNoticeAttachment(attachmentRef, notice.Notice_Title || 'notice-attachment');
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#536B4D] hover:underline cursor-pointer"
+                        >
+                          <Download className="h-3 w-3" />
+                          <span>Download Circular</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -732,6 +761,13 @@ export const ResidentDashboard: React.FC = () => {
           </div>
         )}
       </div>
+
+      <NoticeDetailModal
+        notice={selectedNotice}
+        onClose={() => setSelectedNotice(null)}
+        onDownloadAttachment={downloadNoticeAttachment}
+        downloadError={noticeError}
+      />
     </div>
   );
 };

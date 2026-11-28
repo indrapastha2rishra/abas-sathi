@@ -26,6 +26,9 @@ import {
   Home,
   Printer,
 } from 'lucide-react';
+import { NoticeMaster } from '../../types/database';
+import { NoticeDetailModal } from '../modals/NoticeDetailModal';
+import { OwnershipOutstandingPrintModal } from '../modals/OwnershipOutstandingPrintModal';
 import { formatDateDisplay, getMonthShortName } from '../../utils/dateFormat';
 import { readFundBalanceCache, writeFundBalanceCache } from '../../utils/localDataCache';
 import {
@@ -65,8 +68,8 @@ export const AdminDashboard: React.FC = () => {
     notices,
     gallery,
     galleryPhotos,
+    societySettings,
     getPrivateFile,
-    setPreviewInvoice,
     t,
     setActiveTab,
     getFundBalanceSummary,
@@ -82,6 +85,34 @@ export const AdminDashboard: React.FC = () => {
   })();
   const [fundBalanceSummary,setFundBalanceSummary]=useState<any>(() => readFundBalanceCache(sessionInfo.societyCode, sessionInfo.user?.userId));
   const [residentModeNotice, setResidentModeNotice] = useState<string>('');
+  const [showOwnershipPrintModal, setShowOwnershipPrintModal] = useState(false);
+  const [selectedNotice, setSelectedNotice] = useState<NoticeMaster | null>(null);
+  const [noticeAttachmentError, setNoticeAttachmentError] = useState('');
+
+  const downloadNoticeAttachment = async (fileId: string, fileName: string) => {
+    setNoticeAttachmentError('');
+    if (/^https?:\/\//i.test(fileId)) {
+      const a = document.createElement('a');
+      a.href = fileId;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
+      return;
+    }
+    try {
+      const r: any = await getPrivateFile(fileId);
+      const bytes = Uint8Array.from(atob(r.data.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: r.data.mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName || r.data.fileName || 'notice-attachment';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setNoticeAttachmentError(err?.message || 'Unable to download attachment.');
+    }
+  };
   useEffect(()=>{if(!['Admin','Accountant','Committee'].includes(currentUser.Role)||activeRole==='Resident'||isRefreshingData)return;let live=true;getFundBalanceSummary().then((r:any)=>{if(live && r?.data){setFundBalanceSummary(r.data);writeFundBalanceCache(sessionInfo.societyCode, sessionInfo.user?.userId, r.data);}}).catch((e:any)=>console.warn('Fund balance summary unavailable:',e?.message||e));return()=>{live=false;};},[currentUser.Role,activeRole,isRefreshingData]);
 
   // Metrics
@@ -116,7 +147,6 @@ export const AdminDashboard: React.FC = () => {
 
   // Dashboard financial metrics match InvoicesView (Net_Charge_Amount - SUM(Allocated_Amount from Bill Wise Details by InvoiceID)).
   const {
-    outstandingRows,
     totalOutstanding,
     maintenanceBilled,
     maintenanceCollected,
@@ -710,20 +740,31 @@ export const AdminDashboard: React.FC = () => {
                     maximumFractionDigits: 2,
                   })}
                 </strong>{' '}
-                across {ownershipOutstanding.summary.ownershipCount} ownership record(s) • Paid checked from Bill Wise Details (Invoice &amp; Owner wise) &amp; Confirmed Fund Inflow
+                across {ownershipOutstanding.summary.ownershipCount} ownership record(s) • Net_Charge_Amount − Bill Wise Details (Invoice &amp; Owner wise)
                 {ownershipOutstanding.summary.unlinkedInvoiceCount > 0
                   ? ` • ${ownershipOutstanding.summary.unlinkedInvoiceCount} unlinked invoice(s)`
                   : ''}
               </p>
             </div>
-            {hasPermission('Reports', 'Can_View') && (
+            <div className="flex flex-wrap items-center gap-3 no-print">
               <button
-                onClick={() => setActiveTab('reports_ownership_due')}
-                className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1 cursor-pointer"
+                type="button"
+                onClick={() => setShowOwnershipPrintModal(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#536B4D] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#3F523A] transition-colors shadow-2xs cursor-pointer"
               >
-                View Complete Ownership Outstanding <ArrowUpRight className="h-3.5 w-3.5" />
+                <Printer className="h-3.5 w-3.5" />
+                <span>Print/Download PDF</span>
               </button>
-            )}
+              {hasPermission('Reports', 'Can_View') && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('reports_ownership_due')}
+                  className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  View Complete Ownership Outstanding <ArrowUpRight className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {ownershipFloorSummary.length > 0 && (
@@ -753,54 +794,49 @@ export const AdminDashboard: React.FC = () => {
                   <th className="px-3 py-2.5 font-bold">Floor</th>
                   <th className="px-3 py-2.5 font-bold">Owner</th>
                   <th className="px-3 py-2.5 font-bold">Ownership Period</th>
-                  <th className="px-3 py-2.5 font-bold">Status</th>
-                  <th className="px-3 py-2.5 font-bold text-right">Invoices</th>
-                  <th className="px-3 py-2.5 font-bold text-right">Billed</th>
-                  <th className="px-3 py-2.5 font-bold text-right" title="Checked from Bill Wise Details (Invoice & Owner wise)">Paid</th>
+                  <th className="px-3 py-2.5 font-bold text-right">Pending Invoices</th>
                   <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
-                  <th className="px-3 py-2.5 font-bold text-center">Link</th>
+                  <th className="px-3 py-2.5 font-bold text-right" title="Pending duration in months from oldest unpaid bill">Due month</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E1D4]">
-                {sortedOwnershipOutstandingRows.slice(0, 8).map((r, i) => (
-                  <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50 transition-colors">
-                    <td className="px-3 py-2.5 font-mono text-gray-600">{r.Ownership_ID}</td>
-                    <td className="px-3 py-2.5">
-                      <span className="font-bold text-[#536B4D]">{r.Flat_No || r.PropertyID}</span>
-                      {r.PropertyID && r.Flat_No && r.PropertyID !== r.Flat_No && (
-                        <span className="block text-[10px] font-mono text-gray-500">{r.PropertyID}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium text-gray-700">{getFloorMeta(r.Floor_No).floorLabel}</td>
-                    <td className="px-3 py-2.5 font-medium text-[#29352D]">{r.Owner_Name || r.OwnerID || '—'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
-                      {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
-                    </td>
-                    <td className="px-3 py-2.5">{r.Ownership_Status}</td>
-                    <td className="px-3 py-2.5 text-right">{r.Invoice_Count}</td>
-                    <td className="px-3 py-2.5 text-right font-medium">
-                      ₹{Number(r.Total_Billed || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-emerald-700">
-                      ₹{Number(r.Total_Paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-bold text-red-700">
-                      ₹{Number(r.Outstanding || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <span
-                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          r.Data_Link_Status === 'Linked' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                        }`}
+                {sortedOwnershipOutstandingRows.slice(0, 8).map((r, i) => {
+                  const pendingCount = Number(r.Pending_Invoice_Count ?? r.Invoice_Count ?? 0);
+                  const dueMonths = Number(r.Due_Months || 0);
+                  return (
+                    <tr key={`${r.Ownership_ID}-${r.PropertyID}-${i}`} className="hover:bg-neutral-50 transition-colors">
+                      <td className="px-3 py-2.5 font-mono text-gray-600">{r.Ownership_ID}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="font-bold text-[#536B4D]">{r.Flat_No || r.PropertyID}</span>
+                        {r.PropertyID && r.Flat_No && r.PropertyID !== r.Flat_No && (
+                          <span className="block text-[10px] font-mono text-gray-500">{r.PropertyID}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 font-medium text-gray-700">{getFloorMeta(r.Floor_No).floorLabel}</td>
+                      <td className="px-3 py-2.5 font-medium text-[#29352D]">{r.Owner_Name || r.OwnerID || '—'}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">
+                        {formatDateDisplay(r.Ownership_Start_Date, '—')} to {formatDateDisplay(r.Ownership_End_Date, 'Current')}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-medium">{pendingCount}</td>
+                      <td className="px-3 py-2.5 text-right font-bold text-red-700">
+                        ₹{Number(r.Outstanding || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td
+                        className="px-3 py-2.5 text-right whitespace-nowrap text-gray-700"
+                        title={r.Oldest_Pending_Date ? `Oldest pending bill: ${formatDateDisplay(r.Oldest_Pending_Date, '')}` : undefined}
                       >
-                        {r.Data_Link_Status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                        {dueMonths > 0
+                          ? `${dueMonths} ${dueMonths === 1 ? 'month' : 'months'}`
+                          : pendingCount > 0
+                            ? '< 1 month'
+                            : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {sortedOwnershipOutstandingRows.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-3 py-6 text-center text-gray-500">
+                    <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                       No outstanding ownership dues found.
                     </td>
                   </tr>
@@ -809,115 +845,8 @@ export const AdminDashboard: React.FC = () => {
             </table>
           </div>
           {sortedOwnershipOutstandingRows.length > 8 && (
-            <p className="mt-3 text-[11px] text-gray-500">
+            <p className="mt-3 text-[11px] text-gray-500 no-print">
               Showing top 8 of {sortedOwnershipOutstandingRows.length} ownership record(s) sorted by Flat No.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Invoice-wise Outstanding Bills (Net_Charge_Amount - Allocated_Amount by InvoiceID) */}
-      {activeRole !== 'Committee' && hasPermission('Maintenance & Invoices', 'Can_View') && (
-        <div data-testid="dashboard-outstanding-bills" className="rounded-2xl border border-[#E8E1D4] bg-white p-6 shadow-2xs">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E1D4] pb-3 mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-[#29352D] flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-[#C97958]" />
-                Outstanding Bills (Invoice-wise) / বকেয়া বিল তালিকা
-              </h3>
-              <p className="text-xs text-gray-500">
-                Total Outstanding:{' '}
-                <strong className="text-red-700">
-                  ₹{totalOutstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </strong>{' '}
-                across {outstandingRows.length} pending invoice(s) • Formula: Net_Charge_Amount − Allocated_Amount (Bill Wise Details)
-              </p>
-            </div>
-            <button
-              onClick={() => setActiveTab('invoices_outstanding')}
-              className="text-xs font-bold text-[#536B4D] hover:underline flex items-center gap-1 cursor-pointer"
-            >
-              View All Outstanding Bills <ArrowUpRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#F7F4EC] text-[#29352D]">
-                <tr>
-                  <th className="px-3 py-2.5 font-bold">Invoice No.</th>
-                  <th className="px-3 py-2.5 font-bold">Flat / PropertyID</th>
-                  <th className="px-3 py-2.5 font-bold">Owner</th>
-                  <th className="px-3 py-2.5 font-bold">Purpose</th>
-                  <th className="px-3 py-2.5 font-bold">Due Date</th>
-                  <th className="px-3 py-2.5 font-bold text-right">Net Charge</th>
-                  <th className="px-3 py-2.5 font-bold text-right">Paid (Allocated)</th>
-                  <th className="px-3 py-2.5 font-bold text-right text-red-700">Outstanding</th>
-                  <th className="px-3 py-2.5 font-bold text-center">Status</th>
-                  <th className="px-3 py-2.5 font-bold text-center">Bill</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E8E1D4]">
-                {outstandingRows.slice(0, 8).map((inv) => (
-                  <tr key={inv.InvoiceID} className="hover:bg-neutral-50 transition-colors">
-                    <td className="px-3 py-2.5 font-mono font-semibold text-[#29352D]">{inv.Invoice_Number || inv.InvoiceID}</td>
-                    <td className="px-3 py-2.5">
-                      <span className="font-bold text-[#536B4D]">{inv.Flat_Number || inv.PropertyID}</span>
-                      {inv.PropertyID && inv.Flat_Number && inv.PropertyID !== inv.Flat_Number && (
-                        <span className="block text-[10px] font-mono text-gray-500">{inv.PropertyID}</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 font-medium text-[#29352D]">{inv.Owner_Name || inv.OwnerID || '—'}</td>
-                    <td className="px-3 py-2.5 text-gray-700">{inv.Purpose || '—'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{formatDateDisplay(inv.Due_Date, '—')}</td>
-                    <td className="px-3 py-2.5 text-right font-medium">
-                      ₹{inv.Net_Charge_Amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-emerald-700">
-                      ₹{inv.Allocated_Amount_Total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-bold text-red-700">
-                      ₹{inv.Calculated_Outstanding.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <span
-                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          inv.Invoice_Status === 'Overdue'
-                            ? 'bg-red-100 text-red-800'
-                            : inv.Invoice_Status === 'Partially Paid'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {inv.Invoice_Status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewInvoice(inv)}
-                        aria-label={`Print invoice ${inv.Invoice_Number || inv.InvoiceID}`}
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#536B4D] hover:underline cursor-pointer"
-                      >
-                        <Printer className="h-3.5 w-3.5" />
-                        <span>View</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {outstandingRows.length === 0 && (
-                  <tr>
-                    <td colSpan={10} className="px-3 py-6 text-center text-gray-500">
-                      All issued invoices are fully settled.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          {outstandingRows.length > 8 && (
-            <p className="mt-3 text-[11px] text-gray-500">
-              Showing top 8 of {outstandingRows.length} outstanding invoice(s).
             </p>
           )}
         </div>
@@ -1030,9 +959,14 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-xs text-gray-500 py-4 text-center">No active notices at present.</p>
             )}
             {activeNotices.slice(0, 5).map((notice) => (
-              <div
+              <button
                 key={notice.Notice_ID}
-                className="p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4]"
+                type="button"
+                onClick={() => {
+                  setNoticeAttachmentError('');
+                  setSelectedNotice(notice);
+                }}
+                className="w-full text-left p-3.5 rounded-xl bg-[#F7F4EC] border border-[#E8E1D4] hover:border-[#536B4D] hover:bg-[#F7F4EC]/80 transition-colors cursor-pointer group"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1048,9 +982,14 @@ export const AdminDashboard: React.FC = () => {
                     {notice.Expiry_Date ? ` · Valid till ${formatDateDisplay(notice.Expiry_Date, '—')}` : ''}
                   </span>
                 </div>
-                <h4 className="text-xs font-bold text-[#29352D] mt-1.5">{notice.Notice_Title}</h4>
+                <h4 className="text-xs font-bold text-[#29352D] mt-1.5 group-hover:text-[#536B4D] transition-colors">
+                  {notice.Notice_Title}
+                </h4>
                 <p className="text-xs text-[#29352D]/80 line-clamp-2 mt-1">{notice.Notice_Description}</p>
-              </div>
+                <span className="mt-1.5 inline-block text-[11px] font-semibold text-[#536B4D] group-hover:underline">
+                  Read full notice →
+                </span>
+              </button>
             ))}
           </div>
         </div>}
@@ -1153,6 +1092,26 @@ export const AdminDashboard: React.FC = () => {
           )}
         </div>}
       </div>
+
+      <NoticeDetailModal
+        notice={selectedNotice}
+        onClose={() => setSelectedNotice(null)}
+        onDownloadAttachment={downloadNoticeAttachment}
+        downloadError={noticeAttachmentError}
+      />
+
+      <OwnershipOutstandingPrintModal
+        isOpen={showOwnershipPrintModal}
+        onClose={() => setShowOwnershipPrintModal(false)}
+        floorGroups={ownershipFloorSummary}
+        totalOutstanding={Number(ownershipOutstanding.summary.totalOutstanding || 0)}
+        ownershipCount={Number(ownershipOutstanding.summary.ownershipCount || sortedOwnershipOutstandingRows.length)}
+        unlinkedInvoiceCount={Number(ownershipOutstanding.summary.unlinkedInvoiceCount || 0)}
+        printedDate={todayKey}
+        societyName={societySettings.societyName || t.apartmentName}
+        societyAddress={societySettings.societyAddress}
+        societyRegistrationNo={societySettings.societyRegistrationNo}
+      />
     </div>
   );
 };

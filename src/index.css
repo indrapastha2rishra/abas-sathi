@@ -60,6 +60,11 @@
   body:has(.invoice-print-overlay) .invoice-print-overlay,
   body:has(.invoice-print-overlay) .invoice-print-overlay * { visibility: visible !important; }
   body:has(.invoice-print-overlay) .invoice-print-overlay { width: 100% !important; }
+
+  /* When the Ownership-wise Outstanding PDF modal is open via portal, hide #root completely so Page 1 starts cleanly at the top. */
+  body:has(.ownership-pdf-modal-overlay) #root {
+    display: none !important;
+  }
 }
 
 
